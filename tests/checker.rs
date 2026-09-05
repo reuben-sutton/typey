@@ -1774,6 +1774,13 @@ T.reveal_type(values.min_by { |value| value })
 T.reveal_type(values.values_at(0))
 T.reveal_type(values.pack("C*"))
 T.reveal_type(values.combination(1))
+T.reveal_type(values.shift)
+T.reveal_type(values.pop(1))
+T.reveal_type(values.fill(0))
+T.reveal_type(values.replace([3]))
+T.reveal_type(values.select! { |value| value.even? })
+T.reveal_type(values.uniq!)
+T.reveal_type(values.bsearch { |value| value > 0 })
 "#,
         CheckerConfig::default(),
     );
@@ -1791,6 +1798,7 @@ T.reveal_type(values.combination(1))
         "Revealed type: `T::Array[Integer]`",
         "Revealed type: `String`",
         "Revealed type: `Enumerator`",
+        "Revealed type: `T.nilable(T::Array[Integer])`",
     ] {
         assert!(
             notes.iter().any(|message| message.contains(expected)),

@@ -6032,6 +6032,13 @@ impl<'src> Analyzer<'src> {
                     Type::Array(Box::new(element.clone()))
                 }
             }
+            "shift" | "pop" => {
+                if site.argument_types.is_empty() {
+                    Type::union([Type::Nil, element.clone()])
+                } else {
+                    Type::Array(Box::new(element.clone()))
+                }
+            }
             "at" => Type::union([Type::Nil, element.clone()]),
             "fetch" => {
                 if let Some(default) = site.argument_types.get(1) {
@@ -6106,6 +6113,9 @@ impl<'src> Analyzer<'src> {
             }
             "pack" => Type::String,
             "compact" => Type::Array(Box::new(element.without(&Type::Nil))),
+            "compact!" | "uniq!" => {
+                Type::union([Type::Nil, Type::Array(Box::new(element.clone()))])
+            }
             "length" | "size" | "count" => Type::Integer,
             "empty?" | "any?" | "all?" | "none?" | "include?" => Type::bool(),
             "join" => Type::String,
@@ -6144,6 +6154,35 @@ impl<'src> Analyzer<'src> {
                 _ => Type::Any,
             },
             "take" | "drop" => Type::Array(Box::new(element.clone())),
+            "fill" | "replace" | "clear" | "unshift" | "prepend" | "insert" | "reverse!"
+            | "rotate!" | "shuffle!" | "sort!" => Type::Array(Box::new(element.clone())),
+            "select!" | "filter!" | "reject!" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::union([Type::Nil, Type::Array(Box::new(element.clone()))])
+            }
+            "keep_if" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::Array(Box::new(element.clone()))
+            }
+            "bsearch" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::union([Type::Nil, element.clone()])
+            }
             "push" | "<<" => {
                 for (argument, actual) in site.argument_nodes.iter().zip(site.argument_types) {
                     self.check_assignable(argument, actual, element);
