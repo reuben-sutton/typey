@@ -1,0 +1,581 @@
+use crate::types::Type;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MethodSig {
+    pub params: Vec<Type>,
+    pub return_type: Type,
+    pub required_params: usize,
+    pub accepts_rest: bool,
+}
+
+impl MethodSig {
+    #[must_use]
+    pub fn new(params: Vec<Type>, return_type: Type) -> Self {
+        Self {
+            required_params: params.len(),
+            accepts_rest: false,
+            params,
+            return_type,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssertionKind {
+    Let,
+    Cast,
+    Must,
+    Unsafe,
+    Absurd,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlineAssertion {
+    pub kind: AssertionKind,
+    pub type_: Type,
+    pub offset: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AnnotationTable {
+    pub methods: BTreeMap<String, MethodSig>,
+    pub assertions: BTreeMap<usize, InlineAssertion>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingSorbetSig {
+    text: String,
+    style: SorbetSigStyle,
+    closed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SorbetSigStyle {
+    Delimited,
+    Block,
+}
+
+/// Collect Sorbet sig blocks and inline RBS comment forms. Ruby syntax itself
+/// is always parsed by Prism, and RBS comments are always enabled.
+#[must_use]
+pub fn collect(source: &str) -> AnnotationTable {
+    let lines = line_spans(source);
+    let mut table = AnnotationTable::default();
+    let mut sorbet_sig: Option<PendingSorbetSig> = None;
+    let mut rbs_sig: Option<String> = None;
+
+    for (line_number, (line_offset, line)) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        if let Some(pending) = sorbet_sig.as_mut() {
+            if let Some(name) = definition_name(trimmed) {
+                if let Some(signature) = parse_sorbet_signature(&pending.text) {
+                    table.methods.insert(name, signature);
+                }
+                sorbet_sig = None;
+            } else if pending.closed {
+                if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                    sorbet_sig = None;
+                }
+            } else if pending.style == SorbetSigStyle::Block && trimmed == "end" {
+                pending.text.push_str(line);
+                pending.text.push('\n');
+                pending.closed = true;
+            } else if pending.style == SorbetSigStyle::Delimited {
+                pending.text.push_str(line);
+                pending.text.push('\n');
+                pending.closed = delimiters_balanced(&pending.text);
+            } else {
+                pending.text.push_str(line);
+                pending.text.push('\n');
+            }
+        } else if is_sorbet_sig_start(trimmed) {
+            let start = trimmed.find("sig").unwrap_or(0);
+            let text = trimmed[start..].to_owned();
+            let style = if trimmed.starts_with("sig do") {
+                SorbetSigStyle::Block
+            } else {
+                SorbetSigStyle::Delimited
+            };
+            sorbet_sig = Some(PendingSorbetSig {
+                closed: style == SorbetSigStyle::Delimited && delimiters_balanced(&text),
+                text,
+                style,
+            });
+        }
+
+        if let Some(text) = rbs_sig.as_mut() {
+            if let Some(name) = definition_name(trimmed) {
+                if let Some(signature) = parse_rbs_signature(text) {
+                    table.methods.entry(name).or_insert(signature);
+                }
+                rbs_sig = None;
+            } else if trimmed.starts_with("#|") {
+                text.push_str(trimmed.trim_start_matches("#|").trim_start());
+                text.push('\n');
+            } else if trimmed.is_empty() || trimmed.starts_with('#') {
+                // Blank and ordinary comments may separate an RBS
+                // signature from its definition.
+            } else {
+                rbs_sig = None;
+            }
+        } else if trimmed.starts_with("#:") {
+            let comment = trimmed.trim_start_matches("#:").trim_start();
+            rbs_sig = Some(if comment.is_empty() {
+                String::new()
+            } else {
+                format!("{comment}\n")
+            });
+        }
+
+        if let Some(hash) = rbs_comment_start(line) {
+            if !line[..hash].trim().is_empty() {
+                let comment = strip_comment_tail(&line[hash + 2..]);
+                if !comment.is_empty() {
+                    let (kind, type_text) = if let Some(rest) = comment.strip_prefix("as ") {
+                        if rest.trim() == "!nil" {
+                            (AssertionKind::Must, "untyped".to_owned())
+                        } else if rest.trim() == "untyped" {
+                            (AssertionKind::Unsafe, rest.trim().to_owned())
+                        } else {
+                            (AssertionKind::Cast, rest.trim().to_owned())
+                        }
+                    } else if comment == "absurd" {
+                        (AssertionKind::Absurd, "bot".to_owned())
+                    } else {
+                        (AssertionKind::Let, comment.to_owned())
+                    };
+                    table.assertions.insert(
+                        line_number,
+                        InlineAssertion {
+                            kind,
+                            type_: parse_type(&type_text),
+                            offset: line_offset + hash,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    table
+}
+
+#[must_use]
+pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
+    let params = extract_call(text, "params").map_or_else(Vec::new, |body| {
+        split_top_level(&body, ',')
+            .into_iter()
+            .filter_map(|part| part.split_once(':').map(|(_, ty)| parse_type(ty)))
+            .collect()
+    });
+
+    let return_type = if text.contains(".void") {
+        Type::Nil
+    } else {
+        extract_call(text, "returns").map_or(Type::Any, |body| parse_type(&body))
+    };
+
+    if text.contains("params") || text.contains("returns") || text.contains(".void") {
+        Some(MethodSig::new(params, return_type))
+    } else {
+        None
+    }
+}
+
+#[must_use]
+pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
+    let text = strip_comment_tail(text.trim());
+    let arrow = find_top_level_arrow(text)?;
+    let left = text[..arrow].trim();
+    let right = text[arrow + 2..].trim();
+    let mut required_params = 0;
+    let mut accepts_rest = false;
+    let params = if left.starts_with('(') {
+        let close = matching_delimiter(left, 0, '(', ')')?;
+        split_top_level(&left[1..close], ',')
+            .into_iter()
+            .filter(|part| !part.trim().is_empty())
+            .filter_map(|part| {
+                let trimmed = part.trim();
+                if trimmed.starts_with('{') || trimmed.starts_with("?{") {
+                    return None;
+                }
+                if trimmed.starts_with('*') {
+                    accepts_rest = true;
+                } else if !trimmed.starts_with('?') {
+                    required_params += 1;
+                }
+                Some(parse_rbs_parameter(part))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Some(MethodSig {
+        params,
+        return_type: parse_type(right),
+        required_params,
+        accepts_rest,
+    })
+}
+
+#[must_use]
+pub fn parse_type(raw: &str) -> Type {
+    let mut text = strip_comment_tail(raw.trim()).trim().to_owned();
+    while text.starts_with('(') && text.ends_with(')') {
+        if matching_delimiter(&text, 0, '(', ')') == Some(text.len() - 1) {
+            text = text[1..text.len() - 1].trim().to_owned();
+        } else {
+            break;
+        }
+    }
+
+    if text.is_empty() {
+        return Type::Any;
+    }
+
+    let union = split_top_level(&text, '|');
+    if union.len() > 1 {
+        return Type::union(union.into_iter().map(|part| parse_type(&part)));
+    }
+    let intersection = split_top_level(&text, '&');
+    if intersection.len() > 1 {
+        return Type::intersection(intersection.into_iter().map(|part| parse_type(&part)));
+    }
+
+    if let Some(inner) = text.strip_suffix('?') {
+        return Type::union([Type::Nil, parse_type(inner)]);
+    }
+    if let Some(inner) = text.strip_prefix('?') {
+        // RBS uses a leading ? on method parameters to mean optional, not
+        // nilable. At this layer the type itself remains the inner type.
+        return parse_type(inner);
+    }
+
+    let normalized = text.trim_start_matches("::");
+    let lower = normalized.to_ascii_lowercase();
+    match lower.as_str() {
+        "untyped" | "any" | "top" | "t.untyped" | "t.anything" => return Type::Any,
+        "bot" | "bottom" | "t.noreturn" => return Type::Never,
+        "void" => return Type::Nil,
+        "nil" | "nilclass" => return Type::Nil,
+        "bool" | "boolean" | "t::boolean" => return Type::bool(),
+        "true" | "trueclass" => return Type::True,
+        "false" | "falseclass" => return Type::False,
+        "integer" => return Type::Integer,
+        "float" => return Type::Float,
+        "string" => return Type::String,
+        "symbol" => return Type::Symbol,
+        "object" => return Type::Object,
+        _ => {}
+    }
+
+    if let Some(open) = text.find('(') {
+        if text.ends_with(')') {
+            let name = text[..open].trim().trim_start_matches("::");
+            let body = &text[open + 1..text.len() - 1];
+            match name {
+                "T.nilable" => return Type::union([Type::Nil, parse_type(body)]),
+                "T.any" => {
+                    return Type::union(
+                        split_top_level(body, ',')
+                            .into_iter()
+                            .map(|part| parse_type(&part)),
+                    )
+                }
+                "T.all" => {
+                    return Type::intersection(
+                        split_top_level(body, ',')
+                            .into_iter()
+                            .map(|part| parse_type(&part)),
+                    )
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if normalized == "T.proc" || normalized.starts_with("T.proc.") {
+        let params = extract_call(normalized, "params")
+            .map(|body| {
+                split_top_level(&body, ',')
+                    .into_iter()
+                    .filter_map(|part| {
+                        split_top_level_colon(&part)
+                            .map(|(_, type_)| parse_type(type_))
+                            .or_else(|| Some(parse_type(&part)))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let return_type =
+            extract_call(normalized, "returns").map_or(Type::Any, |body| parse_type(&body));
+        return Type::Proc(params, Box::new(return_type));
+    }
+
+    if let Some(open) = text.find('[') {
+        if text.ends_with(']') && matching_delimiter(&text, open, '[', ']') == Some(text.len() - 1)
+        {
+            let name = text[..open].trim().trim_start_matches("::");
+            let args = split_top_level(&text[open + 1..text.len() - 1], ',')
+                .into_iter()
+                .map(|part| parse_type(&part))
+                .collect::<Vec<_>>();
+            if args.len() == 1 && matches!(name, "Array" | "T::Array") {
+                return Type::Array(Box::new(args[0].clone()));
+            }
+            if args.len() == 2 && matches!(name, "Hash" | "T::Hash") {
+                return Type::Hash(Box::new(args[0].clone()), Box::new(args[1].clone()));
+            }
+            return Type::Named(name.to_owned(), args);
+        }
+    }
+
+    if normalized.starts_with("T.type_parameter") {
+        return Type::TypeVar(normalized.to_owned());
+    }
+    if normalized == "T::Boolean" {
+        return Type::bool();
+    }
+    if normalized == "Array" {
+        return Type::Array(Box::new(Type::Any));
+    }
+    if normalized == "Hash" {
+        return Type::Hash(Box::new(Type::Any), Box::new(Type::Any));
+    }
+    Type::Named(normalized.to_owned(), Vec::new())
+}
+
+fn parse_rbs_parameter(raw: String) -> Type {
+    let mut text = raw.trim().to_owned();
+    if text.starts_with('{') || text.starts_with("?{") {
+        return Type::Proc(Vec::new(), Box::new(Type::Any));
+    }
+    while text.starts_with('*') || text.starts_with('?') {
+        text.remove(0);
+    }
+    if let Some((name, ty)) = split_top_level_colon(&text) {
+        if !name.trim().is_empty() {
+            return parse_type(ty);
+        }
+    }
+    let tokens = text.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() > 1 {
+        parse_type(tokens[0])
+    } else {
+        parse_type(&text)
+    }
+}
+
+fn is_sorbet_sig_start(line: &str) -> bool {
+    line.starts_with("sig {") || line.starts_with("sig(") || line.starts_with("sig do")
+}
+
+fn rbs_comment_start(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' && quote.is_some() {
+            escaped = true;
+            continue;
+        }
+        if let Some(current_quote) = quote {
+            if byte == current_quote {
+                quote = None;
+            }
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if byte == b'#' && bytes.get(index + 1) == Some(&b':') {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn delimiters_balanced(text: &str) -> bool {
+    let mut paren = 0usize;
+    let mut brace = 0usize;
+    let mut bracket = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for character in text.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quote.is_some() {
+            escaped = true;
+            continue;
+        }
+        if let Some(current_quote) = quote {
+            if character == current_quote {
+                quote = None;
+            }
+            continue;
+        }
+        if character == '\'' || character == '"' {
+            quote = Some(character);
+            continue;
+        }
+        match character {
+            '(' => paren += 1,
+            ')' => paren = paren.saturating_sub(1),
+            '{' => brace += 1,
+            '}' => brace = brace.saturating_sub(1),
+            '[' => bracket += 1,
+            ']' => bracket = bracket.saturating_sub(1),
+            _ => {}
+        }
+    }
+    paren == 0 && brace == 0 && bracket == 0 && quote.is_none()
+}
+
+fn definition_name(line: &str) -> Option<String> {
+    let line = line.strip_prefix("private ").unwrap_or(line);
+    let line = line.strip_prefix("protected ").unwrap_or(line);
+    let rest = line.strip_prefix("def ")?;
+    let rest = rest.trim_start_matches("self.");
+    let end = rest.find(['(', ' ', ';']).unwrap_or(rest.len());
+    let name = rest[..end].trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+fn line_spans(source: &str) -> Vec<(usize, &str)> {
+    let mut result = Vec::new();
+    let mut offset = 0;
+    for line in source.split_inclusive('\n') {
+        result.push((offset, line.trim_end_matches('\n')));
+        offset += line.len();
+    }
+    if source.is_empty() {
+        result.push((0, ""));
+    }
+    result
+}
+
+fn strip_comment_tail(text: &str) -> &str {
+    text.split('#').next().unwrap_or(text).trim()
+}
+
+fn extract_call(text: &str, name: &str) -> Option<String> {
+    let needle = format!("{name}(");
+    let start = text.find(&needle)? + needle.len() - 1;
+    let close = matching_delimiter(text, start, '(', ')')?;
+    Some(text[start + 1..close].to_owned())
+}
+
+fn find_top_level_arrow(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    for index in 0..bytes.len().saturating_sub(1) {
+        match bytes[index] {
+            b'(' => paren += 1,
+            b')' => paren = paren.saturating_sub(1),
+            b'[' => bracket += 1,
+            b']' => bracket = bracket.saturating_sub(1),
+            b'{' => brace += 1,
+            b'}' => brace = brace.saturating_sub(1),
+            b'-' if bytes[index + 1] == b'>' && paren == 0 && bracket == 0 && brace == 0 => {
+                return Some(index)
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn matching_delimiter(text: &str, start: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote = None;
+    for (relative, character) in text[start..].char_indices() {
+        let index = start + relative;
+        if let Some(current_quote) = quote {
+            if character == current_quote {
+                quote = None;
+            }
+            continue;
+        }
+        if character == '\'' || character == '\"' {
+            quote = Some(character);
+        } else if character == open {
+            depth += 1;
+        } else if character == close {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+fn split_top_level(text: &str, separator: char) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    let mut quote = None;
+    for (index, character) in text.char_indices() {
+        if let Some(current_quote) = quote {
+            if character == current_quote {
+                quote = None;
+            }
+            continue;
+        }
+        if character == '\'' || character == '\"' {
+            quote = Some(character);
+        } else {
+            match character {
+                '(' => paren += 1,
+                ')' => paren = paren.saturating_sub(1),
+                '[' => bracket += 1,
+                ']' => bracket = bracket.saturating_sub(1),
+                '{' => brace += 1,
+                '}' => brace = brace.saturating_sub(1),
+                value if value == separator && paren == 0 && bracket == 0 && brace == 0 => {
+                    result.push(text[start..index].trim().to_owned());
+                    start = index + character.len_utf8();
+                }
+                _ => {}
+            }
+        }
+    }
+    result.push(text[start..].trim().to_owned());
+    result
+}
+
+fn split_top_level_colon(text: &str) -> Option<(&str, &str)> {
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    for (index, character) in text.char_indices() {
+        match character {
+            '(' => paren += 1,
+            ')' => paren = paren.saturating_sub(1),
+            '[' => bracket += 1,
+            ']' => bracket = bracket.saturating_sub(1),
+            '{' => brace += 1,
+            '}' => brace = brace.saturating_sub(1),
+            ':' if paren == 0
+                && bracket == 0
+                && brace == 0
+                && text.as_bytes().get(index.wrapping_sub(1)) != Some(&b':')
+                && text.as_bytes().get(index + 1) != Some(&b':') =>
+            {
+                return Some((&text[..index], &text[index + 1..]))
+            }
+            _ => {}
+        }
+    }
+    None
+}

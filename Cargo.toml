@@ -1,0 +1,15 @@
+[package]
+name = "typey"
+version = "0.1.0"
+edition = "2021"
+description = "A hackable, Sorbet-compatible Ruby type checker"
+license = "MIT"
+
+[dependencies]
+ruby-prism = "1.9.0"
+
+[dev-dependencies]
+
+[[bin]]
+name = "typey"
+path = "src/main.rs"
