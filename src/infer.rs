@@ -6211,15 +6211,23 @@ impl<'src> Analyzer<'src> {
             "empty?" | "start_with?" | "end_with?" | "include?" => Type::bool(),
             "to_i" | "to_int" => Type::Integer,
             "to_f" => Type::Float,
+            "to_r" => Type::named("Rational"),
+            "to_c" => Type::named("Complex"),
             "to_sym" | "intern" => Type::Symbol,
             "split" | "chars" | "lines" => Type::Array(Box::new(Type::String)),
             "bytes" | "codepoints" => Type::Array(Box::new(Type::Integer)),
+            "[]" | "slice" | "byteslice" => Type::union([Type::Nil, Type::String]),
             "match" => Type::union([Type::Nil, Type::named("MatchData")]),
             "match?" => Type::bool(),
             "=~" => Type::union([Type::Nil, Type::Integer]),
             "index" | "rindex" => Type::union([Type::Nil, Type::Integer]),
-            "encode" | "reverse" | "reverse!" | "strip" | "upcase" | "downcase" | "capitalize"
-            | "chomp" | "to_s" | "dup" | "clone" | "+" => Type::String,
+            "encode" | "reverse" | "reverse!" | "strip" | "lstrip" | "rstrip" | "upcase"
+            | "downcase" | "capitalize" | "swapcase" | "chomp" | "chop" | "succ" | "next"
+            | "gsub" | "sub" | "delete" | "tr" | "tr_s" | "squeeze" | "scrub" | "center"
+            | "ljust" | "rjust" | "prepend" | "concat" | "replace" | "force_encoding" | "to_s"
+            | "dup" | "clone" | "+" | "*" => Type::String,
+            "chr" => Type::String,
+            "ord" => Type::Integer,
             _ => Type::Any,
         }
     }

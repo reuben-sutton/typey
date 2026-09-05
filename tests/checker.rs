@@ -1335,6 +1335,12 @@ T.reveal_type(values.sum)
 T.reveal_type(1.abs)
 T.reveal_type(1.0.abs)
 T.reveal_type("text".bytes)
+T.reveal_type("text"[0])
+T.reveal_type("text".gsub("t", "T"))
+T.reveal_type("text".succ)
+T.reveal_type("text".ord)
+T.reveal_type("text".to_r)
+T.reveal_type("text".to_c)
 "#,
         CheckerConfig::default(),
     );
@@ -1351,6 +1357,10 @@ T.reveal_type("text".bytes)
         "Revealed type: `Integer`",
         "Revealed type: `Float`",
         "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `T.nilable(String)`",
+        "Revealed type: `String`",
+        "Revealed type: `Rational`",
+        "Revealed type: `Complex`",
     ] {
         assert!(
             notes.iter().any(|message| message.contains(expected)),
