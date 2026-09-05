@@ -1355,6 +1355,48 @@ T.reveal_type({**hash})
 }
 
 #[test]
+fn preserves_collection_transform_types() {
+    let result = check(
+        r#"
+values = [1, 2]
+hash = {"answer" => 1}
+
+T.reveal_type(values.first(1))
+T.reveal_type(values.last(1))
+T.reveal_type(values.fetch(0))
+T.reveal_type(values.fetch(0, 0.0))
+T.reveal_type(values.fetch(0) { |index| index.to_s })
+T.reveal_type(values + [2.0])
+T.reveal_type(hash.merge({"other" => "text"}))
+T.reveal_type(hash.transform_values { |value| value.to_s })
+T.reveal_type(hash.to_a)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `Integer`",
+        "Revealed type: `T.any(Float, Integer)`",
+        "Revealed type: `T::Array[T.any(Float, Integer)]`",
+        "Revealed type: `T::Hash[String, T.any(Integer, String)]`",
+        "Revealed type: `T::Hash[String, T.any(Integer, String)]`",
+        "Revealed type: `T::Array[[String, Integer]]`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
 fn preserves_built_in_class_object_and_global_call_types() {
     let result = check(
         r#"

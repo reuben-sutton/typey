@@ -5203,11 +5203,22 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Array(Box::new(element.clone()))
             }
-            "first" | "last" | "at" => {
-                if site.argument_types.len() > 1 {
-                    Type::Array(Box::new(element.clone()))
-                } else {
+            "first" | "last" => {
+                if site.argument_types.is_empty() {
                     Type::union([Type::Nil, element.clone()])
+                } else {
+                    Type::Array(Box::new(element.clone()))
+                }
+            }
+            "at" => Type::union([Type::Nil, element.clone()]),
+            "fetch" => {
+                if let Some(default) = site.argument_types.get(1) {
+                    element.join(default)
+                } else if let Some(block) = site.block {
+                    let block_type = self.eval_block_node(block, &[Type::Integer], environment);
+                    element.join(&block_type)
+                } else {
+                    element.clone()
                 }
             }
             "[]" => {
@@ -5234,6 +5245,22 @@ impl<'src> Analyzer<'src> {
                     });
                 Type::Array(Box::new(element))
             }
+            "+" | "|" => {
+                let element = site
+                    .argument_types
+                    .iter()
+                    .fold(element.clone(), |current, actual| {
+                        current.join(&self.array_element_type(actual))
+                    });
+                Type::Array(Box::new(element))
+            }
+            "-" | "&" => Type::Array(Box::new(element.clone())),
+            "*" => match site.argument_types.first() {
+                Some(Type::Integer) => Type::Array(Box::new(element.clone())),
+                Some(Type::String) => Type::String,
+                _ => Type::Any,
+            },
+            "take" | "drop" => Type::Array(Box::new(element.clone())),
             "push" | "<<" => {
                 for (argument, actual) in site.argument_nodes.iter().zip(site.argument_types) {
                     self.check_assignable(argument, actual, element);
@@ -5287,7 +5314,54 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Hash(Box::new(key.clone()), Box::new(value.clone()))
             }
-            "merge" | "dup" | "clone" => Type::Hash(Box::new(key.clone()), Box::new(value.clone())),
+            "merge" | "merge!" | "update" | "reverse_merge" => {
+                let mut merged_key = key.clone();
+                let mut merged_value = value.clone();
+                for argument in site.argument_types {
+                    match argument {
+                        Type::Hash(argument_key, argument_value) => {
+                            merged_key = merged_key.join(argument_key);
+                            merged_value = merged_value.join(argument_value);
+                        }
+                        Type::Any => {
+                            merged_key = Type::Any;
+                            merged_value = Type::Any;
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(block) = site.block {
+                    let block_type = self.eval_block_node(
+                        block,
+                        &[merged_key.clone(), value.clone(), merged_value.clone()],
+                        environment,
+                    );
+                    merged_value = merged_value.join(&block_type);
+                }
+                Type::Hash(Box::new(merged_key), Box::new(merged_value))
+            }
+            "dup" | "clone" | "to_h" => Type::Hash(Box::new(key.clone()), Box::new(value.clone())),
+            "compact" => Type::Hash(Box::new(key.clone()), Box::new(value.without(&Type::Nil))),
+            "select" | "filter" | "reject" => {
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, &[key.clone(), value.clone()], environment);
+                }
+                Type::Hash(Box::new(key.clone()), Box::new(value.clone()))
+            }
+            "transform_keys" => {
+                let block_type = site.block.map_or(Type::Any, |block| {
+                    self.eval_block_node(block, std::slice::from_ref(key), environment)
+                });
+                Type::Hash(Box::new(block_type), Box::new(value.clone()))
+            }
+            "transform_values" => {
+                let block_type = site.block.map_or(Type::Any, |block| {
+                    self.eval_block_node(block, std::slice::from_ref(value), environment)
+                });
+                Type::Hash(Box::new(key.clone()), Box::new(block_type))
+            }
+            "to_a" => Type::Array(Box::new(Type::Tuple(vec![key.clone(), value.clone()]))),
+            "values_at" => Type::Array(Box::new(value.clone())),
             "length" | "size" => Type::Integer,
             "empty?" | "include?" | "key?" | "has_key?" => Type::bool(),
             _ => Type::Any,
