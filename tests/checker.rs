@@ -2937,3 +2937,31 @@ end
     let result = check(source, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
 }
+
+#[test]
+fn records_compound_assignments_as_send_sites() {
+    let source = r#"
+class Example
+  def update(value)
+    local = 1
+    local += value
+    @instance += value
+    @@class_var += value
+    $global += value
+    CONSTANT += value
+    self.value += value
+    values[0] += value
+  end
+end
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_count = result
+        .types
+        .iter()
+        .filter(|inferred| inferred.is_send)
+        .count();
+    assert!(
+        send_count >= 8,
+        "expected compound assignment send sites, got {send_count}"
+    );
+}

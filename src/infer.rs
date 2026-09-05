@@ -1411,6 +1411,25 @@ struct Analyzer<'src> {
 }
 
 impl<'src> Analyzer<'src> {
+    fn is_send_node(node: &Node<'_>) -> bool {
+        node.as_call_node().is_some()
+            || node.as_call_and_write_node().is_some()
+            || node.as_call_operator_write_node().is_some()
+            || node.as_call_or_write_node().is_some()
+            || node.as_class_variable_operator_write_node().is_some()
+            || node.as_constant_operator_write_node().is_some()
+            || node.as_constant_path_operator_write_node().is_some()
+            || node.as_global_variable_operator_write_node().is_some()
+            || node.as_index_and_write_node().is_some()
+            || node.as_index_operator_write_node().is_some()
+            || node.as_index_or_write_node().is_some()
+            || node.as_instance_variable_operator_write_node().is_some()
+            || node.as_local_variable_operator_write_node().is_some()
+            || node.as_yield_node().is_some()
+            || node.as_super_node().is_some()
+            || node.as_forwarding_super_node().is_some()
+    }
+
     fn normal_type(result: Eval) -> Type {
         result.normal_type.unwrap_or(Type::Never)
     }
@@ -2421,10 +2440,7 @@ impl<'src> Analyzer<'src> {
             end,
             type_: type_.clone(),
             untyped_origin,
-            is_send: node.as_call_node().is_some()
-                || node.as_yield_node().is_some()
-                || node.as_super_node().is_some()
-                || node.as_forwarding_super_node().is_some(),
+            is_send: Self::is_send_node(node),
         });
         type_
     }
