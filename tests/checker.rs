@@ -1484,6 +1484,25 @@ T.reveal_type(hash.invert)
 }
 
 #[test]
+fn infers_dir_globs_as_string_arrays() {
+    let result = check(
+        r#"
+files = Dir["*.rb"]
+T.reveal_type(files)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T::Array[String]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_regexp_method_types() {
     let result = check(
         r#"

@@ -5888,6 +5888,9 @@ impl<'src> Analyzer<'src> {
                             Type::Hash(Box::new(Type::Any), Box::new(Type::Any))
                         }
                     }
+                    Type::Named(class, _) if name_matches(&class, "Dir") => {
+                        Type::Array(Box::new(Type::String))
+                    }
                     Type::Named(class, _) => Type::Named(class, arguments),
                     _ => Type::Any,
                 }
