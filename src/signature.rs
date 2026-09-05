@@ -474,6 +474,10 @@ pub fn parse_type(raw: &str) -> Type {
         return Type::Any;
     }
 
+    if let Some(proc_type) = parse_rbs_proc_type(&text) {
+        return proc_type;
+    }
+
     let union = split_top_level(&text, '|');
     if union.len() > 1 {
         return Type::union(union.into_iter().map(|part| parse_type(&part)));
@@ -615,6 +619,29 @@ pub fn parse_type(raw: &str) -> Type {
         return Type::TypeVar(normalized.to_owned());
     }
     Type::Named(normalized.to_owned(), Vec::new())
+}
+
+fn parse_rbs_proc_type(text: &str) -> Option<Type> {
+    let text = text.strip_prefix('^')?.trim();
+    let arrow = find_top_level_arrow(text)?;
+    let parameters = text[..arrow].trim();
+    let parameters = if parameters.is_empty() {
+        Vec::new()
+    } else {
+        let close = matching_delimiter(parameters, 0, '(', ')')?;
+        if close != parameters.len() - 1 {
+            return None;
+        }
+        split_top_level(&parameters[1..close], ',')
+            .into_iter()
+            .filter(|parameter| !parameter.trim().is_empty())
+            .map(parse_rbs_parameter)
+            .collect()
+    };
+    Some(Type::Proc(
+        parameters,
+        Box::new(parse_type(text[arrow + 2..].trim())),
+    ))
 }
 
 fn parse_rbs_parameter(raw: String) -> Type {

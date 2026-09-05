@@ -494,6 +494,17 @@ fn lattice_facade_has_top_and_bottom_identities() {
         Type::Proc(vec![Type::Integer], Box::new(Type::String))
     );
     assert_eq!(
+        typey::signature::parse_type("^-> void"),
+        Type::Proc(Vec::new(), Box::new(Type::Nil))
+    );
+    assert_eq!(
+        typey::signature::parse_type("^(String path) -> Array[Offense]"),
+        Type::Proc(
+            vec![Type::String],
+            Box::new(Type::Array(Box::new(Type::named("Offense")))),
+        )
+    );
+    assert_eq!(
         typey::signature::parse_type("[Integer, String]"),
         Type::Tuple(vec![Type::Integer, Type::String])
     );
@@ -741,6 +752,22 @@ use_string(hash.fetch("name"))
 current_namespace_path = [] #: Array[String?]
 resolved_constant = [""].concat(current_namespace_path)
 use_array(resolved_constant)
+"#;
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn checks_rbs_proc_annotations_and_block_arity() {
+    let source = r#"def interrupt_callback
+  -> { nil } #: ^-> void
+end
+
+def process_file_proc
+  proc do |path|
+    [path]
+  end #: ^(String path) -> Array[String]
+end
 "#;
     let result = check(source, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

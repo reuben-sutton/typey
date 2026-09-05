@@ -3522,10 +3522,15 @@ impl<'src> Analyzer<'src> {
             && matches!(name.as_str(), "lambda" | "proc")
             && call.block().is_some()
         {
-            let return_type = call.block().as_ref().map_or(Type::Any, |block| {
-                self.eval_block_node(block, &[], environment)
-            });
-            Type::Proc(Vec::new(), Box::new(return_type))
+            let (parameters, return_type) = call.block().as_ref().map_or_else(
+                || (Vec::new(), Type::Any),
+                |block| {
+                    let signature = Self::inferred_block_signature(block);
+                    let return_type = self.eval_block_node(block, &signature.params, environment);
+                    (signature.params, return_type)
+                },
+            );
+            Type::Proc(parameters, Box::new(return_type))
         } else if receiver_node.is_none() {
             if name == "each"
                 && Self::named_type_name(&environment.self_type)
@@ -4629,6 +4634,19 @@ impl<'src> Analyzer<'src> {
         };
         let result = self.eval_block(&block, expected, outer);
         Self::block_value_type(&result)
+    }
+
+    fn inferred_block_signature<'node>(node: &Node<'node>) -> MethodSig {
+        let parameters = node
+            .as_block_node()
+            .and_then(|block| block.parameters())
+            .and_then(|parameters| {
+                parameters
+                    .as_block_parameters_node()
+                    .and_then(|parameters| parameters.parameters())
+                    .or_else(|| parameters.as_parameters_node())
+            });
+        MethodState::inferred(parameters).body_signature()
     }
 
     fn block_value_type(result: &Eval) -> Type {
