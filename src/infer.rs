@@ -395,10 +395,13 @@ struct KeywordArgument<'node> {
 struct CallArguments<'node> {
     argument_nodes: Vec<Node<'node>>,
     argument_types: Vec<Type>,
+    argument_indices: Vec<usize>,
     positional_indices: Vec<usize>,
     positional_types: Vec<Type>,
     keyword_arguments: Vec<KeywordArgument<'node>>,
     has_keyword_splat: bool,
+    has_dynamic_positional_splat: bool,
+    has_dynamic_keyword_splat: bool,
     /// The call uses Ruby's `...` forwarding form. There is no concrete
     /// argument list at this syntax site; it is the caller's complete
     /// positional, keyword, and block argument set.
@@ -2825,10 +2828,13 @@ impl<'src> Analyzer<'src> {
             CallArguments {
                 argument_nodes: Vec::new(),
                 argument_types: types,
+                argument_indices: Vec::new(),
                 positional_indices: Vec::new(),
                 positional_types,
                 keyword_arguments: Vec::new(),
                 has_keyword_splat: false,
+                has_dynamic_positional_splat: false,
+                has_dynamic_keyword_splat: false,
                 forwards_arguments: true,
             }
         } else {
@@ -3263,12 +3269,17 @@ impl<'src> Analyzer<'src> {
                             let result = self.eval_node(&expression, environment);
                             child_abrupt = child_abrupt.join(&result.abrupt);
                             child_flow = child_flow.without(FlowKind::Normal).union(result.flow);
-                            if let Type::Hash(splat_key, splat_value) = result.type_ {
+                            let result_type = result.type_.clone();
+                            if let Type::Hash(splat_key, splat_value) = result_type {
                                 key = key.join(&splat_key);
                                 value = value.join(&splat_value);
+                                evaluated.has_dynamic_keyword_splat = true;
                             } else {
                                 key = Type::Any;
                                 value = Type::Any;
+                                if !result_type.is_any() {
+                                    evaluated.has_dynamic_keyword_splat = true;
+                                }
                             }
                         }
                         evaluated.has_keyword_splat = true;
@@ -3289,6 +3300,7 @@ impl<'src> Analyzer<'src> {
                     );
                     let type_ = self.record(argument, type_);
                     evaluated.argument_types.push(type_);
+                    evaluated.argument_indices.push(argument_index);
                     evaluated.keyword_arguments.extend(keyword_arguments);
                     abrupt = abrupt.join(&child_abrupt);
                     abrupt_flow = abrupt_flow.union(child_flow.without(FlowKind::Normal));
@@ -3297,14 +3309,32 @@ impl<'src> Analyzer<'src> {
                 }
             }
 
+            if let Some(splat) = argument.as_splat_node() {
+                let Some(expression) = splat.expression() else {
+                    evaluated.forwards_arguments = true;
+                    continue;
+                };
+                let result = self.eval_splat_expression(&expression, environment);
+                if let Type::Tuple(elements) = &result.type_ {
+                    for type_ in elements {
+                        evaluated.argument_types.push(type_.clone());
+                        evaluated.argument_indices.push(argument_index);
+                        evaluated.positional_types.push(type_.clone());
+                        evaluated.positional_indices.push(argument_index);
+                    }
+                } else if !result.type_.is_any() {
+                    evaluated.has_dynamic_positional_splat = true;
+                }
+                abrupt = abrupt.join(&result.abrupt);
+                abrupt_flow = abrupt_flow.union(result.flow.without(FlowKind::Normal));
+                all_normal &= result.flow.contains(FlowKind::Normal);
+                continue;
+            }
+
             let result = self.eval_node(argument, environment);
-            let type_ = if argument.as_splat_node().is_some() {
-                self.array_element_type(&result.type_)
-            } else {
-                result.type_.clone()
-            };
-            evaluated.argument_types.push(type_.clone());
-            evaluated.positional_types.push(type_);
+            evaluated.argument_types.push(result.type_.clone());
+            evaluated.argument_indices.push(argument_index);
+            evaluated.positional_types.push(result.type_);
             evaluated.positional_indices.push(argument_index);
             abrupt = abrupt.join(&result.abrupt);
             abrupt_flow = abrupt_flow.union(result.flow.without(FlowKind::Normal));
@@ -3321,6 +3351,27 @@ impl<'src> Analyzer<'src> {
             abrupt_flow,
             all_normal,
         }
+    }
+
+    fn eval_splat_expression<'node>(
+        &mut self,
+        expression: &Node<'node>,
+        environment: &mut Environment,
+    ) -> Eval {
+        let previous_expected_return = self.expected_return_type.take();
+        if let Some(array) = expression.as_array_node() {
+            if array
+                .elements()
+                .iter()
+                .all(|element| element.as_splat_node().is_none())
+            {
+                self.expected_return_type =
+                    Some(Type::Tuple(vec![Type::Any; array.elements().len()]));
+            }
+        }
+        let result = self.eval_node(expression, environment);
+        self.expected_return_type = previous_expected_return;
+        result
     }
 
     fn eval_call<'node>(
@@ -4430,7 +4481,20 @@ impl<'src> Analyzer<'src> {
         } else {
             &arguments.argument_types
         };
+        if arguments.has_dynamic_positional_splat {
+            self.error(
+                node,
+                "Splats are only supported where the size of the array is known statically",
+            );
+        }
+        if arguments.has_dynamic_keyword_splat {
+            self.error(
+                node,
+                "Keyword args with splats are only supported where the shape of the hash is known statically",
+            );
+        }
         let positional_error = !arguments.forwards_arguments
+            && !arguments.has_dynamic_positional_splat
             && (argument_types.len() < signature.required_params
                 || (!signature.accepts_rest && argument_types.len() > signature.params.len()));
         let provided_keywords = arguments
@@ -4495,14 +4559,16 @@ impl<'src> Analyzer<'src> {
                 }
             }
         } else if !arguments.forwards_arguments {
-            for ((argument, actual), expected) in arguments
-                .argument_nodes
+            for ((argument_index, actual), expected) in arguments
+                .argument_indices
                 .iter()
                 .zip(argument_types)
                 .zip(&signature.params)
             {
-                let expected = Self::substitute_instance_type(expected, receiver_type);
-                self.check_assignable(argument, actual, &expected);
+                if let Some(argument) = arguments.argument_nodes.get(*argument_index) {
+                    let expected = Self::substitute_instance_type(expected, receiver_type);
+                    self.check_assignable(argument, actual, &expected);
+                }
             }
         }
         if keyword_mode && !arguments.forwards_arguments {
