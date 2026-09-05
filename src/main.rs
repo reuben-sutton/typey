@@ -144,6 +144,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "[typey] strict inferred types containing T.untyped: {total} ({direct} direct) across {} files",
                     untyped_by_path.len()
                 );
+                let mut application_spans = std::collections::BTreeSet::new();
+                let mut application_untyped_spans = std::collections::BTreeSet::new();
+                let mut application_untyped_by_origin =
+                    std::collections::BTreeMap::<UntypedOrigin, usize>::new();
+                let mut application_seen_untyped = std::collections::BTreeSet::new();
+                for inferred in &result.types {
+                    if !is_application_source(&inferred.path) {
+                        continue;
+                    }
+                    let span = (inferred.path.clone(), inferred.start, inferred.end);
+                    application_spans.insert(span.clone());
+                    if inferred.type_.contains_any() {
+                        application_untyped_spans.insert(span);
+                        let origin = inferred.untyped_origin.unwrap_or(UntypedOrigin::Propagated);
+                        if application_seen_untyped.insert((
+                            inferred.path.clone(),
+                            inferred.start,
+                            inferred.end,
+                            origin,
+                        )) {
+                            *application_untyped_by_origin.entry(origin).or_default() += 1;
+                        }
+                    }
+                }
+                let application_total = application_spans.len();
+                let application_untyped = application_untyped_spans.len();
+                let application_percent = if application_total == 0 {
+                    0.0
+                } else {
+                    application_untyped as f64 * 100.0 / application_total as f64
+                };
+                eprintln!(
+                    "[typey] application lib expression spans containing T.untyped: {application_untyped}/{application_total} ({application_percent:.1}%)"
+                );
+                for (origin, count) in application_untyped_by_origin {
+                    eprintln!(
+                        "[typey] application lib {}: {count} unique spans",
+                        untyped_origin_label(origin)
+                    );
+                }
                 let explicit_untyped = strict_paths
                     .iter()
                     .filter_map(|path| sources_by_path.get(path))
@@ -235,4 +275,11 @@ fn untyped_origin_label(origin: UntypedOrigin) -> &'static str {
         UntypedOrigin::FallbackCall => "fallback/unmodeled call",
         UntypedOrigin::Propagated => "propagated value",
     }
+}
+
+fn is_application_source(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()) == Some("rb")
+        && path
+            .components()
+            .any(|component| component.as_os_str() == std::ffi::OsStr::new("lib"))
 }
