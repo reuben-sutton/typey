@@ -149,14 +149,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut application_untyped_by_origin =
                     std::collections::BTreeMap::<UntypedOrigin, usize>::new();
                 let mut application_seen_untyped = std::collections::BTreeSet::new();
+                let mut application_sends_by_path =
+                    std::collections::BTreeMap::<PathBuf, (usize, usize)>::new();
                 for inferred in &result.types {
                     if !is_application_source(&inferred.path) || !inferred.is_send {
                         continue;
                     }
                     let span = (inferred.path.clone(), inferred.start, inferred.end);
-                    application_send_spans.insert(span.clone());
+                    if application_send_spans.insert(span.clone()) {
+                        application_sends_by_path
+                            .entry(inferred.path.clone())
+                            .or_default()
+                            .0 += 1;
+                    }
                     if inferred.type_.contains_any() {
-                        application_untyped_send_spans.insert(span);
+                        if application_untyped_send_spans.insert(span) {
+                            application_sends_by_path
+                                .entry(inferred.path.clone())
+                                .or_default()
+                                .1 += 1;
+                        }
                         let origin = inferred.untyped_origin.unwrap_or(UntypedOrigin::Propagated);
                         if application_seen_untyped.insert((
                             inferred.path.clone(),
@@ -182,6 +194,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!(
                         "[typey] application lib {}: {count} unique spans",
                         untyped_origin_label(origin)
+                    );
+                }
+                let mut application_files =
+                    application_sends_by_path.into_iter().collect::<Vec<_>>();
+                application_files.sort_by(|left, right| right.1.cmp(&left.1));
+                for (path, (sends, untyped)) in application_files.into_iter().take(20) {
+                    eprintln!(
+                        "[typey] application lib file {}: {untyped}/{sends} untyped sends",
+                        path.display()
                     );
                 }
                 let explicit_untyped = strict_paths
