@@ -367,6 +367,32 @@ fn resolves_extended_and_singleton_class_methods() {
             .any(|message| message.contains("Revealed type: `String`")),
         "{notes:?}"
     );
+
+    let invalid_fixed_member = check(
+        r#"
+class Fixed
+  extend T::Sig
+  extend T::Generic
+  Elem = type_member { {fixed: Integer} }
+
+  sig { returns(Elem) }
+  def value
+    "wrong"
+  end
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(
+        invalid_fixed_member
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic
+                .message
+                .contains("Expected method `value` to return `Integer`, but found `String`")),
+        "{:?}",
+        invalid_fixed_member.diagnostics
+    );
 }
 
 #[test]
@@ -687,19 +713,13 @@ T.reveal_type(Fixed.new.value)
             .iter()
             .filter(|message| message.contains("Revealed type: `Integer`"))
             .count(),
-        2,
+        3,
         "{notes:?}"
     );
     assert!(
         notes
             .iter()
             .any(|message| message.contains("Revealed type: `String`")),
-        "{notes:?}"
-    );
-    assert!(
-        notes
-            .iter()
-            .any(|message| message.contains("Revealed type: `T.untyped`")),
         "{notes:?}"
     );
 }

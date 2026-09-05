@@ -1533,47 +1533,244 @@ impl<'src> Analyzer<'src> {
         Some(arguments.get(member.index).cloned().unwrap_or(Type::Any))
     }
 
-    fn substitute_generic_members(&self, type_: &Type, receiver_type: Option<&Type>) -> Type {
+    fn is_open_generic_member(&self, name: &str, receiver_type: Option<&Type>) -> bool {
+        let Some((declared_owner, member_name)) = name.rsplit_once("::") else {
+            return false;
+        };
+        self.classes
+            .get(declared_owner)
+            .and_then(|info| info.type_members.get(member_name))
+            .is_some_and(|member| {
+                member.fixed.is_none()
+                    && self
+                        .generic_member_binding(name, receiver_type)
+                        .is_some_and(|type_| type_.is_any())
+            })
+    }
+
+    fn contains_open_generic_member(&self, type_: &Type, receiver_type: Option<&Type>) -> bool {
         match type_ {
-            Type::TypeVar(name) => self
-                .generic_member_binding(name, receiver_type)
+            Type::TypeVar(name) => self.is_open_generic_member(name, receiver_type),
+            Type::Named(_, arguments) => arguments
+                .iter()
+                .any(|argument| self.contains_open_generic_member(argument, receiver_type)),
+            Type::Array(element) => self.contains_open_generic_member(element, receiver_type),
+            Type::Hash(key, value) => {
+                self.contains_open_generic_member(key, receiver_type)
+                    || self.contains_open_generic_member(value, receiver_type)
+            }
+            Type::Tuple(elements) => elements
+                .iter()
+                .any(|element| self.contains_open_generic_member(element, receiver_type)),
+            Type::Proc(parameters, result) => {
+                parameters
+                    .iter()
+                    .any(|parameter| self.contains_open_generic_member(parameter, receiver_type))
+                    || self.contains_open_generic_member(result, receiver_type)
+            }
+            Type::Union(members) | Type::Intersection(members) => members
+                .iter()
+                .any(|member| self.contains_open_generic_member(member, receiver_type)),
+            _ => false,
+        }
+    }
+
+    fn collect_generic_member_binding(
+        &self,
+        expected: &Type,
+        actual: &Type,
+        receiver_type: Option<&Type>,
+        bindings: &mut BTreeMap<String, Type>,
+    ) {
+        match expected {
+            Type::TypeVar(name)
+                if self.is_open_generic_member(name, receiver_type) && !actual.is_any() =>
+            {
+                bindings
+                    .entry(name.clone())
+                    .and_modify(|current| *current = current.join(actual))
+                    .or_insert_with(|| actual.clone());
+            }
+            Type::Union(members) => {
+                let fixed_match = members.iter().any(|member| {
+                    !self.contains_open_generic_member(member, receiver_type)
+                        && self.is_assignable(actual, member)
+                });
+                if !fixed_match {
+                    for member in members {
+                        if self.contains_open_generic_member(member, receiver_type) {
+                            self.collect_generic_member_binding(
+                                member,
+                                actual,
+                                receiver_type,
+                                bindings,
+                            );
+                        }
+                    }
+                }
+            }
+            Type::Intersection(members) => {
+                for member in members {
+                    self.collect_generic_member_binding(member, actual, receiver_type, bindings);
+                }
+            }
+            Type::Array(expected) => {
+                if let Type::Array(actual) = actual {
+                    self.collect_generic_member_binding(expected, actual, receiver_type, bindings);
+                }
+            }
+            Type::Hash(expected_key, expected_value) => {
+                if let Type::Hash(actual_key, actual_value) = actual {
+                    self.collect_generic_member_binding(
+                        expected_key,
+                        actual_key,
+                        receiver_type,
+                        bindings,
+                    );
+                    self.collect_generic_member_binding(
+                        expected_value,
+                        actual_value,
+                        receiver_type,
+                        bindings,
+                    );
+                }
+            }
+            Type::Tuple(expected_elements) => {
+                if let Type::Tuple(actual_elements) = actual {
+                    for (expected, actual) in expected_elements.iter().zip(actual_elements) {
+                        self.collect_generic_member_binding(
+                            expected,
+                            actual,
+                            receiver_type,
+                            bindings,
+                        );
+                    }
+                }
+            }
+            Type::Proc(expected_parameters, expected_result) => {
+                if let Type::Proc(actual_parameters, actual_result) = actual {
+                    for (expected, actual) in expected_parameters.iter().zip(actual_parameters) {
+                        self.collect_generic_member_binding(
+                            expected,
+                            actual,
+                            receiver_type,
+                            bindings,
+                        );
+                    }
+                    self.collect_generic_member_binding(
+                        expected_result,
+                        actual_result,
+                        receiver_type,
+                        bindings,
+                    );
+                }
+            }
+            Type::Named(expected_name, expected_arguments) => {
+                if let Type::Named(actual_name, actual_arguments) = actual {
+                    if name_matches(expected_name, actual_name)
+                        || name_matches(actual_name, expected_name)
+                    {
+                        for (expected, actual) in expected_arguments.iter().zip(actual_arguments) {
+                            self.collect_generic_member_binding(
+                                expected,
+                                actual,
+                                receiver_type,
+                                bindings,
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn infer_generic_member_bindings(
+        &self,
+        signature: &MethodSig,
+        arguments: &CallArguments<'_>,
+        receiver_type: Option<&Type>,
+    ) -> BTreeMap<String, Type> {
+        let mut bindings = BTreeMap::new();
+        let positional_types = if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
+            &arguments.positional_types
+        } else {
+            &arguments.argument_types
+        };
+        for (actual, expected) in positional_types.iter().zip(&signature.params) {
+            self.collect_generic_member_binding(expected, actual, receiver_type, &mut bindings);
+        }
+        if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
+            for argument in &arguments.keyword_arguments {
+                if let Some(expected) = signature.keywords.get(&argument.name) {
+                    self.collect_generic_member_binding(
+                        &expected.type_,
+                        &argument.type_,
+                        receiver_type,
+                        &mut bindings,
+                    );
+                }
+            }
+        }
+        bindings
+    }
+
+    fn substitute_generic_members(
+        &self,
+        type_: &Type,
+        receiver_type: Option<&Type>,
+        bindings: &BTreeMap<String, Type>,
+    ) -> Type {
+        match type_ {
+            Type::TypeVar(name) => bindings
+                .get(name)
+                .cloned()
+                .or_else(|| self.generic_member_binding(name, receiver_type))
                 .unwrap_or_else(|| type_.clone()),
             Type::Named(name, arguments) => Type::Named(
                 name.clone(),
                 arguments
                     .iter()
-                    .map(|argument| self.substitute_generic_members(argument, receiver_type))
+                    .map(|argument| {
+                        self.substitute_generic_members(argument, receiver_type, bindings)
+                    })
                     .collect(),
             ),
-            Type::Array(element) => Type::Array(Box::new(
-                self.substitute_generic_members(element, receiver_type),
-            )),
+            Type::Array(element) => Type::Array(Box::new(self.substitute_generic_members(
+                element,
+                receiver_type,
+                bindings,
+            ))),
             Type::Hash(key, value) => Type::Hash(
-                Box::new(self.substitute_generic_members(key, receiver_type)),
-                Box::new(self.substitute_generic_members(value, receiver_type)),
+                Box::new(self.substitute_generic_members(key, receiver_type, bindings)),
+                Box::new(self.substitute_generic_members(value, receiver_type, bindings)),
             ),
             Type::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
-                    .map(|element| self.substitute_generic_members(element, receiver_type))
+                    .map(|element| {
+                        self.substitute_generic_members(element, receiver_type, bindings)
+                    })
                     .collect(),
             ),
             Type::Proc(parameters, result) => Type::Proc(
                 parameters
                     .iter()
-                    .map(|parameter| self.substitute_generic_members(parameter, receiver_type))
+                    .map(|parameter| {
+                        self.substitute_generic_members(parameter, receiver_type, bindings)
+                    })
                     .collect(),
-                Box::new(self.substitute_generic_members(result, receiver_type)),
+                Box::new(self.substitute_generic_members(result, receiver_type, bindings)),
             ),
             Type::Union(members) => Type::union(
                 members
                     .iter()
-                    .map(|member| self.substitute_generic_members(member, receiver_type)),
+                    .map(|member| self.substitute_generic_members(member, receiver_type, bindings)),
             ),
             Type::Intersection(members) => Type::intersection(
                 members
                     .iter()
-                    .map(|member| self.substitute_generic_members(member, receiver_type)),
+                    .map(|member| self.substitute_generic_members(member, receiver_type, bindings)),
             ),
             other => other.clone(),
         }
@@ -1588,7 +1785,7 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         let names = type_parameters.iter().cloned().collect::<BTreeSet<_>>();
         let type_ = Self::substitute_instance_type(type_, receiver_type);
-        let type_ = self.substitute_generic_members(&type_, receiver_type);
+        let type_ = self.substitute_generic_members(&type_, receiver_type, bindings);
         Self::substitute_type_parameters(&type_, bindings, &names)
     }
 
@@ -5197,7 +5394,12 @@ impl<'src> Analyzer<'src> {
         arguments: &CallArguments<'node>,
         receiver_type: Option<&Type>,
     ) -> Type {
-        let type_parameter_bindings = self.infer_type_parameter_bindings(signature, arguments);
+        let mut type_parameter_bindings = self.infer_type_parameter_bindings(signature, arguments);
+        type_parameter_bindings.extend(self.infer_generic_member_bindings(
+            signature,
+            arguments,
+            receiver_type,
+        ));
         let keyword_mode = !signature.keywords.is_empty() || signature.accepts_keyword_rest;
         let argument_types = if keyword_mode {
             &arguments.positional_types
