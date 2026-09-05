@@ -1491,11 +1491,12 @@ impl<'src> Analyzer<'src> {
             if self.seed_calls || self.is_rbi_definition(node) {
                 return Eval::value(Type::Nil);
             }
-            let class_name = self
-                .constant_reference_name(&class.constant_path())
-                .unwrap_or_else(|| prism::text(self.source, &class.constant_path()))
-                .trim_start_matches("::")
-                .to_owned();
+            let class_name = self.scoped_constant_name(
+                environment,
+                &self
+                    .constant_reference_name(&class.constant_path())
+                    .unwrap_or_else(|| prism::text(self.source, &class.constant_path())),
+            );
             if let Some(body) = class.body() {
                 let mut class_environment = environment.clone();
                 class_environment.self_type = Self::class_object_type(&class_name);
@@ -1512,11 +1513,12 @@ impl<'src> Analyzer<'src> {
             if self.seed_calls || self.is_rbi_definition(node) {
                 return Eval::value(Type::Nil);
             }
-            let module_name = self
-                .constant_reference_name(&module.constant_path())
-                .unwrap_or_else(|| prism::text(self.source, &module.constant_path()))
-                .trim_start_matches("::")
-                .to_owned();
+            let module_name = self.scoped_constant_name(
+                environment,
+                &self
+                    .constant_reference_name(&module.constant_path())
+                    .unwrap_or_else(|| prism::text(self.source, &module.constant_path())),
+            );
             if let Some(body) = module.body() {
                 let mut module_environment = environment.clone();
                 module_environment.self_type = Self::class_object_type(&module_name);
@@ -3899,6 +3901,16 @@ impl<'src> Analyzer<'src> {
             .unwrap_or_else(|| name.to_owned())
     }
 
+    fn scoped_constant_name(&self, environment: &Environment, name: &str) -> String {
+        let absolute = name.trim_start().starts_with("::");
+        let name = name.trim_start_matches("::");
+        if absolute || name.contains("::") {
+            return name.to_owned();
+        }
+        self.lexical_owner(environment)
+            .map_or_else(|| name.to_owned(), |owner| format!("{owner}::{name}"))
+    }
+
     fn observe_constant(&mut self, environment: &Environment, name: String, actual: &Type) {
         let key = self.constant_key(environment, &name);
         let next = self
@@ -4957,6 +4969,14 @@ impl<'src> Analyzer<'src> {
                         .zip(expected_params)
                         .all(|(actual, expected)| self.is_assignable(expected, actual))
                     && self.is_assignable(actual_return, expected_return)
+            }
+            (Type::Named(actual_name, actual_args), Type::Named(expected_name, expected_args))
+                if actual_args.len() == 1
+                    && expected_args.is_empty()
+                    && name_matches(actual_name, "Class")
+                    && name_matches(expected_name, "Module") =>
+            {
+                true
             }
             (Type::Named(actual_name, actual_args), Type::Named(expected_name, expected_args)) => {
                 if self.nominal_names_match(actual_name, expected_name) {
