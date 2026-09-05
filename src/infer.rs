@@ -1415,7 +1415,7 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         match type_ {
             Type::TypeVar(name) if names.contains(name) => {
-                bindings.get(name).cloned().unwrap_or(Type::Any)
+                bindings.get(name).cloned().unwrap_or_else(|| type_.clone())
             }
             Type::Named(name, arguments) => Type::Named(
                 name.clone(),
@@ -4042,10 +4042,19 @@ impl<'src> Analyzer<'src> {
                 return false;
             }
         }
+        let type_parameter_bindings = self.infer_type_parameter_bindings(signature, arguments);
         if !positional_types
             .iter()
             .zip(&signature.params)
-            .all(|(actual, expected)| self.is_assignable(actual, expected))
+            .all(|(actual, expected)| {
+                let expected = Self::substitute_signature_type(
+                    expected,
+                    None,
+                    &type_parameter_bindings,
+                    &signature.type_parameters,
+                );
+                self.is_assignable(actual, &expected)
+            })
         {
             return false;
         }
@@ -4055,7 +4064,15 @@ impl<'src> Analyzer<'src> {
                 signature
                     .keywords
                     .get(&argument.name)
-                    .is_some_and(|expected| self.is_assignable(&argument.type_, &expected.type_))
+                    .is_some_and(|expected| {
+                        let expected = Self::substitute_signature_type(
+                            &expected.type_,
+                            None,
+                            &type_parameter_bindings,
+                            &signature.type_parameters,
+                        );
+                        self.is_assignable(&argument.type_, &expected)
+                    })
                     || signature.accepts_keyword_rest
             })
         {
@@ -5356,11 +5373,7 @@ impl<'src> Analyzer<'src> {
         if resolved_actual != *actual || resolved_expected != *expected {
             return self.is_assignable(&resolved_actual, &resolved_expected);
         }
-        if actual.is_any()
-            || expected.is_any()
-            || actual.is_never()
-            || matches!(expected, Type::TypeVar(_))
-        {
+        if actual.is_any() || expected.is_any() || actual.is_never() {
             return true;
         }
         if actual == expected || actual.is_subtype_of(expected) {

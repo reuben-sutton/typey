@@ -609,6 +609,40 @@ T.reveal_type(identity("value"))
 }
 
 #[test]
+fn preserves_unbound_sorbet_type_parameters_and_checks_method_bodies() {
+    let result = check(
+        r#"
+extend T::Sig
+
+sig { type_parameters(:U).returns(T.type_parameter(:U)) }
+def unresolved
+  1
+end
+
+T.reveal_type(unresolved)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Expected method `unresolved` to return `U`, but found `Integer`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `U`") }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn parses_rbs_continuations_by_default() {
     let source = "#: (Integer)\n#| -> String\ndef stringify(value)\n  value.to_s\nend\n";
     let annotations = typey::signature::collect(source);
