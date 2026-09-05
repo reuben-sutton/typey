@@ -5558,6 +5558,7 @@ impl<'src> Analyzer<'src> {
                     Type::Array(Box::new(element.clone()))
                 }
             }
+            "[]=" => site.argument_types.last().cloned().unwrap_or(Type::Any),
             "compact" => Type::Array(Box::new(element.without(&Type::Nil))),
             "length" | "size" | "count" => Type::Integer,
             "empty?" | "any?" | "all?" | "none?" | "include?" => Type::bool(),
@@ -5608,6 +5609,7 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         match name {
             "[]" | "default" => Type::union([Type::Nil, value.clone()]),
+            "[]=" => site.argument_types.last().cloned().unwrap_or(Type::Any),
             "fetch" => {
                 if let Some(default) = site.argument_types.get(1) {
                     value.join(default)
