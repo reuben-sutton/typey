@@ -1834,6 +1834,10 @@ T.reveal_type(values + [2.0])
 T.reveal_type(hash.merge({"other" => "text"}))
 T.reveal_type(hash.transform_values { |value| value.to_s })
 T.reveal_type(hash.to_a)
+T.reveal_type(hash.fetch_values("answer"))
+T.reveal_type(hash.dig("answer"))
+T.reveal_type(hash.slice("answer"))
+T.reveal_type(hash.except("answer"))
 "#,
         CheckerConfig::default(),
     );
@@ -1852,6 +1856,8 @@ T.reveal_type(hash.to_a)
         "Revealed type: `T::Hash[String, T.any(Integer, String)]`",
         "Revealed type: `T::Hash[String, T.any(Integer, String)]`",
         "Revealed type: `T::Array[[String, Integer]]`",
+        "Revealed type: `T.nilable(Integer)`",
+        "Revealed type: `T::Hash[String, Integer]`",
     ] {
         assert!(
             notes.iter().any(|message| message.contains(expected)),

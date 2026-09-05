@@ -6153,6 +6153,7 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         match name {
             "[]" | "default" => Type::union([Type::Nil, value.clone()]),
+            "dig" => Type::union([Type::Nil, value.clone()]),
             "[]=" => site.argument_types.last().cloned().unwrap_or(Type::Any),
             "fetch" => {
                 if let Some(default) = site.argument_types.get(1) {
@@ -6165,6 +6166,7 @@ impl<'src> Analyzer<'src> {
                     value.clone()
                 }
             }
+            "fetch_values" => Type::Array(Box::new(value.clone())),
             "keys" => Type::Array(Box::new(key.clone())),
             "values" => Type::Array(Box::new(value.clone())),
             "each" | "each_pair" | "each_key" | "each_value" => {
@@ -6215,7 +6217,9 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Hash(Box::new(merged_key), Box::new(merged_value))
             }
-            "dup" | "clone" | "to_h" => Type::Hash(Box::new(key.clone()), Box::new(value.clone())),
+            "dup" | "clone" | "to_h" | "slice" | "except" => {
+                Type::Hash(Box::new(key.clone()), Box::new(value.clone()))
+            }
             "compact" => Type::Hash(Box::new(key.clone()), Box::new(value.without(&Type::Nil))),
             "invert" => Type::Hash(Box::new(value.clone()), Box::new(key.clone())),
             "select" | "filter" | "reject" => {
