@@ -656,6 +656,124 @@ T.reveal_type(Child.build)
 }
 
 #[test]
+fn specializes_multiple_generic_members_in_declaration_order() {
+    let result = check(
+        r#"
+class Pair
+  extend T::Sig
+  extend T::Generic
+  Zed = type_member
+  Alpha = type_member
+
+  sig { params(first: Zed, second: Alpha).returns(T::Hash[Alpha, Zed]) }
+  def pair(first, second)
+    {second => first}
+  end
+end
+
+T.reveal_type(Pair[Integer, String].new.pair(1, "value"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T::Hash[String, Integer]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn specializes_nested_method_type_parameters() {
+    let result = check(
+        r#"
+extend T::Sig
+
+sig {
+  type_parameters(:U)
+    .params(values: T::Array[T.type_parameter(:U)])
+    .returns(T.nilable(T.type_parameter(:U)))
+}
+def first(values)
+  values[0]
+end
+
+T.reveal_type(first([1]))
+T.reveal_type(first(["value"]))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.nilable(Integer)`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.nilable(String)`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn specializes_attached_and_self_types_through_inheritance() {
+    let result = check(
+        r#"
+class Base
+  extend T::Sig
+
+  sig { returns(T::Array[T.attached_class]) }
+  def self.instances
+    [new]
+  end
+
+  sig { returns(T.nilable(T.self_type)) }
+  def maybe_self
+    self if true
+  end
+end
+
+class Child < Base
+end
+
+T.reveal_type(Child.instances)
+T.reveal_type(Child.new.maybe_self)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Array[Child]`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.nilable(Child)`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn infers_sorbet_method_type_parameters_at_each_call_site() {
     let result = check(
         r#"
