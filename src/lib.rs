@@ -10,6 +10,11 @@ pub mod infer;
 pub mod prism;
 pub mod signature;
 pub mod types;
+pub mod workspace;
 
 pub use infer::{check, CheckResult, CheckerConfig, InferredType, Strictness};
 pub use types::{Type, TypeLattice};
+pub use workspace::{
+    check_workspace, discover_ruby_files, load_workspace, WorkspaceCheckResult,
+    WorkspaceDiagnostic, WorkspaceFile, WorkspaceInferredType,
+};

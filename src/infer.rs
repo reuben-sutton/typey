@@ -726,6 +726,14 @@ impl MethodRegistrar<'_> {
 /// Check a source buffer with direct ruby-prism parsing.
 #[must_use]
 pub fn check(source: &str, config: CheckerConfig) -> CheckResult {
+    check_with_rbi_ranges(source, config, &[])
+}
+
+pub(crate) fn check_with_rbi_ranges(
+    source: &str,
+    config: CheckerConfig,
+    rbi_ranges: &[(usize, usize)],
+) -> CheckResult {
     let bytes = source.as_bytes();
     let parsed = prism::parse(bytes);
     let annotations = signature::collect(source);
@@ -751,6 +759,7 @@ pub fn check(source: &str, config: CheckerConfig) -> CheckResult {
         globals: BTreeMap::new(),
         report: true,
         seed_calls: false,
+        rbi_ranges: rbi_ranges.to_vec(),
         diagnostics,
         types: Vec::new(),
     };
@@ -772,6 +781,7 @@ struct Analyzer<'src> {
     globals: BTreeMap<String, Type>,
     report: bool,
     seed_calls: bool,
+    rbi_ranges: Vec<(usize, usize)>,
     diagnostics: Vec<Diagnostic>,
     types: Vec<InferredType>,
 }
@@ -2049,7 +2059,7 @@ impl<'src> Analyzer<'src> {
             Eval::value(Type::Nil)
         };
         let inferred_return = body_result.method_return_type();
-        if state.explicit {
+        if state.explicit && !self.is_rbi_definition(node) {
             let expected = state.call_signature();
             if !inferred_return.is_never() && !inferred_return.is_subtype_of(&expected.return_type)
             {
@@ -2076,6 +2086,13 @@ impl<'src> Analyzer<'src> {
         }
         let _ = outer;
         Eval::value(self.record(node, Type::Nil))
+    }
+
+    fn is_rbi_definition(&self, node: &Node<'_>) -> bool {
+        let (start, end) = prism::span(node);
+        self.rbi_ranges
+            .iter()
+            .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
     }
 
     fn eval_super<'node>(

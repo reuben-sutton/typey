@@ -36,11 +36,20 @@ exception edges, overloads and generic signatures, a complete Ruby
 core/standard-library model, and the broader Spinel feature set (full
 closure/yield propagation, refinements, and precise dynamic dispatch).
 
-Run it on stdin or a file:
+Run it on stdin, one file, or an entire repository:
 
 ```text
 cargo run -- path/to/file.rb
+cargo run -- path/to/repository
 ```
+
+Directory mode recursively discovers `.rb` and `.rbi` files, registers their
+classes, modules, method definitions, and signatures in one shared Prism
+workspace, then runs the lattice fixpoint across the combined program. Output
+diagnostics retain their source file paths. `.git`, `target`, `node_modules`,
+and the ignored local `sorbet-upstream`/`spinel-upstream` checkouts are skipped.
+Files are analyzed in deterministic lexical path order; library callers can
+provide an explicit order with `check_workspace`.
 
 The checked-in fixtures under `tests/fixtures` use Sorbet's `# error:` and
 `# note:` expectations. Run the reusable fixture harness with:
@@ -52,13 +61,14 @@ cargo run --bin conformance -- path/to/one_fixture.rb
 cargo run --bin conformance -- --manifest tests/upstream_manifest.txt
 ```
 
-It recursively discovers `.rb` fixtures (or accepts one file), checks expected
-error/note counts and message substrings, and reports suite coverage. A
-manifest can select files from an external checkout such as `sorbet-upstream/`.
-The checked-in set is a
-conformance seed, not the full Sorbet suite. A shallow clone of Sorbet is kept
-locally as `sorbet-upstream/` for selecting and porting fixtures; it is ignored
-by this crate so the large upstream checkout is not vendored into Typey.
+It recursively discovers `.rb` and `.rbi` fixtures (or accepts one file),
+checks expected error/note counts and message substrings, and reports suite
+coverage. A manifest can select files from an external checkout such as
+`sorbet-upstream/`.
+The checked-in set is a conformance seed, not the full Sorbet suite. A shallow
+clone of Sorbet is kept locally as `sorbet-upstream/` for selecting and porting
+fixtures; it is ignored by this crate so the large upstream checkout is not
+vendored into Typey.
 
 ```text
 cargo test

@@ -1,4 +1,6 @@
 use crate::diagnostic::Severity;
+use crate::infer::check_with_rbi_ranges;
+use crate::workspace::is_ruby_source;
 use crate::{check, CheckResult, CheckerConfig};
 use std::fs;
 use std::io;
@@ -88,7 +90,11 @@ pub fn manifest_paths(manifest: &Path) -> io::Result<Vec<PathBuf>> {
 pub fn check_fixture(path: &Path, config: CheckerConfig) -> io::Result<FixtureReport> {
     let source = fs::read_to_string(path)?;
     let expected = expectations(&source);
-    let result = check(&source, config);
+    let result = if path.extension().and_then(|extension| extension.to_str()) == Some("rbi") {
+        check_with_rbi_ranges(&source, config, &[(0, source.len())])
+    } else {
+        check(&source, config)
+    };
     let mut failures = Vec::new();
 
     for severity in [Severity::Error, Severity::Note] {
@@ -141,7 +147,7 @@ pub fn check_fixture(path: &Path, config: CheckerConfig) -> io::Result<FixtureRe
 pub fn fixture_paths(root: &Path) -> io::Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     if root.is_file() {
-        if root.extension().is_some_and(|extension| extension == "rb") {
+        if is_ruby_source(root) {
             paths.push(root.to_owned());
         }
     } else {
@@ -158,8 +164,7 @@ fn collect_fixture_paths(root: &Path, paths: &mut Vec<PathBuf>) -> io::Result<()
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
             collect_fixture_paths(&path, paths)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|extension| extension == "rb")
-        {
+        } else if file_type.is_file() && is_ruby_source(&path) {
             paths.push(path);
         }
     }
