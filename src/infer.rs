@@ -5684,6 +5684,9 @@ impl<'src> Analyzer<'src> {
             Type::Named(class, arguments)
                 if name == "each" && name_matches(class, "Enumerable") =>
             {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
                 let element = arguments.first().cloned().unwrap_or(Type::Any);
                 if let Some(block) = site.block {
                     let _ =
@@ -5715,12 +5718,18 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         match name {
             "map" | "collect" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
                 let block_type = site.block.map_or(Type::Any, |block| {
                     self.eval_block_node(block, std::slice::from_ref(element), environment)
                 });
                 Type::Array(Box::new(block_type))
             }
             "each_with_index" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
                 if let Some(block) = site.block {
                     let expected = vec![element.clone(), Type::Integer];
                     let _ = self.eval_block_node(block, &expected, environment);
@@ -5728,12 +5737,18 @@ impl<'src> Analyzer<'src> {
                 Type::Array(Box::new(element.clone()))
             }
             "filter_map" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
                 let block_type = site.block.map_or(Type::Any, |block| {
                     self.eval_block_node(block, std::slice::from_ref(element), environment)
                 });
                 Type::Array(Box::new(block_type.truthy_part()))
             }
             "each" | "select" | "filter" | "reject" | "sort" | "reverse" | "rotate" | "shuffle" => {
+                if site.block.is_none() && matches!(name, "each" | "select" | "filter" | "reject") {
+                    return Type::named("Enumerator");
+                }
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
                 }
@@ -5834,6 +5849,9 @@ impl<'src> Analyzer<'src> {
             "keys" => Type::Array(Box::new(key.clone())),
             "values" => Type::Array(Box::new(value.clone())),
             "each" | "each_pair" | "each_key" | "each_value" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
                 if let Some(block) = site.block {
                     let params = if name == "each_key" || name == "each_value" {
                         std::slice::from_ref(if name == "each_key" { key } else { value })
@@ -5881,18 +5899,27 @@ impl<'src> Analyzer<'src> {
             "dup" | "clone" | "to_h" => Type::Hash(Box::new(key.clone()), Box::new(value.clone())),
             "compact" => Type::Hash(Box::new(key.clone()), Box::new(value.without(&Type::Nil))),
             "select" | "filter" | "reject" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, &[key.clone(), value.clone()], environment);
                 }
                 Type::Hash(Box::new(key.clone()), Box::new(value.clone()))
             }
             "transform_keys" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
                 let block_type = site.block.map_or(Type::Any, |block| {
                     self.eval_block_node(block, std::slice::from_ref(key), environment)
                 });
                 Type::Hash(Box::new(block_type), Box::new(value.clone()))
             }
             "transform_values" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
                 let block_type = site.block.map_or(Type::Any, |block| {
                     self.eval_block_node(block, std::slice::from_ref(value), environment)
                 });

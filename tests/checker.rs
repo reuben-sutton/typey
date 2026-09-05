@@ -1340,6 +1340,34 @@ T.reveal_type(hash.fetch("answer") { |key| key.length })
 }
 
 #[test]
+fn models_blockless_collection_enumerators() {
+    let result = check(
+        r#"
+values = [1, 2, 3]
+hash = {"answer" => 1}
+
+T.reveal_type(values.each)
+T.reveal_type(values.map)
+T.reveal_type(values.each_with_index)
+T.reveal_type(values.select)
+T.reveal_type(hash.each)
+T.reveal_type(hash.transform_keys)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let enumerators = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic.message.contains("Revealed type: `Enumerator`")
+        })
+        .count();
+    assert_eq!(enumerators, 6, "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_types_through_literal_splats() {
     let result = check(
         r#"
