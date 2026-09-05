@@ -3191,7 +3191,14 @@ impl<'src> Analyzer<'src> {
             return Eval::retried(self.record(node, type_));
         }
         if let Some(super_node) = node.as_super_node() {
-            let actual = self.eval_super(node, super_node.arguments(), None, environment);
+            let block = super_node.block();
+            let actual = self.eval_super(
+                node,
+                super_node.arguments(),
+                None,
+                block.as_ref(),
+                environment,
+            );
             let type_ = self.apply_inline_assertion(node, actual);
             let type_ = self.record(node, type_);
             if self.super_terminates(environment) {
@@ -3201,7 +3208,9 @@ impl<'src> Analyzer<'src> {
             }
         }
         if let Some(super_node) = node.as_forwarding_super_node() {
-            let actual = self.eval_super(node, None, Some(&super_node), environment);
+            let block = super_node.block().map(|block| block.as_node());
+            let actual =
+                self.eval_super(node, None, Some(&super_node), block.as_ref(), environment);
             let type_ = self.apply_inline_assertion(node, actual);
             let type_ = self.record(node, type_);
             if self.super_terminates(environment) {
@@ -4157,16 +4166,14 @@ impl<'src> Analyzer<'src> {
         node: &Node<'node>,
         arguments: Option<ruby_prism::ArgumentsNode<'node>>,
         forwarding: Option<&ruby_prism::ForwardingSuperNode<'node>>,
+        block: Option<&Node<'node>>,
         environment: &mut Environment,
     ) -> Type {
         let Some(current) = environment.method_key.clone() else {
             return Type::Any;
         };
         let target = self.super_method_key(&current);
-        let arguments = if let Some(forwarding) = forwarding {
-            if let Some(block) = forwarding.block() {
-                let _ = self.eval_block(&block, &[], environment);
-            }
+        let arguments = if forwarding.is_some() {
             let types = self
                 .methods
                 .get(&current)
@@ -4201,6 +4208,7 @@ impl<'src> Analyzer<'src> {
         let Some(signature) = self.observe_call(&target, &arguments) else {
             return Type::Any;
         };
+        self.observe_block_call(&target, block, environment);
         self.invoke_signature(
             node,
             &target.name,

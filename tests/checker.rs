@@ -218,6 +218,37 @@ Child.new.call(2)
 }
 
 #[test]
+fn propagates_blocks_through_super_calls() {
+    let result = check(
+        r#"
+class Parent
+  def call
+    yield 1
+  end
+end
+
+class Child < Parent
+  def call
+    super { |value| value.to_s }
+  end
+end
+
+T.reveal_type(Child.new.call)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic.message.contains("Revealed type: `String`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn substitutes_self_type_and_builtin_exception_subtypes() {
     assert_no_errors(
         r#"
