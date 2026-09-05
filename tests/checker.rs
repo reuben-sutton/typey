@@ -702,3 +702,25 @@ end
     let result = check(source, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
 }
+
+#[test]
+fn narrows_assignment_predicates() {
+    let source = r#"class Node
+end
+
+#: -> Node?
+def maybe_node
+  Node.new
+end
+
+#: (Node) -> void
+def use_node(node)
+end
+
+if (node = maybe_node)
+  use_node(node)
+end
+"#;
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}

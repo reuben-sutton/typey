@@ -3188,6 +3188,19 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
         truthy: bool,
     ) {
+        if let Some(parentheses) = node.as_parentheses_node() {
+            if let Some(body) = parentheses.body() {
+                self.narrow_from_predicate(&body, environment, truthy);
+            }
+            return;
+        }
+        if let Some(statements) = node.as_statements_node() {
+            let body = statements.body();
+            if let Some(last) = (&body).into_iter().last() {
+                self.narrow_from_predicate(&last, environment, truthy);
+            }
+            return;
+        }
         if let Some(and) = node.as_and_node() {
             if truthy {
                 let left = and.left();
@@ -3208,6 +3221,17 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(local) = node.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
+            let current = environment.get(&name);
+            let narrowed = if truthy {
+                current.truthy_part()
+            } else {
+                current.falsy_part()
+            };
+            environment.bind(name, current.meet(&narrowed));
+            return;
+        }
+        if let Some(write) = node.as_local_variable_write_node() {
+            let name = prism::constant_name(write.name());
             let current = environment.get(&name);
             let narrowed = if truthy {
                 current.truthy_part()
