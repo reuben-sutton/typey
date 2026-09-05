@@ -724,3 +724,24 @@ end
     let result = check(source, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
 }
+
+#[test]
+fn models_hash_fetch_and_array_concat() {
+    let source = r#"#: (String) -> void
+def use_string(value)
+end
+
+#: (Array[String?]) -> void
+def use_array(value)
+end
+
+hash = {} #: Hash[String, String]
+use_string(hash.fetch("name"))
+
+current_namespace_path = [] #: Array[String?]
+resolved_constant = [""].concat(current_namespace_path)
+use_array(resolved_constant)
+"#;
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}

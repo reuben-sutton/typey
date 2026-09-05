@@ -4485,14 +4485,18 @@ impl<'src> Analyzer<'src> {
             "length" | "size" | "count" => Type::Integer,
             "empty?" | "any?" | "all?" | "none?" | "include?" => Type::bool(),
             "join" => Type::String,
-            "push" | "concat" | "<<" => {
+            "concat" => {
+                let element = site
+                    .argument_types
+                    .iter()
+                    .fold(element.clone(), |current, actual| {
+                        current.join(&self.array_element_type(actual))
+                    });
+                Type::Array(Box::new(element))
+            }
+            "push" | "<<" => {
                 for (argument, actual) in site.argument_nodes.iter().zip(site.argument_types) {
-                    let actual = if name == "concat" {
-                        self.array_element_type(actual)
-                    } else {
-                        actual.clone()
-                    };
-                    self.check_assignable(argument, &actual, element);
+                    self.check_assignable(argument, actual, element);
                 }
                 Type::Array(Box::new(element.clone()))
             }
@@ -4510,7 +4514,18 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Type {
         match name {
-            "[]" | "fetch" | "default" => Type::union([Type::Nil, value.clone()]),
+            "[]" | "default" => Type::union([Type::Nil, value.clone()]),
+            "fetch" => {
+                if let Some(default) = site.argument_types.get(1) {
+                    value.join(default)
+                } else if let Some(block) = site.block {
+                    let block_type =
+                        self.eval_block_node(block, std::slice::from_ref(key), environment);
+                    value.join(&block_type)
+                } else {
+                    value.clone()
+                }
+            }
             "keys" => Type::Array(Box::new(key.clone())),
             "values" => Type::Array(Box::new(value.clone())),
             "each" | "each_pair" | "each_key" | "each_value" => {
