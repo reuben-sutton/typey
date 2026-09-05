@@ -876,6 +876,103 @@ T.reveal_type(value&.length)
 }
 
 #[test]
+fn checks_sorbet_assertion_helpers_and_absurd() {
+    let result = check(
+        r#"
+value = T.let(1, Integer)
+asserted = T.assert_type!(value, Integer)
+casted = T.cast("text", String)
+maybe = T.nilable(1)
+
+T.reveal_type(asserted)
+T.reveal_type(casted)
+T.reveal_type(T.must(maybe))
+T.reveal_type(T.unsafe(value))
+T.absurd(1)
+"#,
+        CheckerConfig::default(),
+    );
+    let errors = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0]
+            .message
+            .contains("Expected `T.noreturn`, but found `Integer`"),
+        "{errors:?}"
+    );
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.untyped`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn carries_proc_and_block_types_through_calls() {
+    let result = check(
+        r#"
+stringify = ->(value) { value.to_s }
+T.reveal_type(stringify)
+T.reveal_type(stringify.call(1))
+
+mapped = [1, 2].map { |value| value.to_s }
+T.reveal_type(mapped)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes.iter().any(|message| {
+            message.contains("Revealed type: `T.proc.params(T.untyped).returns(String)`")
+        }),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Array[String]`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn infers_sorbet_method_type_parameters_at_each_call_site() {
     let result = check(
         r#"

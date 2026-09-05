@@ -2410,15 +2410,19 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, type_));
         }
         if let Some(lambda) = node.as_lambda_node() {
-            let signature = MethodState::inferred(
-                lambda
-                    .parameters()
-                    .and_then(|parameters| parameters.as_parameters_node()),
-            )
+            let signature = MethodState::inferred(lambda.parameters().and_then(|parameters| {
+                parameters
+                    .as_block_parameters_node()
+                    .and_then(|parameters| parameters.parameters())
+                    .or_else(|| parameters.as_parameters_node())
+            }))
             .body_signature();
-            let parameters = lambda
-                .parameters()
-                .and_then(|parameters| parameters.as_parameters_node());
+            let parameters = lambda.parameters().and_then(|parameters| {
+                parameters
+                    .as_block_parameters_node()
+                    .and_then(|parameters| parameters.parameters())
+                    .or_else(|| parameters.as_parameters_node())
+            });
             let mut closure_environment = environment.clone();
             self.bind_parameters(parameters, Some(&signature), &mut closure_environment);
             let body_result = lambda
@@ -5113,8 +5117,8 @@ impl<'src> Analyzer<'src> {
                 Type::Named(class.clone(), arguments.clone())
             }
             Type::Named(_, _) => self.eval_common_method(name),
-            Type::Any
-            | Type::Object
+            Type::Any => self.eval_common_method(name),
+            Type::Object
             | Type::Never
             | Type::Proc(_, _)
             | Type::Intersection(_)
