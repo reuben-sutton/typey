@@ -774,6 +774,87 @@ T.reveal_type(Child.new.maybe_self)
 }
 
 #[test]
+fn preserves_concrete_types_through_core_models() {
+    let result = check(
+        r#"
+values = [1, 2]
+T.reveal_type(values.map { |value| value.to_s })
+T.reveal_type(values.first)
+T.reveal_type({"answer" => 1}.fetch("answer"))
+T.reveal_type("42".to_i)
+T.reveal_type(1 + 2)
+T.reveal_type(T.must(1))
+T.reveal_type(T.nilable(1))
+T.reveal_type(T.unsafe(1))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `T::Array[String]`",
+        "Revealed type: `T.nilable(Integer)`",
+        "Revealed type: `Integer`",
+        "Revealed type: `T.untyped`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        4,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn reports_signature_and_call_type_errors_precisely() {
+    let result = check(
+        r#"
+extend T::Sig
+
+sig { params(value: Integer).returns(String) }
+def stringify(value)
+  value
+end
+
+stringify("wrong")
+"#,
+        CheckerConfig::default(),
+    );
+    let errors = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("Expected method `stringify` to return `String`, but found `Integer`")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|message| message.contains("Expected `Integer`, but found `String`")),
+        "{errors:?}"
+    );
+    assert!(!errors.iter().any(|message| message.contains("T.untyped")), "{errors:?}");
+}
+
+#[test]
 fn infers_sorbet_method_type_parameters_at_each_call_site() {
     let result = check(
         r#"
