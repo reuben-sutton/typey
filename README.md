@@ -49,6 +49,8 @@ classes, modules, method definitions, and signatures in one shared Prism
 workspace, then runs the lattice fixpoint across the combined program. Output
 diagnostics retain their source file paths. `.git`, `target`, `node_modules`,
 and the ignored local `sorbet-upstream`/`spinel-upstream` checkouts are skipped.
+Files with Sorbet's `# typed: ignore` sigil in their first twenty lines are
+skipped before parsing and do not contribute declarations to the workspace.
 Files are analyzed in deterministic lexical path order; library callers can
 provide an explicit order with `check_workspace`.
 Use `--debug` to print discovery, Prism, registration, fixpoint, and periodic

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use typey::{check_workspace, discover_ruby_files, load_workspace, CheckerConfig};
+use typey::{check_workspace, discover_ruby_files, load_workspace, CheckerConfig, WorkspaceFile};
 
 const FIXTURE_ROOT: &str = "tests/workspace_repo";
 
@@ -97,5 +97,22 @@ fn debug_cli_reports_progress_on_stderr() {
     assert!(
         output.stdout.is_ascii(),
         "stdout should contain diagnostics only"
+    );
+}
+
+#[test]
+fn workspace_skips_typed_ignore_files_before_combining_source() {
+    let files = vec![
+        WorkspaceFile::new(
+            "ignored.rb",
+            "# typed: ignore\ndef broken(\n  this is not valid Ruby\n",
+        ),
+        WorkspaceFile::new("valid.rb", "# typed: true\nvalue = 1\n"),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(
+        result.diagnostics.is_empty(),
+        "unexpected workspace diagnostics: {:?}",
+        result.diagnostics
     );
 }

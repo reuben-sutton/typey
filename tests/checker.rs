@@ -51,6 +51,16 @@ fn assert_no_errors(source: &str) {
 }
 
 #[test]
+fn ignores_typed_ignore_files_before_parsing() {
+    let result = check(
+        "# typed: ignore\ndef broken(\n  this is not valid Ruby\n",
+        CheckerConfig::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(result.types.is_empty(), "{:?}", result.types);
+}
+
+#[test]
 fn checks_rbs_comments_and_trailing_assertions() {
     let result = check_fixture("tests/fixtures/rbs_comments.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| diagnostic

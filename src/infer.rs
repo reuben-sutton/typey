@@ -1,4 +1,5 @@
 use crate::diagnostic::Diagnostic;
+use crate::directives::is_typed_ignore;
 use crate::prism;
 use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
 use crate::types::{Type, TypeLattice};
@@ -1033,6 +1034,10 @@ pub(crate) fn check_with_rbi_ranges(
     config: CheckerConfig,
     rbi_ranges: &[(usize, usize)],
 ) -> CheckResult {
+    if is_typed_ignore(source) {
+        return CheckResult::default();
+    }
+
     let bytes = source.as_bytes();
     if config.debug {
         eprintln!("[typey] Prism parsing {} bytes", bytes.len());

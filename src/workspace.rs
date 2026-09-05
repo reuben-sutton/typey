@@ -8,6 +8,7 @@
 //! original files before they are returned.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::directives::is_typed_ignore;
 use crate::infer::{check_with_rbi_ranges, CheckerConfig};
 use crate::types::Type;
 use std::fs;
@@ -131,6 +132,11 @@ pub fn load_workspace_paths(paths: &[PathBuf]) -> io::Result<Vec<WorkspaceFile>>
 /// [`discover_ruby_files`] supplies a deterministic lexical order.
 #[must_use]
 pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> WorkspaceCheckResult {
+    let files = files
+        .iter()
+        .filter(|file| !is_typed_ignore(&file.source))
+        .cloned()
+        .collect::<Vec<_>>();
     if files.is_empty() {
         return WorkspaceCheckResult::default();
     }
@@ -151,7 +157,7 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
     let mut combined = String::new();
     let mut ranges = Vec::with_capacity(files.len());
     let mut rbi_ranges = Vec::new();
-    for file in files {
+    for file in &files {
         let start = combined.len();
         combined.push_str(&file.source);
         let end = combined.len();
@@ -176,12 +182,12 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
     let diagnostics = result
         .diagnostics
         .iter()
-        .filter_map(|diagnostic| map_diagnostic(diagnostic, files, &ranges))
+        .filter_map(|diagnostic| map_diagnostic(diagnostic, &files, &ranges))
         .collect();
     let types = result
         .types
         .iter()
-        .filter_map(|inferred| map_type(inferred, files, &ranges))
+        .filter_map(|inferred| map_type(inferred, &files, &ranges))
         .collect();
 
     WorkspaceCheckResult { diagnostics, types }

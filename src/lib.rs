@@ -6,6 +6,7 @@
 
 pub mod conformance;
 pub mod diagnostic;
+pub mod directives;
 pub mod infer;
 pub mod prism;
 pub mod signature;
