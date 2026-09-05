@@ -6,7 +6,7 @@ use ruby_prism::{CallNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Vi
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_FIXPOINT_ROUNDS: usize = 32;
-const DEBUG_NODE_INTERVAL: usize = 10_000;
+const DEBUG_NODE_INTERVAL: usize = 1_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct MethodKey {
@@ -36,6 +36,14 @@ struct IvarKey {
 struct ClassVarKey {
     owner: String,
     name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SharedKey {
+    Ivar(IvarKey),
+    Constant(String),
+    ClassVar(ClassVarKey),
+    Global(String),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -775,6 +783,13 @@ pub(crate) fn check_with_rbi_ranges(
         report: true,
         seed_calls: false,
         rbi_ranges: rbi_ranges.to_vec(),
+        filter_method_bodies: false,
+        active_methods: BTreeSet::new(),
+        changed_methods: BTreeSet::new(),
+        method_callers: BTreeMap::new(),
+        method_shared_reads: BTreeMap::new(),
+        shared_readers: BTreeMap::new(),
+        changed_shared: BTreeSet::new(),
         debug_phase: "idle",
         debug_round: 0,
         debug_nodes: 0,
@@ -800,6 +815,13 @@ struct Analyzer<'src> {
     report: bool,
     seed_calls: bool,
     rbi_ranges: Vec<(usize, usize)>,
+    filter_method_bodies: bool,
+    active_methods: BTreeSet<MethodKey>,
+    changed_methods: BTreeSet<MethodKey>,
+    method_callers: BTreeMap<MethodKey, BTreeSet<MethodKey>>,
+    method_shared_reads: BTreeMap<MethodKey, BTreeSet<SharedKey>>,
+    shared_readers: BTreeMap<SharedKey, BTreeSet<MethodKey>>,
+    changed_shared: BTreeSet<SharedKey>,
     debug_phase: &'static str,
     debug_round: usize,
     debug_nodes: usize,
@@ -827,76 +849,94 @@ impl<'src> Analyzer<'src> {
         // all definitions are registered, then the tables are refined until
         // one complete pass makes no change.
         self.report = false;
-        for round in 0..MAX_FIXPOINT_ROUNDS {
-            let previous_methods = self.methods.clone();
-            let previous_ivars = self.ivars.clone();
-            let previous_constants = self.constants.clone();
-            let previous_class_vars = self.class_vars.clone();
-            let previous_globals = self.globals.clone();
-            self.ivars.clear();
-            self.constants.clear();
-            self.class_vars.clear();
-            self.globals.clear();
+        self.seed_calls = true;
+        self.filter_method_bodies = false;
+        self.debug_phase = "seed";
+        self.debug_round = 0;
+        self.types.clear();
+        self.debug_nodes = 0;
+        if self.config.debug {
+            eprintln!("[typey] seeding top-level call sites");
+        }
+        let mut environment = Environment::default();
+        self.eval_node(root, &mut environment);
+        self.seed_calls = false;
+        self.changed_methods.clear();
+        self.changed_shared.clear();
 
-            // Seed parameter slots from calls in executable scopes before
-            // walking method bodies. This makes a call after its definition
-            // available to that definition in the same round, just like
-            // Spinel's call-site widening pass.
-            self.seed_calls = true;
-            self.debug_phase = "seed";
+        let mut pending_methods = self.methods.keys().cloned().collect::<BTreeSet<_>>();
+        let mut converged = pending_methods.is_empty();
+        for round in 0..MAX_FIXPOINT_ROUNDS {
+            if pending_methods.is_empty() {
+                converged = true;
+                break;
+            }
+
+            self.active_methods = pending_methods.clone();
+            self.filter_method_bodies = true;
+            self.changed_methods.clear();
+            self.changed_shared.clear();
+            self.debug_phase = "inference";
             self.debug_round = round + 1;
             self.types.clear();
             self.debug_nodes = 0;
             if self.config.debug {
                 eprintln!(
-                    "[typey] fixpoint round {}/{}: seeding call sites",
-                    round + 1,
-                    MAX_FIXPOINT_ROUNDS
-                );
-            }
-            let mut environment = Environment::default();
-            self.eval_node(root, &mut environment);
-            self.seed_calls = false;
-
-            self.debug_phase = "inference";
-            self.types.clear();
-            self.debug_nodes = 0;
-            if self.config.debug {
-                eprintln!(
-                    "[typey] fixpoint round {}/{}: evaluating method bodies",
-                    round + 1,
-                    MAX_FIXPOINT_ROUNDS
-                );
-            }
-            let mut environment = Environment::default();
-            self.eval_node(root, &mut environment);
-            let stable = self.methods == previous_methods
-                && self.ivars == previous_ivars
-                && self.constants == previous_constants
-                && self.class_vars == previous_class_vars
-                && self.globals == previous_globals;
-            if self.config.debug {
-                eprintln!(
-                    "[typey] fixpoint round {}/{} complete: {} methods, {} ivars, {} constants{}",
+                    "[typey] worklist round {}/{}: evaluating {} scheduled methods",
                     round + 1,
                     MAX_FIXPOINT_ROUNDS,
-                    self.methods.len(),
-                    self.ivars.len(),
-                    self.constants.len(),
-                    if stable { " (stable)" } else { "" }
+                    pending_methods.len()
                 );
             }
-            if stable {
+            let mut environment = Environment::default();
+            self.eval_node(root, &mut environment);
+
+            let changed_methods = self.changed_methods.clone();
+            let changed_shared = self.changed_shared.clone();
+            let mut next_pending = BTreeSet::new();
+            for method in &changed_methods {
+                next_pending.insert(method.clone());
+                if let Some(callers) = self.method_callers.get(method) {
+                    next_pending.extend(callers.iter().cloned());
+                }
+            }
+            for shared_key in &changed_shared {
+                if let Some(readers) = self.shared_readers.get(shared_key) {
+                    next_pending.extend(readers.iter().cloned());
+                }
+            }
+            converged = next_pending.is_empty();
+            if self.config.debug {
+                eprintln!(
+                    "[typey] worklist round {}/{} complete: {} changed methods, {} changed shared keys, {} scheduled next",
+                    round + 1,
+                    MAX_FIXPOINT_ROUNDS,
+                    changed_methods.len(),
+                    next_pending.len(),
+                    changed_shared.len()
+                );
+            }
+            pending_methods = next_pending;
+            if converged {
                 break;
             }
+        }
+        if self.config.debug && !converged {
+            eprintln!(
+                "[typey] worklist reached the {}-round limit with {} methods pending",
+                MAX_FIXPOINT_ROUNDS,
+                pending_methods.len()
+            );
         }
 
         // Re-run once with settled summaries. This final pass is the only pass
         // that publishes diagnostics and per-node types to callers.
         self.report = true;
         self.diagnostics = parse_diagnostics;
-        self.types.clear();
         self.seed_calls = false;
+        self.types.clear();
+        self.filter_method_bodies = false;
+        self.active_methods.clear();
         self.debug_phase = "final";
         self.debug_round = 0;
         self.debug_nodes = 0;
@@ -1036,6 +1076,9 @@ impl<'src> Analyzer<'src> {
             return self.eval_definition(node, &definition, environment);
         }
         if let Some(class) = node.as_class_node() {
+            if self.seed_calls || self.is_rbi_definition(node) {
+                return Eval::value(Type::Nil);
+            }
             let class_name = self
                 .constant_reference_name(&class.constant_path())
                 .unwrap_or_else(|| prism::text(self.source, &class.constant_path()))
@@ -1054,6 +1097,9 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, Type::Nil));
         }
         if let Some(module) = node.as_module_node() {
+            if self.seed_calls || self.is_rbi_definition(node) {
+                return Eval::value(Type::Nil);
+            }
             let module_name = self
                 .constant_reference_name(&module.constant_path())
                 .unwrap_or_else(|| prism::text(self.source, &module.constant_path()))
@@ -1072,6 +1118,9 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, Type::Nil));
         }
         if let Some(singleton) = node.as_singleton_class_node() {
+            if self.seed_calls || self.is_rbi_definition(node) {
+                return Eval::value(Type::Nil);
+            }
             let expression = singleton.expression();
             let expression_type = self.eval_node(&expression, environment).type_;
             let owner = match &expression_type {
@@ -1121,11 +1170,9 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, type_));
         }
         if let Some(read) = node.as_global_variable_read_node() {
-            let actual = self
-                .globals
-                .get(&prism::constant_name(read.name()))
-                .cloned()
-                .unwrap_or(Type::Any);
+            let name = prism::constant_name(read.name());
+            self.record_shared_read(SharedKey::Global(name.clone()), environment);
+            let actual = self.globals.get(&name).cloned().unwrap_or(Type::Any);
             let type_ = self.apply_inline_assertion(node, actual);
             return Eval::value(self.record(node, type_));
         }
@@ -2125,14 +2172,15 @@ impl<'src> Analyzer<'src> {
             .get(&prism::span(node).0)
             .cloned()
             .unwrap_or_else(|| MethodKey::top_level(name.clone()));
+        if self.filter_method_bodies && !self.active_methods.contains(&key) {
+            return Eval::value(Type::Nil);
+        }
+        self.begin_method_evaluation(&key);
         let state = self
             .methods
             .get(&key)
             .cloned()
             .unwrap_or_else(|| MethodState::inferred(definition.parameters()));
-        if self.seed_calls {
-            return Eval::value(self.record(node, Type::Nil));
-        }
         let body_signature = state.body_signature();
         let mut method_environment = Environment {
             self_type: key
@@ -2167,17 +2215,23 @@ impl<'src> Analyzer<'src> {
                 );
             }
         } else if let Some(current) = self.methods.get_mut(&key) {
-            current.set_return(
+            let changed = current.set_return(
                 &inferred_return,
                 body_result.flow == Flow::abrupt(FlowKind::Raise),
             );
+            if changed {
+                self.changed_methods.insert(key.clone());
+            }
         } else {
             let mut current = MethodState::inferred(definition.parameters());
-            current.set_return(
+            let changed = current.set_return(
                 &inferred_return,
                 body_result.flow == Flow::abrupt(FlowKind::Raise),
             );
-            self.methods.insert(key, current);
+            self.methods.insert(key.clone(), current);
+            if changed {
+                self.changed_methods.insert(key);
+            }
         }
         let _ = outer;
         Eval::value(self.record(node, Type::Nil))
@@ -2222,6 +2276,7 @@ impl<'src> Analyzer<'src> {
         let Some(target) = target else {
             return Type::Any;
         };
+        self.record_method_dependency(&target, environment);
         let Some(signature) = self.observe_call(&target, &argument_types) else {
             return Type::Any;
         };
@@ -2562,12 +2617,19 @@ impl<'src> Analyzer<'src> {
             Type::Proc(Vec::new(), Box::new(return_type))
         } else if receiver_node.is_none() {
             let key = self.implicit_method_key(&name, environment);
+            self.record_method_dependency(&key, environment);
             if let Some(signature) = self.observe_call(&key, &argument_types) {
                 self.invoke_signature(node, &name, &signature, &argument_nodes, &argument_types)
             } else if key.singleton {
                 if let Some(owner) = key.owner.clone() {
                     if name == "new" {
-                        self.infer_initializer_call(node, &owner, &argument_nodes, &argument_types);
+                        self.infer_initializer_call(
+                            node,
+                            &owner,
+                            &argument_nodes,
+                            &argument_types,
+                            environment,
+                        );
                         Type::named(owner)
                     } else {
                         self.eval_global_call(
@@ -2600,6 +2662,7 @@ impl<'src> Analyzer<'src> {
             let mut result = if let Some(key) =
                 self.receiver_method_key(receiver_node.as_ref(), &receiver_type, &name, environment)
             {
+                self.record_method_dependency(&key, environment);
                 if let Some(signature) = self.observe_call(&key, &argument_types) {
                     self.invoke_signature(node, &name, &signature, &argument_nodes, &argument_types)
                 } else {
@@ -2614,7 +2677,13 @@ impl<'src> Analyzer<'src> {
                     .is_some_and(|receiver| self.constant_reference_name(receiver).is_some())
             {
                 if let Type::Named(owner, _) = &receiver_type {
-                    self.infer_initializer_call(node, owner, &argument_nodes, &argument_types);
+                    self.infer_initializer_call(
+                        node,
+                        owner,
+                        &argument_nodes,
+                        &argument_types,
+                        environment,
+                    );
                     result = Type::named(owner.clone());
                 }
             }
@@ -2700,11 +2769,33 @@ impl<'src> Analyzer<'src> {
 
     fn observe_call(&mut self, key: &MethodKey, argument_types: &[Type]) -> Option<MethodSig> {
         let key = self.resolve_method_key(key)?;
-        let state = self.methods.get_mut(&key)?;
-        for (index, actual) in argument_types.iter().enumerate() {
-            state.observe_argument(index, actual);
+        let (signature, changed) = {
+            let state = self.methods.get_mut(&key)?;
+            let mut changed = false;
+            for (index, actual) in argument_types.iter().enumerate() {
+                changed |= state.observe_argument(index, actual);
+            }
+            (state.call_signature(), changed)
+        };
+        if changed {
+            self.changed_methods.insert(key);
         }
-        Some(state.call_signature())
+        Some(signature)
+    }
+
+    fn record_method_dependency(&mut self, key: &MethodKey, environment: &Environment) {
+        let Some(callee) = self.resolve_method_key(key) else {
+            return;
+        };
+        let Some(caller) = environment.method_key.as_ref() else {
+            return;
+        };
+        if self.methods.contains_key(caller) {
+            self.method_callers
+                .entry(callee)
+                .or_default()
+                .insert(caller.clone());
+        }
     }
 
     fn resolve_method_key(&self, key: &MethodKey) -> Option<MethodKey> {
@@ -2790,12 +2881,14 @@ impl<'src> Analyzer<'src> {
         owner: &str,
         argument_nodes: &[Node<'node>],
         argument_types: &[Type],
+        environment: &Environment,
     ) {
         let key = MethodKey {
             owner: Some(owner.to_owned()),
             name: "initialize".to_owned(),
             singleton: false,
         };
+        self.record_method_dependency(&key, environment);
         if let Some(signature) = self.observe_call(&key, argument_types) {
             let _ = self.invoke_signature(
                 node,
@@ -2862,6 +2955,41 @@ impl<'src> Analyzer<'src> {
         None
     }
 
+    fn begin_method_evaluation(&mut self, method: &MethodKey) {
+        let Some(shared_keys) = self.method_shared_reads.remove(method) else {
+            return;
+        };
+        for shared_key in shared_keys {
+            let empty = self
+                .shared_readers
+                .get_mut(&shared_key)
+                .is_some_and(|readers| {
+                    readers.remove(method);
+                    readers.is_empty()
+                });
+            if empty {
+                self.shared_readers.remove(&shared_key);
+            }
+        }
+    }
+
+    fn record_shared_read(&mut self, key: SharedKey, environment: &Environment) {
+        let Some(method) = environment.method_key.as_ref() else {
+            return;
+        };
+        if !self.methods.contains_key(method) {
+            return;
+        }
+        self.method_shared_reads
+            .entry(method.clone())
+            .or_default()
+            .insert(key.clone());
+        self.shared_readers
+            .entry(key)
+            .or_default()
+            .insert(method.clone());
+    }
+
     fn observe_ivar(&mut self, environment: &Environment, name: String, actual: &Type) {
         let Some(key) = self.ivar_key(environment, &name) else {
             return;
@@ -2870,13 +2998,18 @@ impl<'src> Analyzer<'src> {
             .ivars
             .get(&key)
             .map_or_else(|| actual.clone(), |current| current.join(actual));
-        self.ivars.insert(key, next);
+        if self.ivars.get(&key) != Some(&next) {
+            self.ivars.insert(key.clone(), next);
+            self.changed_shared.insert(SharedKey::Ivar(key));
+        }
     }
 
-    fn ivar_type(&self, environment: &Environment, name: &str) -> Type {
-        self.ivar_key(environment, name)
-            .and_then(|key| self.ivars.get(&key).cloned())
-            .unwrap_or(Type::Any)
+    fn ivar_type(&mut self, environment: &Environment, name: &str) -> Type {
+        let Some(key) = self.ivar_key(environment, name) else {
+            return Type::Any;
+        };
+        self.record_shared_read(SharedKey::Ivar(key.clone()), environment);
+        self.ivars.get(&key).cloned().unwrap_or(Type::Any)
     }
 
     fn lexical_owner(&self, environment: &Environment) -> Option<String> {
@@ -2906,16 +3039,17 @@ impl<'src> Analyzer<'src> {
             .constants
             .get(&key)
             .map_or_else(|| actual.clone(), |current| current.join(actual));
-        self.constants.insert(key, next);
+        if self.constants.get(&key) != Some(&next) {
+            self.constants.insert(key.clone(), next);
+            self.changed_shared.insert(SharedKey::Constant(key));
+        }
     }
 
-    fn constant_type(&self, environment: &Environment, name: &str) -> Type {
+    fn constant_type(&mut self, environment: &Environment, name: &str) -> Type {
         let name = name.trim_start_matches("::");
-        if let Some(type_) = self.constants.get(&self.constant_key(environment, name)) {
-            return type_.clone();
-        }
-        if let Some(type_) = self.constants.get(name) {
-            return type_.clone();
+        let mut candidates = vec![self.constant_key(environment, name)];
+        if candidates[0] != name {
+            candidates.push(name.to_owned());
         }
         let mut owner = self.lexical_owner(environment);
         let mut visited = BTreeSet::new();
@@ -2924,13 +3058,26 @@ impl<'src> Analyzer<'src> {
                 break;
             }
             let key = format!("{current}::{name}");
-            if let Some(type_) = self.constants.get(&key) {
-                return type_.clone();
+            if !candidates.contains(&key) {
+                candidates.push(key);
             }
             owner = self
                 .classes
                 .get(&current)
                 .and_then(|info| info.superclass.clone());
+        }
+
+        let selected = candidates
+            .iter()
+            .position(|candidate| self.constants.contains_key(candidate));
+        let read_count = selected.map_or(candidates.len(), |index| index + 1);
+        for candidate in candidates.iter().take(read_count) {
+            self.record_shared_read(SharedKey::Constant(candidate.clone()), environment);
+        }
+        if let Some(index) = selected {
+            if let Some(type_) = self.constants.get(&candidates[index]) {
+                return type_.clone();
+            }
         }
         signature::parse_type(name)
     }
@@ -2949,27 +3096,40 @@ impl<'src> Analyzer<'src> {
             .class_vars
             .get(&key)
             .map_or_else(|| actual.clone(), |current| current.join(actual));
-        self.class_vars.insert(key, next);
+        if self.class_vars.get(&key) != Some(&next) {
+            self.class_vars.insert(key.clone(), next);
+            self.changed_shared.insert(SharedKey::ClassVar(key));
+        }
     }
 
-    fn class_var_type(&self, environment: &Environment, name: &str) -> Type {
+    fn class_var_type(&mut self, environment: &Environment, name: &str) -> Type {
         let mut owner = Some(self.class_var_owner(environment));
         let mut visited = BTreeSet::new();
+        let mut candidates = Vec::new();
         while let Some(current) = owner {
             if !visited.insert(current.clone()) {
                 break;
             }
-            let key = ClassVarKey {
+            candidates.push(ClassVarKey {
                 owner: current.clone(),
                 name: name.to_owned(),
-            };
-            if let Some(type_) = self.class_vars.get(&key) {
-                return type_.clone();
-            }
+            });
             owner = self
                 .classes
                 .get(&current)
                 .and_then(|info| info.superclass.clone());
+        }
+        let selected = candidates
+            .iter()
+            .position(|candidate| self.class_vars.contains_key(candidate));
+        let read_count = selected.map_or(candidates.len(), |index| index + 1);
+        for candidate in candidates.iter().take(read_count) {
+            self.record_shared_read(SharedKey::ClassVar(candidate.clone()), environment);
+        }
+        if let Some(index) = selected {
+            if let Some(type_) = self.class_vars.get(&candidates[index]) {
+                return type_.clone();
+            }
         }
         Type::Any
     }
@@ -2979,7 +3139,10 @@ impl<'src> Analyzer<'src> {
             .globals
             .get(&name)
             .map_or_else(|| actual.clone(), |current| current.join(actual));
-        self.globals.insert(name, next);
+        if self.globals.get(&name) != Some(&next) {
+            self.globals.insert(name.clone(), next);
+            self.changed_shared.insert(SharedKey::Global(name));
+        }
     }
 
     fn eval_t_call<'node>(
