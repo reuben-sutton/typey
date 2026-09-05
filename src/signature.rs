@@ -65,6 +65,9 @@ pub struct AnnotationTable {
     pub methods: BTreeMap<String, MethodSig>,
     /// Method signatures attached to actual Prism `def` nodes.
     pub method_annotations: BTreeMap<usize, MethodSig>,
+    /// RBS type aliases collected from `#:` comments. The analyzer resolves
+    /// these names against the lexical declaration that uses them.
+    pub type_aliases: BTreeMap<String, Type>,
     pub assertions: BTreeMap<usize, InlineAssertion>,
 }
 
@@ -145,13 +148,17 @@ pub fn collect(source: &str) -> AnnotationTable {
             } else {
                 rbs_sig = None;
             }
-        } else if trimmed.starts_with("#:") {
-            let comment = trimmed.trim_start_matches("#:").trim_start();
-            rbs_sig = Some(if comment.is_empty() {
-                String::new()
+        } else if let Some(comment) = trimmed.strip_prefix("#:") {
+            let comment = comment.trim_start();
+            if let Some((name, type_)) = parse_rbs_type_alias(comment) {
+                table.type_aliases.insert(name, type_);
             } else {
-                format!("{comment}\n")
-            });
+                rbs_sig = Some(if comment.is_empty() {
+                    String::new()
+                } else {
+                    format!("{comment}\n")
+                });
+            }
         }
 
         if let Some(hash) = rbs_comment_start(line) {
@@ -347,6 +354,31 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
     }
 }
 
+/// Parse a Sorbet `T.type_alias { ... }` expression into the alias body.
+#[must_use]
+pub fn parse_sorbet_type_alias(text: &str) -> Option<Type> {
+    let text = strip_comment_tail(text.trim());
+    let marker = text.find("type_alias")?;
+    let open = text[marker..].find('{')? + marker;
+    let close = matching_delimiter(text, open, '{', '}')?;
+    Some(parse_type(&text[open + 1..close]))
+}
+
+/// Parse an RBS type-alias comment such as `type Name = String`.
+#[must_use]
+pub fn parse_rbs_type_alias(text: &str) -> Option<(String, Type)> {
+    let text = strip_comment_tail(text.trim()).strip_prefix("type ")?;
+    let parts = split_top_level(text, '=');
+    if parts.len() != 2 {
+        return None;
+    }
+    let name = parts[0].trim().trim_start_matches("::");
+    if name.is_empty() {
+        return None;
+    }
+    Some((name.to_owned(), parse_type(&parts[1])))
+}
+
 #[must_use]
 pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
     let text = strip_comment_tail(text.trim());
@@ -503,6 +535,9 @@ pub fn parse_type(raw: &str) -> Type {
                             .map(|part| parse_type(&part)),
                     )
                 }
+                "singleton" | "T.class_of" => {
+                    return Type::Named("Class".to_owned(), vec![parse_type(body)])
+                }
                 _ => {}
             }
         }
@@ -539,6 +574,9 @@ pub fn parse_type(raw: &str) -> Type {
             }
             if args.len() == 2 && matches!(name, "Hash" | "T::Hash") {
                 return Type::Hash(Box::new(args[0].clone()), Box::new(args[1].clone()));
+            }
+            if name == "T::Class" {
+                return Type::Named("Class".to_owned(), args);
             }
             return Type::Named(name.to_owned(), args);
         }

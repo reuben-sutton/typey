@@ -90,7 +90,7 @@ fn debug_cli_reports_progress_on_stderr() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("discovering .rb/.rbi files"), "{stderr}");
     assert!(
-        stderr.contains("registered 2 methods and 1 classes"),
+        stderr.contains("registered 2 methods, 1 classes, and 0 type aliases"),
         "{stderr}"
     );
     assert!(stderr.contains("final reporting pass"), "{stderr}");

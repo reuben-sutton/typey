@@ -342,6 +342,14 @@ fn lattice_facade_has_top_and_bottom_identities() {
         typey::signature::parse_type("Array[(Integer, String)]"),
         Type::Array(Box::new(Type::Tuple(vec![Type::Integer, Type::String])))
     );
+    assert_eq!(
+        typey::signature::parse_type("singleton(Example)"),
+        Type::Named("Class".to_owned(), vec![Type::named("Example")])
+    );
+    assert_eq!(
+        typey::signature::parse_type("T::Class[Example]"),
+        Type::Named("Class".to_owned(), vec![Type::named("Example")])
+    );
     assert!(Type::Integer.is_subtype_of(&Type::Object));
     assert!(Type::Tuple(vec![Type::Integer, Type::String])
         .is_subtype_of(&Type::Array(Box::new(Type::Object))));
@@ -387,6 +395,54 @@ fn parses_rbs_comments_without_a_magic_comment() {
     let source = "value = 1 #: Integer\n";
     let annotations = typey::signature::collect(source);
     assert_eq!(annotations.assertions[&0].type_, Type::Integer);
+}
+
+#[test]
+fn parses_rbs_type_alias_comments() {
+    let annotations =
+        typey::signature::collect("module Example\n  #: type Node = Integer | String\nend\n");
+    assert_eq!(
+        annotations.type_aliases.get("Node"),
+        Some(&Type::union([Type::Integer, Type::String]))
+    );
+
+    let spoom_source = include_str!("../test_repos/spoom/lib/spoom/ext/prism_types.rb");
+    let spoom_annotations = typey::signature::collect(spoom_source);
+    assert!(spoom_annotations.type_aliases.contains_key("anyScopeNode"));
+    assert_eq!(
+        spoom_annotations.type_aliases["anyScopeNode"],
+        Type::union([
+            Type::named("Prism::ClassNode"),
+            Type::named("Prism::ModuleNode"),
+            Type::named("Prism::SingletonClassNode"),
+        ])
+    );
+    assert_eq!(
+        typey::signature::parse_type("PrismTypes::anyScopeNode"),
+        Type::named("PrismTypes::anyScopeNode")
+    );
+}
+
+#[test]
+fn expands_rbs_type_aliases_in_signatures() {
+    let source =
+        "#: type Value = Integer\n#: (Value) -> void\ndef accept(value)\nend\n\naccept(\"x\")\n";
+    let result = check(source, CheckerConfig::default());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Expected `Integer`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn applies_rbs_type_aliases_to_inline_assertions() {
+    let source = "module PrismTypes\n  #: type anyScopeNode = Integer | String\nend\n\nvalue = 1 #: PrismTypes::anyScopeNode\n";
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
 }
 
 #[test]
@@ -444,6 +500,44 @@ def accept(value)
 end
 
 accept(Child.new)
+"#;
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn resolves_nested_inheritance_and_class_objects() {
+    let source = r#"module Outer
+  class Parent
+  end
+
+  class Child < Parent
+  end
+end
+
+#: (Outer::Parent) -> void
+def accept(value)
+end
+
+#: (Class[Outer::Parent]) -> void
+def accept_class(value)
+end
+
+accept(Outer::Child.new)
+accept_class(Outer::Child)
+"#;
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn refines_or_assignments_to_the_non_nil_rhs() {
+    let source = r#"class Example
+  #: -> Example
+  def value
+    @value ||= Example.new #: Example?
+  end
+end
 "#;
     let result = check(source, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
