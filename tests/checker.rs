@@ -1209,6 +1209,7 @@ T.reveal_type(values["slice"])
 T.reveal_type(values.compact)
 T.reveal_type(maybe_values.compact)
 T.reveal_type(values.filter_map { |value| value.even? ? value.to_s : nil })
+T.reveal_type(values.filter_map { |value| value.even? ? value.to_s : false })
 T.reveal_type(values.join(","))
 T.reveal_type(values.to_a)
 T.reveal_type(hash.keys)
@@ -1263,7 +1264,7 @@ T.reveal_type(T.unsafe(nil).to_a)
             .iter()
             .filter(|message| message.contains("Revealed type: `T::Array[String]`"))
             .count(),
-        4,
+        5,
         "{notes:?}"
     );
 }

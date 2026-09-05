@@ -5164,7 +5164,7 @@ impl<'src> Analyzer<'src> {
                 let block_type = site.block.map_or(Type::Any, |block| {
                     self.eval_block_node(block, std::slice::from_ref(element), environment)
                 });
-                Type::Array(Box::new(block_type.without(&Type::Nil)))
+                Type::Array(Box::new(block_type.truthy_part()))
             }
             "each" | "select" | "filter" | "reject" | "sort" | "reverse" | "rotate" | "shuffle" => {
                 if let Some(block) = site.block {
