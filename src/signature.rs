@@ -613,6 +613,20 @@ fn parse_rbs_parameter(raw: String) -> Type {
     while text.starts_with('*') || text.starts_with('?') {
         text.remove(0);
     }
+    let has_complete_delimited_type = text.find(['[', '(', '{']).is_some_and(|open| {
+        let end = match text.as_bytes()[open] as char {
+            '[' => matching_delimiter(&text, open, '[', ']'),
+            '(' => matching_delimiter(&text, open, '(', ')'),
+            '{' => matching_delimiter(&text, open, '{', '}'),
+            _ => None,
+        };
+        end.is_some_and(|end| text[end + 1..].trim().is_empty())
+    });
+    let has_top_level_union =
+        split_top_level(&text, '|').len() > 1 || split_top_level(&text, '&').len() > 1;
+    if text.starts_with('[') || has_complete_delimited_type || has_top_level_union {
+        return parse_type(&text);
+    }
     if let Some((name, ty)) = split_top_level_colon(&text) {
         if !name.trim().is_empty() {
             return parse_type(ty);

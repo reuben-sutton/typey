@@ -1027,6 +1027,7 @@ pub(crate) fn check_with_rbi_ranges(
         debug_round: 0,
         debug_nodes: 0,
         defer_inline_assertions: false,
+        expected_return_type: None,
         diagnostics,
         types: Vec::new(),
     };
@@ -1062,11 +1063,16 @@ struct Analyzer<'src> {
     debug_round: usize,
     debug_nodes: usize,
     defer_inline_assertions: bool,
+    expected_return_type: Option<Type>,
     diagnostics: Vec<Diagnostic>,
     types: Vec<InferredType>,
 }
 
 impl<'src> Analyzer<'src> {
+    fn normal_type(result: Eval) -> Type {
+        result.normal_type.unwrap_or(Type::Never)
+    }
+
     fn class_object_type(name: &str) -> Type {
         Type::Named("Class".to_owned(), vec![Type::named(name)])
     }
@@ -1512,20 +1518,20 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, Type::Nil));
         }
         if let Some(write) = node.as_constant_write_node() {
-            let actual = self.eval_node(&write.value(), environment).type_;
+            let actual = Self::normal_type(self.eval_node(&write.value(), environment));
             let type_ = self.apply_inline_assertion(node, actual);
             self.observe_constant(environment, prism::constant_name(write.name()), &type_);
             return Eval::value(self.record(node, type_));
         }
         if let Some(write) = node.as_constant_path_write_node() {
-            let actual = self.eval_node(&write.value(), environment).type_;
+            let actual = Self::normal_type(self.eval_node(&write.value(), environment));
             let type_ = self.apply_inline_assertion(node, actual);
             let target = write.target();
             self.observe_constant(environment, self.constant_path_name(&target), &type_);
             return Eval::value(self.record(node, type_));
         }
         if let Some(write) = node.as_class_variable_write_node() {
-            let actual = self.eval_node(&write.value(), environment).type_;
+            let actual = Self::normal_type(self.eval_node(&write.value(), environment));
             let type_ = self.apply_inline_assertion(node, actual);
             self.observe_class_var(environment, prism::constant_name(write.name()), &type_);
             return Eval::value(self.record(node, type_));
@@ -1534,7 +1540,7 @@ impl<'src> Analyzer<'src> {
             let current = self.class_var_type(environment, &prism::constant_name(write.name()));
             let previous = self.defer_inline_assertions;
             self.defer_inline_assertions = true;
-            let right = self.eval_node(&write.value(), environment).type_;
+            let right = Self::normal_type(self.eval_node(&write.value(), environment));
             self.defer_inline_assertions = previous;
             let actual = current.truthy_part().join(&right);
             let declared = self.apply_inline_assertion(node, actual);
@@ -1552,7 +1558,7 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, type_));
         }
         if let Some(write) = node.as_global_variable_write_node() {
-            let actual = self.eval_node(&write.value(), environment).type_;
+            let actual = Self::normal_type(self.eval_node(&write.value(), environment));
             let type_ = self.apply_inline_assertion(node, actual);
             self.observe_global(prism::constant_name(write.name()), &type_);
             return Eval::value(self.record(node, type_));
@@ -1562,7 +1568,7 @@ impl<'src> Analyzer<'src> {
             let current = self.globals.get(&name).cloned().unwrap_or(Type::Any);
             let previous = self.defer_inline_assertions;
             self.defer_inline_assertions = true;
-            let right = self.eval_node(&write.value(), environment).type_;
+            let right = Self::normal_type(self.eval_node(&write.value(), environment));
             self.defer_inline_assertions = previous;
             let actual = current.truthy_part().join(&right);
             let declared = self.apply_inline_assertion(node, actual);
@@ -1583,7 +1589,7 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(write) = node.as_instance_variable_write_node() {
             let value_node = write.value();
-            let actual = self.eval_node(&value_node, environment).type_;
+            let actual = Self::normal_type(self.eval_node(&value_node, environment));
             let type_ = self.apply_inline_assertion(node, actual);
             let name = prism::constant_name(write.name());
             self.observe_ivar(environment, name.clone(), &type_);
@@ -1595,7 +1601,7 @@ impl<'src> Analyzer<'src> {
             let current = self.ivar_type(environment, &name);
             let previous = self.defer_inline_assertions;
             self.defer_inline_assertions = true;
-            let right = self.eval_node(&write.value(), environment).type_;
+            let right = Self::normal_type(self.eval_node(&write.value(), environment));
             self.defer_inline_assertions = previous;
             let actual = current.truthy_part().join(&right);
             let declared = self.apply_inline_assertion(node, actual);
@@ -1616,7 +1622,7 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(write) = node.as_local_variable_write_node() {
             let value_node = write.value();
-            let actual = self.eval_node(&value_node, environment).type_;
+            let actual = Self::normal_type(self.eval_node(&value_node, environment));
             let type_ = self.apply_inline_assertion(node, actual);
             environment.bind(prism::constant_name(write.name()), type_.clone());
             return Eval::value(self.record(node, type_));
@@ -1626,7 +1632,7 @@ impl<'src> Analyzer<'src> {
             let current = environment.get(&name);
             let previous = self.defer_inline_assertions;
             self.defer_inline_assertions = true;
-            let right = self.eval_node(&write.value(), environment).type_;
+            let right = Self::normal_type(self.eval_node(&write.value(), environment));
             self.defer_inline_assertions = previous;
             let actual = current.truthy_part().join(&right);
             let declared = self.apply_inline_assertion(node, actual);
@@ -1716,9 +1722,15 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, type_));
         }
         if let Some(array) = node.as_array_node() {
+            let mut element_types = Vec::new();
+            let mut fixed_length = true;
             let mut element = Type::Never;
             for child in &array.elements() {
                 let child_type = self.eval_node(&child, environment).type_;
+                if child.as_splat_node().is_some() {
+                    fixed_length = false;
+                }
+                element_types.push(child_type.clone());
                 element = element.join(&child_type);
             }
             let element = if element.is_never() {
@@ -1726,7 +1738,16 @@ impl<'src> Analyzer<'src> {
             } else {
                 element
             };
-            let type_ = self.apply_inline_assertion(node, Type::Array(Box::new(element)));
+            let inferred = if fixed_length
+                && self.expected_return_type.as_ref().is_some_and(|expected| {
+                    matches!(expected, Type::Tuple(elements) if elements.len() == element_types.len())
+                })
+            {
+                Type::Tuple(element_types)
+            } else {
+                Type::Array(Box::new(element))
+            };
+            let type_ = self.apply_inline_assertion(node, inferred);
             return Eval::value(self.record(node, type_));
         }
         if let Some(hash) = node.as_hash_node() {
@@ -2077,12 +2098,13 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         let predicate = case_node.predicate();
-        if let Some(predicate) = predicate.as_ref() {
-            self.eval_node(predicate, environment);
-        }
+        let predicate_type = predicate
+            .as_ref()
+            .map(|predicate| self.eval_node(predicate, environment).type_);
         let base = environment.clone();
         let mut branch_environment: Option<Environment> = None;
         let mut result: Option<Eval> = None;
+        let mut covered_type = Type::Never;
 
         for condition in &case_node.conditions() {
             let Some(when_node) = condition.as_when_node() else {
@@ -2095,6 +2117,7 @@ impl<'src> Analyzer<'src> {
                 let value_type = Self::class_object_value_type(&value_type).unwrap_or(value_type);
                 condition_type = condition_type.join(&value_type);
             }
+            covered_type = covered_type.join(&condition_type);
             if let Some(predicate) = predicate.as_ref() {
                 self.narrow_case_target(predicate, &mut when_environment, &condition_type);
             }
@@ -2130,9 +2153,21 @@ impl<'src> Analyzer<'src> {
                 Eval::value(Type::Nil)
             }
         } else {
-            // Without an else clause, the case may take no branch and yields
-            // nil while preserving the incoming environment.
-            Eval::value(Type::Nil)
+            // The unmatched path remains possible unless the predicate's
+            // finite union is covered by the `when` conditions. Preserve its
+            // narrowed environment for statements after the case, while
+            // avoiding a spurious nil value for exhaustive class switches.
+            let unmatched = predicate_type
+                .as_ref()
+                .map(|candidate| self.case_unmatched_type(candidate, &covered_type));
+            if let Some(predicate) = predicate.as_ref() {
+                self.narrow_case_target_without(predicate, &mut else_environment, &covered_type);
+            }
+            if unmatched.as_ref().is_some_and(Type::is_never) {
+                Eval::from_parts(None, OutcomeTypes::default(), Flow::empty())
+            } else {
+                Eval::value(Type::Nil)
+            }
         };
         let previous_flow = result
             .as_ref()
@@ -2165,6 +2200,30 @@ impl<'src> Analyzer<'src> {
             let name = prism::constant_name(local.name());
             let current = environment.get(&name);
             environment.bind(name, current.meet(condition_type));
+        }
+    }
+
+    fn narrow_case_target_without<'node>(
+        &self,
+        predicate: &Node<'node>,
+        environment: &mut Environment,
+        excluded: &Type,
+    ) {
+        if let Some(local) = predicate.as_local_variable_read_node() {
+            let name = prism::constant_name(local.name());
+            let current = environment.get(&name);
+            environment.bind(name, self.case_unmatched_type(&current, excluded));
+        }
+    }
+
+    fn case_unmatched_type(&self, candidate: &Type, covered: &Type) -> Type {
+        match candidate {
+            Type::Any => Type::Any,
+            Type::Union(members) => Type::union(members.iter().filter_map(|member| {
+                (!self.is_assignable(member, covered)).then_some(member.clone())
+            })),
+            candidate if self.is_assignable(candidate, covered) => Type::Never,
+            candidate => candidate.clone(),
         }
     }
 
@@ -2650,11 +2709,21 @@ impl<'src> Analyzer<'src> {
             &mut method_environment,
         );
 
+        let previous_expected_return = self.expected_return_type.take();
+        self.expected_return_type = if state.explicit && !state.is_void {
+            Some(Self::substitute_instance_type(
+                &state.call_signature().return_type,
+                Some(&method_environment.self_type),
+            ))
+        } else {
+            None
+        };
         let body_result = if let Some(body) = definition.body() {
             self.eval_node(&body, &mut method_environment)
         } else {
             Eval::value(Type::Nil)
         };
+        self.expected_return_type = previous_expected_return;
         let inferred_return = body_result.method_return_type();
         if state.explicit && !state.is_void && !self.is_rbi_definition(node) {
             let mut expected = state.call_signature();
@@ -3247,10 +3316,10 @@ impl<'src> Analyzer<'src> {
         } else {
             Type::Object
         };
-        let callee_type = if receiver_node
-            .as_ref()
-            .is_some_and(|receiver| self.constant_reference_name(receiver).as_deref() == Some("T"))
-        {
+        let callee_type = if receiver_node.as_ref().is_some_and(|receiver| {
+            self.constant_reference_name(receiver)
+                .is_some_and(|name| name.trim_start_matches("::") == "T")
+        }) {
             self.eval_t_call(
                 node,
                 &name,
@@ -3375,14 +3444,15 @@ impl<'src> Analyzer<'src> {
         type_: &Type,
     ) -> bool {
         let name = prism::constant_name(call.name());
-        if call.receiver().is_none() && matches!(name.as_str(), "raise" | "fail" | "abort") {
+        if call.receiver().is_none()
+            && matches!(name.as_str(), "raise" | "fail" | "abort" | "exit" | "exit!")
+        {
             return true;
         }
-        if call
-            .receiver()
-            .as_ref()
-            .is_some_and(|receiver| self.constant_reference_name(receiver).as_deref() == Some("T"))
-        {
+        if call.receiver().as_ref().is_some_and(|receiver| {
+            self.constant_reference_name(receiver)
+                .is_some_and(|name| name.trim_start_matches("::") == "T")
+        }) {
             return matches!(name.as_str(), "noreturn" | "absurd");
         }
         if !type_.is_never() {
@@ -3721,10 +3791,17 @@ impl<'src> Analyzer<'src> {
     }
 
     fn constant_type(&mut self, environment: &Environment, name: &str) -> Type {
+        let absolute = name.trim_start().starts_with("::");
         let name = name.trim_start_matches("::");
-        let result_owner = self.lexical_owner(environment);
-        let mut candidates = vec![self.constant_key(environment, name)];
-        if candidates[0] != name {
+        let result_owner = (!absolute)
+            .then(|| self.lexical_owner(environment))
+            .flatten();
+        let mut candidates = vec![if absolute {
+            name.to_owned()
+        } else {
+            self.constant_key(environment, name)
+        }];
+        if !absolute && candidates[0] != name {
             candidates.push(name.to_owned());
         }
         if name.contains("::") {
@@ -3916,7 +3993,7 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         match name {
             "puts" | "print" | "p" | "pp" | "warn" => Type::Nil,
-            "raise" | "fail" | "abort" => Type::Never,
+            "raise" | "fail" | "abort" | "exit" | "exit!" => Type::Never,
             "Integer" => Type::Integer,
             "Float" => Type::Float,
             "String" => Type::String,
@@ -4697,11 +4774,17 @@ impl<'src> Analyzer<'src> {
                     .iter()
                     .all(|actual| self.is_assignable(actual, &arguments[0]))
             }
+            (Type::Named(actual, _), Type::Array(_)) if self.nominal_subtype(actual, "Array") => {
+                true
+            }
             (Type::Hash(actual_key, actual_value), Type::Named(name, arguments))
                 if arguments.len() == 2 && name_matches(name, "Hash") =>
             {
                 self.is_assignable(actual_key, &arguments[0])
                     && self.is_assignable(actual_value, &arguments[1])
+            }
+            (Type::Named(actual, _), Type::Hash(_, _)) if self.nominal_subtype(actual, "Hash") => {
+                true
             }
             (
                 Type::Proc(actual_params, actual_return),
@@ -4726,6 +4809,16 @@ impl<'src> Analyzer<'src> {
                 } else {
                     expected_args.is_empty() && self.nominal_subtype(actual_name, expected_name)
                 }
+            }
+            (Type::Named(actual, _), Type::Integer) if self.nominal_subtype(actual, "Integer") => {
+                true
+            }
+            (Type::Named(actual, _), Type::Float) if self.nominal_subtype(actual, "Float") => true,
+            (Type::Named(actual, _), Type::String) if self.nominal_subtype(actual, "String") => {
+                true
+            }
+            (Type::Named(actual, _), Type::Symbol) if self.nominal_subtype(actual, "Symbol") => {
+                true
             }
             _ => false,
         }
@@ -4796,12 +4889,13 @@ impl<'src> Analyzer<'src> {
         let Some(assertion) = assertion else {
             return actual;
         };
+        let expected = self.resolve_type_names(&assertion.type_, None);
         match assertion.kind {
             AssertionKind::Let => {
-                self.check_assignable(node, &actual, &assertion.type_);
-                assertion.type_
+                self.check_assignable(node, &actual, &expected);
+                expected
             }
-            AssertionKind::Cast => assertion.type_,
+            AssertionKind::Cast => expected,
             AssertionKind::Must => {
                 if actual.is_nil() {
                     self.error(node, "Expected a non-nil value");
@@ -4833,8 +4927,11 @@ impl<'src> Analyzer<'src> {
     }
 
     fn constant_path_name<'node>(&self, path: &ruby_prism::ConstantPathNode<'node>) -> String {
+        let absolute = prism::text(self.source, &path.as_node())
+            .trim_start()
+            .starts_with("::");
         let name = path.name().map_or_else(String::new, prism::constant_name);
-        match path.parent() {
+        let name = match path.parent() {
             Some(parent) => {
                 let parent = self
                     .constant_reference_name(&parent)
@@ -4846,6 +4943,11 @@ impl<'src> Analyzer<'src> {
                 }
             }
             None => name,
+        };
+        if absolute {
+            format!("::{name}")
+        } else {
+            name
         }
     }
 
