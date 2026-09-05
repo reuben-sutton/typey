@@ -142,6 +142,58 @@ fn reports_diagnostics_against_their_original_workspace_file() {
 }
 
 #[test]
+fn resolves_qualified_constants_lexically_before_suffix_ambiguity() {
+    let files = vec![
+        WorkspaceFile::new(
+            "caller.rb",
+            r#"module Spoom
+  module Cli
+    module Helper
+      #: (Spoom::Color) -> void
+      def accept(color)
+      end
+
+      #: (String) -> String
+      def blue(string)
+        accept(Color::BLUE)
+        string
+      end
+    end
+  end
+end
+"#,
+        ),
+        WorkspaceFile::new(
+            "colors.rb",
+            r#"module Spoom
+  class Color
+    #: (String) -> void
+    def initialize(value)
+    end
+
+    BLUE = new("blue") #: Color
+  end
+end
+"#,
+        ),
+        WorkspaceFile::new(
+            "thor.rbi",
+            r#"class Thor::Shell::Color
+end
+
+Thor::Shell::Color::BLUE = T.let(T.unsafe(nil), String)
+"#,
+        ),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(
+        !result.has_errors(),
+        "unexpected workspace diagnostics: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn handles_empty_and_single_file_workspace_inputs() {
     let ignored = check_workspace(
         &[WorkspaceFile::new(

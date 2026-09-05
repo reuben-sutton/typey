@@ -5553,6 +5553,15 @@ impl<'src> Analyzer<'src> {
                 .and_then(|info| info.superclass.clone());
         }
 
+        // A qualified constant reference such as `Color::BLUE` is still
+        // resolved lexically.  Do this before the suffix-based fallback,
+        // because a workspace may contain another `Color::BLUE` (for example
+        // `Thor::Shell::Color::BLUE`) that makes the suffix ambiguous.
+        let resolved = self.resolve_name(name, result_owner.as_deref());
+        if self.constants.contains_key(&resolved) && !candidates.contains(&resolved) {
+            candidates.push(resolved.clone());
+        }
+
         let selected = candidates
             .iter()
             .position(|candidate| self.constants.contains_key(candidate));
@@ -5565,7 +5574,6 @@ impl<'src> Analyzer<'src> {
                 return self.resolve_type_names(type_, result_owner.as_deref());
             }
         }
-        let resolved = self.resolve_name(name, result_owner.as_deref());
         if resolved != name
             || self.classes.contains_key(&resolved)
             || Self::looks_like_class_name(&resolved)
