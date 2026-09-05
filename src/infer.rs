@@ -2841,6 +2841,43 @@ impl<'src> Analyzer<'src> {
             let type_ = self.apply_inline_assertion(node, environment.self_type.clone());
             return Eval::value(self.record(node, type_));
         }
+        if node.as_defined_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, Type::union([Type::Nil, Type::String]));
+            return Eval::value(self.record(node, type_));
+        }
+        if let Some(range) = node.as_range_node() {
+            if let Some(left) = range.left() {
+                self.eval_node(&left, environment);
+            }
+            if let Some(right) = range.right() {
+                self.eval_node(&right, environment);
+            }
+            let type_ = self.apply_inline_assertion(node, Type::named("Range"));
+            return Eval::value(self.record(node, type_));
+        }
+        if node.as_regular_expression_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, Type::named("Regexp"));
+            return Eval::value(self.record(node, type_));
+        }
+        if let Some(regexp) = node.as_interpolated_regular_expression_node() {
+            for part in &regexp.parts() {
+                self.eval_node(&part, environment);
+            }
+            let type_ = self.apply_inline_assertion(node, Type::named("Regexp"));
+            return Eval::value(self.record(node, type_));
+        }
+        if node.as_source_file_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, Type::String);
+            return Eval::value(self.record(node, type_));
+        }
+        if node.as_source_line_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, Type::Integer);
+            return Eval::value(self.record(node, type_));
+        }
+        if node.as_source_encoding_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, Type::named("Encoding"));
+            return Eval::value(self.record(node, type_));
+        }
         if let Some(integer) = node.as_integer_node() {
             let _ = integer.value();
             let type_ = self.apply_inline_assertion(node, Type::Integer);

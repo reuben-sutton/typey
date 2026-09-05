@@ -1329,6 +1329,41 @@ T.reveal_type("text".bytes)
 }
 
 #[test]
+fn preserves_literal_and_pseudo_expression_types() {
+    let result = check(
+        r#"
+T.reveal_type(defined?(1))
+T.reveal_type(1..3)
+T.reveal_type(/text/)
+T.reveal_type(__LINE__)
+T.reveal_type(__FILE__)
+T.reveal_type(__ENCODING__)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `T.nilable(String)`",
+        "Revealed type: `Range`",
+        "Revealed type: `Regexp`",
+        "Revealed type: `Integer`",
+        "Revealed type: `String`",
+        "Revealed type: `Encoding`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
 fn preserves_container_types_through_iteration_blocks() {
     let result = check(
         r#"
