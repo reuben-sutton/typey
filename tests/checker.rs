@@ -1448,6 +1448,47 @@ T.reveal_type("text".match?(pattern))
 }
 
 #[test]
+fn preserves_more_string_and_numeric_method_types() {
+    let result = check(
+        r#"
+T.reveal_type("abc".reverse)
+T.reveal_type("abc".index("b"))
+T.reveal_type("abc".encode)
+T.reveal_type("abc".to_f)
+T.reveal_type(1.fdiv(2))
+T.reveal_type(1.round)
+T.reveal_type(1.0.round(2))
+T.reveal_type(1.ceil)
+T.reveal_type(1.floor)
+T.reveal_type(1.next)
+T.reveal_type(1.gcd(2))
+T.reveal_type(1.digits)
+T.reveal_type(1.clamp(0, 2))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `String`",
+        "Revealed type: `T.nilable(Integer)`",
+        "Revealed type: `Float`",
+        "Revealed type: `Integer`",
+        "Revealed type: `T::Array[Integer]`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
 fn preserves_container_types_through_iteration_blocks() {
     let result = check(
         r#"

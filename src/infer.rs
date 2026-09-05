@@ -6074,14 +6074,16 @@ impl<'src> Analyzer<'src> {
             "length" | "size" | "bytesize" | "count" => Type::Integer,
             "empty?" | "start_with?" | "end_with?" | "include?" => Type::bool(),
             "to_i" | "to_int" => Type::Integer,
+            "to_f" => Type::Float,
             "to_sym" | "intern" => Type::Symbol,
             "split" | "chars" | "lines" => Type::Array(Box::new(Type::String)),
             "bytes" | "codepoints" => Type::Array(Box::new(Type::Integer)),
             "match" => Type::union([Type::Nil, Type::named("MatchData")]),
             "match?" => Type::bool(),
             "=~" => Type::union([Type::Nil, Type::Integer]),
-            "strip" | "upcase" | "downcase" | "capitalize" | "chomp" | "to_s" | "dup" | "clone"
-            | "+" => Type::String,
+            "index" | "rindex" => Type::union([Type::Nil, Type::Integer]),
+            "encode" | "reverse" | "reverse!" | "strip" | "upcase" | "downcase" | "capitalize"
+            | "chomp" | "to_s" | "dup" | "clone" | "+" => Type::String,
             _ => Type::Any,
         }
     }
@@ -6106,6 +6108,18 @@ impl<'src> Analyzer<'src> {
             }
             "<" | "<=" | ">" | ">=" | "between?" | "even?" | "odd?" | "zero?" => Type::bool(),
             "abs" | "magnitude" => receiver,
+            "fdiv" => Type::Float,
+            "round" | "ceil" | "floor" | "truncate" => {
+                if argument_types.is_empty() {
+                    Type::Integer
+                } else {
+                    Type::Float
+                }
+            }
+            "next" | "succ" | "pred" => receiver,
+            "gcd" | "lcm" => Type::Integer,
+            "digits" => Type::Array(Box::new(Type::Integer)),
+            "clamp" => receiver,
             "to_f" => Type::Float,
             "to_i" | "to_int" => Type::Integer,
             "to_s" => Type::String,
