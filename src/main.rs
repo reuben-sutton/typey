@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use typey::directives::{typed_mode, TypedMode};
 use typey::workspace::{discover_ruby_files, load_workspace_paths};
-use typey::{check, check_workspace, load_workspace, CheckerConfig};
+use typey::{check, check_workspace, load_workspace, CheckerConfig, UntypedOrigin};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut path = None;
@@ -79,6 +79,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .collect::<std::collections::BTreeSet<PathBuf>>();
                 let mut untyped_by_path =
                     std::collections::BTreeMap::<PathBuf, (usize, usize)>::new();
+                let mut untyped_by_origin =
+                    std::collections::BTreeMap::<UntypedOrigin, usize>::new();
+                let mut unique_untyped_by_origin =
+                    std::collections::BTreeMap::<UntypedOrigin, usize>::new();
+                let mut examples_by_origin =
+                    std::collections::BTreeMap::<UntypedOrigin, Vec<String>>::new();
+                let mut seen_untyped = std::collections::BTreeSet::new();
+                let sources_by_path = files
+                    .iter()
+                    .map(|file| (file.path.clone(), file.source.as_str()))
+                    .collect::<std::collections::BTreeMap<_, _>>();
                 for inferred in &result.types {
                     if !strict_paths.contains(&inferred.path) || !inferred.type_.contains_any() {
                         continue;
@@ -87,6 +98,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     entry.0 += 1;
                     if inferred.type_.is_any() {
                         entry.1 += 1;
+                    }
+                    let origin = inferred.untyped_origin.unwrap_or(UntypedOrigin::Propagated);
+                    *untyped_by_origin.entry(origin).or_default() += 1;
+                    let unique = seen_untyped.insert((
+                        inferred.path.clone(),
+                        inferred.start,
+                        inferred.end,
+                        origin,
+                    ));
+                    if unique {
+                        *unique_untyped_by_origin.entry(origin).or_default() += 1;
+                        let examples = examples_by_origin.entry(origin).or_default();
+                        if examples.len() < 3 {
+                            if let Some(source) = sources_by_path.get(&inferred.path) {
+                                let snippet = source
+                                    .get(inferred.start..inferred.end)
+                                    .unwrap_or_default()
+                                    .replace('\n', " ");
+                                let line = source[..inferred.start.min(source.len())]
+                                    .bytes()
+                                    .filter(|byte| *byte == b'\n')
+                                    .count()
+                                    + 1;
+                                examples.push(format!(
+                                    "{}:{} `{}` => `{}`",
+                                    inferred.path.display(),
+                                    line,
+                                    snippet,
+                                    inferred.type_
+                                ));
+                            }
+                        }
                     }
                 }
                 let total = untyped_by_path
@@ -101,6 +144,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "[typey] strict inferred types containing T.untyped: {total} ({direct} direct) across {} files",
                     untyped_by_path.len()
                 );
+                let explicit_untyped = strict_paths
+                    .iter()
+                    .filter_map(|path| sources_by_path.get(path))
+                    .map(|source| {
+                        source.matches("T.untyped").count() + source.matches("T::untyped").count()
+                    })
+                    .sum::<usize>();
+                let explicit_unsafe = strict_paths
+                    .iter()
+                    .filter_map(|path| sources_by_path.get(path))
+                    .map(|source| {
+                        source.matches("T.unsafe").count() + source.matches("T::unsafe").count()
+                    })
+                    .sum::<usize>();
+                eprintln!(
+                    "[typey] strict source markers: {explicit_untyped} explicit T.untyped, {explicit_unsafe} T.unsafe"
+                );
+                for (origin, count) in &untyped_by_origin {
+                    let unique = unique_untyped_by_origin.get(origin).copied().unwrap_or(0);
+                    eprintln!(
+                        "[typey]   {}: {count} recorded, {unique} unique spans",
+                        untyped_origin_label(*origin)
+                    );
+                    if let Some(examples) = examples_by_origin.get(origin) {
+                        for example in examples {
+                            eprintln!("[typey]     {example}");
+                        }
+                    }
+                }
                 let mut files_by_count = untyped_by_path.into_iter().collect::<Vec<_>>();
                 files_by_count.sort_by(|left, right| right.1.cmp(&left.1));
                 for (path, (nested, direct)) in files_by_count.into_iter().take(20) {
@@ -152,4 +224,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+fn untyped_origin_label(origin: UntypedOrigin) -> &'static str {
+    match origin {
+        UntypedOrigin::ExplicitAnnotation => "explicit annotation",
+        UntypedOrigin::Unsafe => "T.unsafe result",
+        UntypedOrigin::DeclaredSignature => "declared signature",
+        UntypedOrigin::InferredMethod => "inferred method",
+        UntypedOrigin::FallbackCall => "fallback/unmodeled call",
+        UntypedOrigin::Propagated => "propagated value",
+    }
 }

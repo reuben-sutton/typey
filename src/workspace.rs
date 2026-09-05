@@ -9,7 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::directives::{is_typed_ignore, typed_mode, TypedMode};
-use crate::infer::{check_with_policies, CheckerConfig, Strictness};
+use crate::infer::{check_with_policies, CheckerConfig, Strictness, UntypedOrigin};
 use crate::types::Type;
 use std::fs;
 use std::io;
@@ -61,6 +61,7 @@ pub struct WorkspaceInferredType {
     pub start: usize,
     pub end: usize,
     pub type_: Type,
+    pub untyped_origin: Option<UntypedOrigin>,
 }
 
 /// The result of checking all source units in a workspace.
@@ -276,6 +277,7 @@ fn map_type(
         start: inferred.start - range.start,
         end: inferred.end - range.start,
         type_: inferred.type_.clone(),
+        untyped_origin: inferred.untyped_origin,
     })
 }
 

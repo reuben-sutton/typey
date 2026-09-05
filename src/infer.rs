@@ -246,11 +246,28 @@ fn strictness_rank(strictness: Strictness) -> u8 {
 }
 
 /// A type recorded for an expression, useful to editors and debugging tools.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UntypedOrigin {
+    /// The expression itself contains an explicit `T.untyped` annotation.
+    ExplicitAnnotation,
+    /// The expression is the result of `T.unsafe`.
+    Unsafe,
+    /// The expression was produced by an explicit source or RBI signature.
+    DeclaredSignature,
+    /// The expression was produced by an inferred method summary.
+    InferredMethod,
+    /// The expression came from a call without a resolved method signature.
+    FallbackCall,
+    /// The expression inherited `T.untyped` from a child or surrounding value.
+    Propagated,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InferredType {
     pub start: usize,
     pub end: usize,
     pub type_: Type,
+    pub untyped_origin: Option<UntypedOrigin>,
 }
 
 /// The result of checking one source buffer.
@@ -1339,6 +1356,7 @@ pub(crate) fn check_with_policies(
         expected_return_type: None,
         diagnostics: diagnostics.clone(),
         types: Vec::new(),
+        untyped_origins: BTreeMap::new(),
     };
     let result = analyzer.run(&root);
     (result, diagnostics)
@@ -1388,6 +1406,7 @@ struct Analyzer<'src> {
     expected_return_type: Option<Type>,
     diagnostics: Vec<Diagnostic>,
     types: Vec<InferredType>,
+    untyped_origins: BTreeMap<(usize, usize), UntypedOrigin>,
 }
 
 impl<'src> Analyzer<'src> {
@@ -2375,10 +2394,32 @@ impl<'src> Analyzer<'src> {
 
     fn record<'node>(&mut self, node: &Node<'node>, type_: Type) -> Type {
         let (start, end) = prism::span(node);
+        let untyped_origin = if type_.contains_any() {
+            self.untyped_origins
+                .get(&(start, end))
+                .copied()
+                .or_else(|| {
+                    let direct_unsafe = node.as_call_node().is_some_and(|call| {
+                        prism::constant_name(call.name()) == "unsafe"
+                            && call.receiver().is_some_and(|receiver| {
+                                self.constant_reference_name(&receiver)
+                                    .is_some_and(|name| name.trim_start_matches("::") == "T")
+                            })
+                    });
+                    if direct_unsafe {
+                        Some(UntypedOrigin::Unsafe)
+                    } else {
+                        Some(UntypedOrigin::Propagated)
+                    }
+                })
+        } else {
+            None
+        };
         self.types.push(InferredType {
             start,
             end,
             type_: type_.clone(),
+            untyped_origin,
         });
         type_
     }
@@ -5018,17 +5059,32 @@ impl<'src> Analyzer<'src> {
             Type::Object
         };
         let block = call.block();
+        let mut untyped_origin = None;
         let callee_type = if receiver_node.as_ref().is_some_and(|receiver| {
             self.constant_reference_name(receiver)
                 .is_some_and(|name| name.trim_start_matches("::") == "T")
         }) {
-            self.eval_t_call(
+            let type_ = self.eval_t_call(
                 node,
                 &name,
                 &arguments.argument_nodes,
                 argument_types,
                 environment,
-            )
+            );
+            if type_.contains_any() {
+                untyped_origin = Some(if name == "unsafe" {
+                    UntypedOrigin::Unsafe
+                } else if arguments
+                    .argument_nodes
+                    .iter()
+                    .any(|argument| prism::text(self.source, argument).contains("T.untyped"))
+                {
+                    UntypedOrigin::ExplicitAnnotation
+                } else {
+                    UntypedOrigin::FallbackCall
+                });
+            }
+            type_
         } else if receiver_node.is_none()
             && matches!(name.as_str(), "lambda" | "proc")
             && call.block().is_some()
@@ -5054,6 +5110,10 @@ impl<'src> Analyzer<'src> {
             let key = self.implicit_method_key(&name, environment);
             self.record_method_dependency(&key, environment);
             if let Some(signature) = self.observe_call(&key, &arguments) {
+                let declared = self
+                    .resolve_method_key(&key)
+                    .and_then(|resolved| self.methods.get(&resolved))
+                    .is_some_and(|state| state.explicit);
                 let receiver_type = environment.self_type.clone();
                 self.observe_block_call(
                     &key,
@@ -5063,44 +5123,64 @@ impl<'src> Analyzer<'src> {
                     Some(&receiver_type),
                     environment,
                 );
-                self.invoke_signature(
+                let type_ = self.invoke_signature(
                     node,
                     &name,
                     &signature,
                     &arguments,
                     Some(&environment.self_type),
-                )
+                );
+                if type_.contains_any() {
+                    untyped_origin = Some(if declared {
+                        UntypedOrigin::DeclaredSignature
+                    } else {
+                        UntypedOrigin::InferredMethod
+                    });
+                }
+                type_
             } else if key.singleton {
                 if let Some(owner) = key.owner.clone() {
                     if name == "new" {
                         self.infer_initializer_call(node, &owner, &arguments, environment);
                         Type::named(owner)
                     } else {
-                        self.eval_global_call(
+                        let type_ = self.eval_global_call(
                             node,
                             &name,
                             &arguments.argument_nodes,
                             argument_types,
                             environment,
-                        )
+                        );
+                        if type_.contains_any() {
+                            untyped_origin = Some(UntypedOrigin::FallbackCall);
+                        }
+                        type_
                     }
                 } else {
-                    self.eval_global_call(
+                    let type_ = self.eval_global_call(
                         node,
                         &name,
                         &arguments.argument_nodes,
                         argument_types,
                         environment,
-                    )
+                    );
+                    if type_.contains_any() {
+                        untyped_origin = Some(UntypedOrigin::FallbackCall);
+                    }
+                    type_
                 }
             } else {
-                self.eval_global_call(
+                let type_ = self.eval_global_call(
                     node,
                     &name,
                     &arguments.argument_nodes,
                     argument_types,
                     environment,
-                )
+                );
+                if type_.contains_any() {
+                    untyped_origin = Some(UntypedOrigin::FallbackCall);
+                }
+                type_
             }
         } else {
             let site = CallSite {
@@ -5121,6 +5201,10 @@ impl<'src> Analyzer<'src> {
             ) {
                 self.record_method_dependency(&key, environment);
                 if let Some(signature) = self.observe_call(&key, &arguments) {
+                    let declared = self
+                        .resolve_method_key(&key)
+                        .and_then(|resolved| self.methods.get(&resolved))
+                        .is_some_and(|state| state.explicit);
                     self.observe_block_call(
                         &key,
                         block.as_ref(),
@@ -5129,18 +5213,44 @@ impl<'src> Analyzer<'src> {
                         Some(&dispatch_receiver_type),
                         environment,
                     );
-                    self.invoke_signature(
+                    let type_ = self.invoke_signature(
                         node,
                         &name,
                         &signature,
                         &arguments,
                         Some(&dispatch_receiver_type),
-                    )
+                    );
+                    if type_.contains_any() {
+                        untyped_origin = Some(if declared {
+                            UntypedOrigin::DeclaredSignature
+                        } else {
+                            UntypedOrigin::InferredMethod
+                        });
+                    }
+                    type_
                 } else {
-                    self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
+                    let type_ =
+                        self.eval_method_call(&dispatch_receiver_type, &name, &site, environment);
+                    if type_.contains_any() {
+                        untyped_origin = Some(if dispatch_receiver_type.contains_any() {
+                            UntypedOrigin::Propagated
+                        } else {
+                            UntypedOrigin::FallbackCall
+                        });
+                    }
+                    type_
                 }
             } else {
-                self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
+                let type_ =
+                    self.eval_method_call(&dispatch_receiver_type, &name, &site, environment);
+                if type_.contains_any() {
+                    untyped_origin = Some(if dispatch_receiver_type.contains_any() {
+                        UntypedOrigin::Propagated
+                    } else {
+                        UntypedOrigin::FallbackCall
+                    });
+                }
+                type_
             };
             if name == "new"
                 && receiver_node
@@ -5158,6 +5268,14 @@ impl<'src> Analyzer<'src> {
                 result
             }
         };
+
+        if callee_type.contains_any() {
+            let (start, end) = prism::span(node);
+            self.untyped_origins.insert(
+                (start, end),
+                untyped_origin.unwrap_or(UntypedOrigin::Propagated),
+            );
+        }
 
         let terminates =
             all_normal && self.call_terminates(call, environment, &receiver_type, &callee_type);
