@@ -2983,6 +2983,19 @@ first, second = build
 }
 
 #[test]
+fn evaluates_interpolation_expression_calls() {
+    let source = r#"
+name = "gem"
+message = "missing #{name.inspect}"
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_start = source.find("name.inspect").expect("interpolation send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + 12
+    }));
+}
+
+#[test]
 fn traverses_blocks_on_unknown_receivers() {
     let source = r#"
 value = T.unsafe([])

@@ -3279,6 +3279,15 @@ impl<'src> Analyzer<'src> {
             let type_ = self.apply_inline_assertion(node, Type::String);
             return Eval::value(self.record(node, type_));
         }
+        if let Some(embedded) = node.as_embedded_statements_node() {
+            if let Some(statements) = embedded.statements() {
+                return self.eval_node(&statements.as_node(), environment);
+            }
+            return Eval::value(self.record(node, Type::Nil));
+        }
+        if let Some(embedded) = node.as_embedded_variable_node() {
+            return self.eval_node(&embedded.variable(), environment);
+        }
         if node.as_symbol_node().is_some() {
             let type_ = self.apply_inline_assertion(node, Type::Symbol);
             return Eval::value(self.record(node, type_));
