@@ -3064,6 +3064,22 @@ box.value += Time.now
 }
 
 #[test]
+fn evaluates_collection_callback_variants() {
+    let source = r#"
+{ key: 1 }.map { |_key, value| value.to_s }
+[1].reverse_each { |value| value.to_s }
+"#;
+    let result = check(source, CheckerConfig::default());
+    let sends = source.match_indices("value.to_s").collect::<Vec<_>>();
+    assert_eq!(sends.len(), 2);
+    for (send_start, _) in sends {
+        assert!(result.types.iter().any(|inferred| {
+            inferred.is_send && inferred.start == send_start && inferred.end == send_start + 10
+        }));
+    }
+}
+
+#[test]
 fn traverses_blocks_on_unknown_receivers() {
     let source = r#"
 value = T.unsafe([])

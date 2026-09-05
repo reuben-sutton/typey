@@ -6579,6 +6579,15 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Array(Box::new(element.clone()))
             }
+            "reverse_each" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::Array(Box::new(element.clone()))
+            }
             "uniq" => Type::Array(Box::new(element.clone())),
             "each_index" => {
                 if site.block.is_none() {
@@ -6602,6 +6611,12 @@ impl<'src> Analyzer<'src> {
                 if site.block.is_none() {
                     return Type::named("Enumerator");
                 }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::union([Type::Nil, Type::Integer])
+            }
+            "index" => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
                 }
@@ -6737,7 +6752,13 @@ impl<'src> Analyzer<'src> {
             "compact!" | "uniq!" => {
                 Type::union([Type::Nil, Type::Array(Box::new(element.clone()))])
             }
-            "length" | "size" | "count" => Type::Integer,
+            "length" | "size" => Type::Integer,
+            "count" => {
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::Integer
+            }
             "empty?" | "include?" => Type::bool(),
             "any?" | "all?" | "none?" => {
                 if let Some(block) = site.block {
@@ -6845,6 +6866,15 @@ impl<'src> Analyzer<'src> {
                 }
             }
             "fetch_values" => Type::Array(Box::new(value.clone())),
+            "map" | "collect" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                let block_type = site.block.map_or(Type::Any, |block| {
+                    self.eval_block_node(block, &[key.clone(), value.clone()], environment)
+                });
+                Type::Array(Box::new(block_type))
+            }
             "keys" => Type::Array(Box::new(key.clone())),
             "values" => Type::Array(Box::new(value.clone())),
             "each" | "each_pair" | "each_key" | "each_value" => {
@@ -6975,6 +7005,17 @@ impl<'src> Analyzer<'src> {
             "gsub" | "sub" => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, &[Type::String], environment);
+                }
+                Type::String
+            }
+            "each_line" | "each_char" | "each_byte" | "scan" => {
+                if let Some(block) = site.block {
+                    let element = if name == "each_byte" {
+                        Type::Integer
+                    } else {
+                        Type::String
+                    };
+                    let _ = self.eval_block_node(block, &[element], environment);
                 }
                 Type::String
             }
