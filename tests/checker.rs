@@ -2664,6 +2664,38 @@ fn strict_mode_reports_unresolved_inference_gaps() {
 }
 
 #[test]
+fn inferred_types_mark_send_nodes() {
+    let source = r#"# typed: strict
+
+class Parent
+  def render
+    nil
+  end
+end
+
+class Child < Parent
+  def render
+    yield("value")
+    super
+  end
+end
+
+"text".upcase
+"#;
+    let result = check(source, CheckerConfig::default());
+    let sends = result
+        .types
+        .iter()
+        .filter(|inferred| inferred.is_send)
+        .map(|inferred| &source[inferred.start..inferred.end])
+        .collect::<Vec<_>>();
+
+    assert!(sends.iter().any(|send| send.contains("yield")));
+    assert!(sends.iter().any(|send| send.trim() == "super"));
+    assert!(sends.iter().any(|send| send.contains("upcase")));
+}
+
+#[test]
 fn accepts_sorbet_rbs_assertion_spacing_and_comment_tails() {
     let source = "value = nil #: as !nil # trailing comment\nother = 1#:as String\n";
     let annotations = typey::signature::collect(source);

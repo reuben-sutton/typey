@@ -268,6 +268,7 @@ pub struct InferredType {
     pub end: usize,
     pub type_: Type,
     pub untyped_origin: Option<UntypedOrigin>,
+    pub is_send: bool,
 }
 
 /// The result of checking one source buffer.
@@ -2420,6 +2421,10 @@ impl<'src> Analyzer<'src> {
             end,
             type_: type_.clone(),
             untyped_origin,
+            is_send: node.as_call_node().is_some()
+                || node.as_yield_node().is_some()
+                || node.as_super_node().is_some()
+                || node.as_forwarding_super_node().is_some(),
         });
         type_
     }

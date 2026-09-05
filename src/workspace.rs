@@ -62,6 +62,7 @@ pub struct WorkspaceInferredType {
     pub end: usize,
     pub type_: Type,
     pub untyped_origin: Option<UntypedOrigin>,
+    pub is_send: bool,
 }
 
 /// The result of checking all source units in a workspace.
@@ -278,6 +279,7 @@ fn map_type(
         end: inferred.end - range.start,
         type_: inferred.type_.clone(),
         untyped_origin: inferred.untyped_origin,
+        is_send: inferred.is_send,
     })
 }
 
