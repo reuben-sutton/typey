@@ -1740,6 +1740,47 @@ T.reveal_type(hash.transform_keys)
 }
 
 #[test]
+fn preserves_more_array_method_types() {
+    let result = check(
+        r#"
+values = [1, 2]
+
+T.reveal_type(values.map! { |value| value.to_s })
+T.reveal_type(values.sort_by { |value| -value })
+T.reveal_type(values.product(["text"]))
+T.reveal_type(values.sample)
+T.reveal_type(values.sample(1))
+T.reveal_type(values.min)
+T.reveal_type(values.min_by { |value| value })
+T.reveal_type(values.values_at(0))
+T.reveal_type(values.pack("C*"))
+T.reveal_type(values.combination(1))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `T::Array[String]`",
+        "Revealed type: `T::Array[[Integer, String]]`",
+        "Revealed type: `T.nilable(Integer)`",
+        "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `String`",
+        "Revealed type: `Enumerator`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
 fn preserves_types_through_literal_splats() {
     let result = check(
         r#"

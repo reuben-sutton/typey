@@ -5899,7 +5899,7 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Type {
         match name {
-            "map" | "collect" => {
+            "map" | "collect" | "map!" | "collect!" => {
                 if site.block.is_none() {
                     return Type::named("Enumerator");
                 }
@@ -6004,6 +6004,15 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Array(Box::new(element.clone()))
             }
+            "sort_by" | "sort_by!" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::Array(Box::new(element.clone()))
+            }
             "first" | "last" => {
                 if site.argument_types.is_empty() {
                     Type::union([Type::Nil, element.clone()])
@@ -6034,6 +6043,56 @@ impl<'src> Analyzer<'src> {
                 }
             }
             "[]=" => site.argument_types.last().cloned().unwrap_or(Type::Any),
+            "values_at" => Type::Array(Box::new(element.clone())),
+            "sample" => {
+                if site.argument_types.is_empty() {
+                    Type::union([Type::Nil, element.clone()])
+                } else {
+                    Type::Array(Box::new(element.clone()))
+                }
+            }
+            "min" | "max" => {
+                if site.argument_types.is_empty() {
+                    Type::union([Type::Nil, element.clone()])
+                } else {
+                    Type::Array(Box::new(element.clone()))
+                }
+            }
+            "min_by" | "max_by" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::union([Type::Nil, element.clone()])
+            }
+            "combination" | "repeated_combination" | "permutation" | "repeated_permutation" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let expected = Type::Array(Box::new(element.clone()));
+                    let _ = self.eval_block_node(block, &[expected], environment);
+                }
+                Type::Array(Box::new(element.clone()))
+            }
+            "product" => {
+                let mut tuple = vec![element.clone()];
+                tuple.extend(
+                    site.argument_types
+                        .iter()
+                        .map(|argument| self.array_element_type(argument)),
+                );
+                if let Some(block) = site.block {
+                    let expected = Type::Array(Box::new(Type::Tuple(tuple.clone())));
+                    let _ = self.eval_block_node(block, &[expected], environment);
+                    Type::Array(Box::new(element.clone()))
+                } else {
+                    Type::Array(Box::new(Type::Tuple(tuple)))
+                }
+            }
+            "pack" => Type::String,
             "compact" => Type::Array(Box::new(element.without(&Type::Nil))),
             "length" | "size" | "count" => Type::Integer,
             "empty?" | "any?" | "all?" | "none?" | "include?" => Type::bool(),
