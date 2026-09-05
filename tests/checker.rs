@@ -2361,6 +2361,34 @@ T.reveal_type(unresolved)
 }
 
 #[test]
+fn specializes_rbs_generic_type_members() {
+    let result = check(
+        r#"
+class Poset
+  extend T::Generic
+  E = type_member
+
+  #: (E from, E to) -> bool
+  def edge?(from, to)
+    true
+  end
+end
+
+class Model
+  #: -> Poset[Symbol]
+  def hierarchy
+    Poset.new
+  end
+end
+
+Model.new.hierarchy.edge?(:first, :second)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn specializes_sorbet_generic_type_members() {
     let result = check(
         r#"

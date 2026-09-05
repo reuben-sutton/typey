@@ -6766,9 +6766,15 @@ impl<'src> Analyzer<'src> {
         result.params = signature
             .params
             .iter()
-            .map(|type_| self.resolve_type_names(type_, owner))
+            .map(|type_| {
+                self.resolve_type_names_with_locals(type_, owner, &signature.type_parameters)
+            })
             .collect();
-        result.return_type = self.resolve_type_names(&signature.return_type, owner);
+        result.return_type = self.resolve_type_names_with_locals(
+            &signature.return_type,
+            owner,
+            &signature.type_parameters,
+        );
         result.keywords = signature
             .keywords
             .iter()
@@ -6776,7 +6782,11 @@ impl<'src> Analyzer<'src> {
                 (
                     name.clone(),
                     signature::KeywordParam {
-                        type_: self.resolve_type_names(&parameter.type_, owner),
+                        type_: self.resolve_type_names_with_locals(
+                            &parameter.type_,
+                            owner,
+                            &signature.type_parameters,
+                        ),
                         required: parameter.required,
                     },
                 )
@@ -6786,7 +6796,31 @@ impl<'src> Analyzer<'src> {
     }
 
     fn resolve_type_names(&self, type_: &Type, owner: Option<&str>) -> Type {
+        self.resolve_type_names_with_locals(type_, owner, &[])
+    }
+
+    fn resolve_type_names_with_locals(
+        &self,
+        type_: &Type,
+        owner: Option<&str>,
+        local_type_parameters: &[String],
+    ) -> Type {
         match type_ {
+            Type::TypeVar(name)
+                if !local_type_parameters
+                    .iter()
+                    .any(|parameter| parameter == name)
+                    && owner.is_some_and(|owner| {
+                        self.classes
+                            .get(owner)
+                            .is_some_and(|info| info.type_members.contains_key(name))
+                    }) =>
+            {
+                Type::TypeVar(format!(
+                    "{}::{name}",
+                    owner.expect("owner is present for a type member")
+                ))
+            }
             Type::Named(name, arguments) => {
                 if arguments.is_empty()
                     && owner.is_some_and(|owner| {
@@ -6804,7 +6838,11 @@ impl<'src> Analyzer<'src> {
                     if let Some((alias_name, alias_type)) = self.find_type_alias(name, owner) {
                         if alias_type != *type_ {
                             let alias_owner = alias_name.rsplit_once("::").map(|(scope, _)| scope);
-                            return self.resolve_type_names(&alias_type, alias_owner.or(owner));
+                            return self.resolve_type_names_with_locals(
+                                &alias_type,
+                                alias_owner.or(owner),
+                                local_type_parameters,
+                            );
                         }
                     }
                 }
@@ -6817,38 +6855,48 @@ impl<'src> Analyzer<'src> {
                     resolved,
                     arguments
                         .iter()
-                        .map(|argument| self.resolve_type_names(argument, owner))
+                        .map(|argument| {
+                            self.resolve_type_names_with_locals(
+                                argument,
+                                owner,
+                                local_type_parameters,
+                            )
+                        })
                         .collect(),
                 )
             }
-            Type::Array(element) => Type::Array(Box::new(self.resolve_type_names(element, owner))),
+            Type::Array(element) => Type::Array(Box::new(self.resolve_type_names_with_locals(
+                element,
+                owner,
+                local_type_parameters,
+            ))),
             Type::Hash(key, value) => Type::Hash(
-                Box::new(self.resolve_type_names(key, owner)),
-                Box::new(self.resolve_type_names(value, owner)),
+                Box::new(self.resolve_type_names_with_locals(key, owner, local_type_parameters)),
+                Box::new(self.resolve_type_names_with_locals(value, owner, local_type_parameters)),
             ),
             Type::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
-                    .map(|element| self.resolve_type_names(element, owner))
+                    .map(|element| {
+                        self.resolve_type_names_with_locals(element, owner, local_type_parameters)
+                    })
                     .collect(),
             ),
             Type::Proc(parameters, result) => Type::Proc(
                 parameters
                     .iter()
-                    .map(|parameter| self.resolve_type_names(parameter, owner))
+                    .map(|parameter| {
+                        self.resolve_type_names_with_locals(parameter, owner, local_type_parameters)
+                    })
                     .collect(),
-                Box::new(self.resolve_type_names(result, owner)),
+                Box::new(self.resolve_type_names_with_locals(result, owner, local_type_parameters)),
             ),
-            Type::Union(members) => Type::union(
-                members
-                    .iter()
-                    .map(|member| self.resolve_type_names(member, owner)),
-            ),
-            Type::Intersection(members) => Type::intersection(
-                members
-                    .iter()
-                    .map(|member| self.resolve_type_names(member, owner)),
-            ),
+            Type::Union(members) => Type::union(members.iter().map(|member| {
+                self.resolve_type_names_with_locals(member, owner, local_type_parameters)
+            })),
+            Type::Intersection(members) => Type::intersection(members.iter().map(|member| {
+                self.resolve_type_names_with_locals(member, owner, local_type_parameters)
+            })),
             other => other.clone(),
         }
     }
