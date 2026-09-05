@@ -556,6 +556,12 @@ enum IndexAssignmentKind {
     Or,
 }
 
+enum CallAssignmentKind {
+    Operator(String),
+    And,
+    Or,
+}
+
 impl Eval {
     fn value(type_: Type) -> Self {
         Self {
@@ -2483,6 +2489,58 @@ impl<'src> Analyzer<'src> {
         Eval::from_parts(Some(result_type), value_result.abrupt, value_result.flow)
     }
 
+    fn eval_call_assignment<'node>(
+        &mut self,
+        node: &Node<'node>,
+        receiver_node: Option<Node<'node>>,
+        read_name: &str,
+        write_name: &str,
+        value_node: Node<'node>,
+        kind: CallAssignmentKind,
+        environment: &mut Environment,
+    ) -> Eval {
+        let receiver_result = if let Some(receiver) = receiver_node.as_ref() {
+            self.eval_node(receiver, environment)
+        } else {
+            Eval::value(environment.self_type.clone())
+        };
+        let receiver_type = receiver_result.normal_type.clone().unwrap_or(Type::Never);
+        let getter_site = CallSite {
+            argument_nodes: &[],
+            argument_types: &[],
+            block: None,
+        };
+        let current = self.eval_method_call(&receiver_type, read_name, &getter_site, environment);
+        let value_result = match kind {
+            CallAssignmentKind::Operator(operator) => {
+                self.eval_compound_assignment(current, &operator, &value_node, environment)
+            }
+            CallAssignmentKind::And => self.eval_and_assignment(current, &value_node, environment),
+            CallAssignmentKind::Or => self.eval_or_assignment(current, &value_node, environment),
+        };
+        if let Some(value_type) = value_result.normal_type.as_ref() {
+            let setter_site = CallSite {
+                argument_nodes: std::slice::from_ref(&value_node),
+                argument_types: std::slice::from_ref(value_type),
+                block: None,
+            };
+            let _ = self.eval_method_call(&receiver_type, write_name, &setter_site, environment);
+        }
+        let normal_type = receiver_result
+            .normal_type
+            .is_some()
+            .then_some(value_result.normal_type.clone())
+            .flatten();
+        let mut result = Eval::from_parts(
+            normal_type,
+            receiver_result.abrupt.join(&value_result.abrupt),
+            receiver_result.flow.union(value_result.flow),
+        );
+        let type_ = self.apply_inline_assertion(node, result.type_.clone());
+        result.type_ = self.record(node, type_);
+        result
+    }
+
     fn eval_and_assignment<'node>(
         &mut self,
         current: Type,
@@ -3580,6 +3638,39 @@ impl<'src> Analyzer<'src> {
                 write.arguments(),
                 write.value(),
                 IndexAssignmentKind::Or,
+                environment,
+            );
+        }
+        if let Some(write) = node.as_call_operator_write_node() {
+            return self.eval_call_assignment(
+                node,
+                write.receiver(),
+                &prism::constant_name(write.read_name()),
+                &prism::constant_name(write.write_name()),
+                write.value(),
+                CallAssignmentKind::Operator(prism::constant_name(write.binary_operator())),
+                environment,
+            );
+        }
+        if let Some(write) = node.as_call_and_write_node() {
+            return self.eval_call_assignment(
+                node,
+                write.receiver(),
+                &prism::constant_name(write.read_name()),
+                &prism::constant_name(write.write_name()),
+                write.value(),
+                CallAssignmentKind::And,
+                environment,
+            );
+        }
+        if let Some(write) = node.as_call_or_write_node() {
+            return self.eval_call_assignment(
+                node,
+                write.receiver(),
+                &prism::constant_name(write.read_name()),
+                &prism::constant_name(write.write_name()),
+                write.value(),
+                CallAssignmentKind::Or,
                 environment,
             );
         }

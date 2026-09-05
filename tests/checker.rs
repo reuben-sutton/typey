@@ -3041,6 +3041,29 @@ fn evaluates_string_transform_blocks() {
 }
 
 #[test]
+fn evaluates_call_assignment_rhs_calls() {
+    let source = r#"
+class Box
+  def value
+    1
+  end
+
+  def value=(value)
+    value
+  end
+end
+
+box = Box.new
+box.value += Time.now
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_start = source.find("Time.now").expect("compound RHS send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + 8
+    }));
+}
+
+#[test]
 fn traverses_blocks_on_unknown_receivers() {
     let source = r#"
 value = T.unsafe([])
