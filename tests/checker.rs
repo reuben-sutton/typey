@@ -1505,6 +1505,15 @@ T.reveal_type(1.next)
 T.reveal_type(1.gcd(2))
 T.reveal_type(1.digits)
 T.reveal_type(1.clamp(0, 2))
+T.reveal_type(1.bit_length)
+T.reveal_type(1.div(2))
+T.reveal_type(1.divmod(2))
+T.reveal_type(1.gcdlcm(2))
+T.reveal_type(1.to_r)
+T.reveal_type(1.to_c)
+T.reveal_type(1.finite?)
+T.reveal_type(1.infinite?)
+T.reveal_type(1.imag)
 T.reveal_type(1.times { |value| value.to_s })
 T.reveal_type(1.upto(3) { |value| value.to_s })
 T.reveal_type(1.downto(0))
@@ -1526,6 +1535,11 @@ T.reveal_type(1.step(3))
         "Revealed type: `Integer`",
         "Revealed type: `T::Array[Integer]`",
         "Revealed type: `Enumerator`",
+        "Revealed type: `T::Array[[Integer, Integer]]`",
+        "Revealed type: `Rational`",
+        "Revealed type: `Complex`",
+        "Revealed type: `T::Boolean`",
+        "Revealed type: `T.nilable(Integer)`",
     ] {
         assert!(
             notes.iter().any(|message| message.contains(expected)),

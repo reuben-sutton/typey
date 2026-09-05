@@ -6340,8 +6340,13 @@ impl<'src> Analyzer<'src> {
                 }
             }
             "<" | "<=" | ">" | ">=" | "between?" | "even?" | "odd?" | "zero?" => Type::bool(),
+            "finite?" | "nan?" | "real?" | "complex?" => Type::bool(),
+            "infinite?" => Type::union([Type::Nil, Type::Integer]),
             "abs" | "magnitude" => receiver,
             "fdiv" => Type::Float,
+            "div" | "bit_length" | "numerator" | "denominator" => Type::Integer,
+            "divmod" => Type::Array(Box::new(Type::Tuple(vec![Type::Integer, Type::Integer]))),
+            "gcdlcm" => Type::Array(Box::new(Type::Integer)),
             "round" | "ceil" | "floor" | "truncate" => {
                 if argument_types.is_empty() {
                     Type::Integer
@@ -6355,6 +6360,10 @@ impl<'src> Analyzer<'src> {
             "clamp" => receiver,
             "to_f" => Type::Float,
             "to_i" | "to_int" => Type::Integer,
+            "to_r" => Type::named("Rational"),
+            "to_c" => Type::named("Complex"),
+            "real" => receiver,
+            "imag" => Type::Integer,
             "to_s" => Type::String,
             _ => Type::Any,
         }
