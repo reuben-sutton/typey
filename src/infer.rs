@@ -4642,6 +4642,7 @@ impl<'src> Analyzer<'src> {
         for parameter in &parameters.optionals() {
             if let Some(optional) = parameter.as_optional_parameter_node() {
                 self.bind_parameter(environment, optional.name(), signature, index);
+                self.eval_node(&optional.value(), environment);
                 index += 1;
             }
         }
@@ -4672,6 +4673,7 @@ impl<'src> Analyzer<'src> {
                 self.bind_keyword_parameter(environment, required.name(), signature);
             } else if let Some(optional) = parameter.as_optional_keyword_parameter_node() {
                 self.bind_keyword_parameter(environment, optional.name(), signature);
+                self.eval_node(&optional.value(), environment);
             }
         }
         if let Some(rest) = parameters

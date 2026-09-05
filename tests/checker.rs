@@ -2996,6 +2996,27 @@ message = "missing #{name.inspect}"
 }
 
 #[test]
+fn evaluates_parameter_default_calls() {
+    let source = r#"
+def build(timestamp: Time.now.utc, counts: Hash.new(0))
+  [timestamp, counts]
+end
+"#;
+    let result = check(source, CheckerConfig::default());
+    for call in ["Time.now", "Time.now.utc", "Hash.new(0)"] {
+        let send_start = source.find(call).expect("default call");
+        assert!(
+            result.types.iter().any(|inferred| {
+                inferred.is_send
+                    && inferred.start == send_start
+                    && inferred.end == send_start + call.len()
+            }),
+            "missing send {call:?}"
+        );
+    }
+}
+
+#[test]
 fn traverses_blocks_on_unknown_receivers() {
     let source = r#"
 value = T.unsafe([])
