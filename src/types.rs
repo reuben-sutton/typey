@@ -73,14 +73,30 @@ impl Type {
                 Self::Never => {}
                 Self::Union(inner) => pending.extend(inner),
                 other => {
+                    // Merge structurally compatible containers before using
+                    // the gradual subtype relation. `Any` is both a
+                    // consistent subtype and supertype, so relying on
+                    // `is_subtype_of` alone would make
+                    // `Array(Integer) ∪ Array(Any)` depend on operand order.
+                    let mut merged = other;
+                    let mut index = 0;
+                    while index < members.len() {
+                        let Some(joined) = Self::structural_join(&members[index], &merged) else {
+                            index += 1;
+                            continue;
+                        };
+                        merged = joined;
+                        members.remove(index);
+                        index = 0;
+                    }
                     // A union is canonical: once a wider member is present,
                     // narrower alternatives are redundant. This is what
                     // makes `join(Integer, Numeric)` equal to `Numeric`.
-                    if members.iter().any(|member| other.is_subtype_of(member)) {
+                    if members.iter().any(|member| merged.is_subtype_of(member)) {
                         continue;
                     }
-                    members.retain(|member| !member.is_subtype_of(&other));
-                    members.push(other);
+                    members.retain(|member| !member.is_subtype_of(&merged));
+                    members.push(merged);
                 }
             }
         }
@@ -93,6 +109,52 @@ impl Type {
                 members.sort_by_key(ToString::to_string);
                 Self::Union(members)
             }
+        }
+    }
+
+    fn structural_join(left: &Self, right: &Self) -> Option<Self> {
+        match (left, right) {
+            (Self::Array(left), Self::Array(right)) => {
+                Some(Self::Array(Box::new(left.join(right))))
+            }
+            (Self::Hash(left_key, left_value), Self::Hash(right_key, right_value)) => {
+                Some(Self::Hash(
+                    Box::new(left_key.join(right_key)),
+                    Box::new(left_value.join(right_value)),
+                ))
+            }
+            (Self::Proc(left_params, left_return), Self::Proc(right_params, right_return))
+                if left_params.len() == right_params.len() =>
+            {
+                Some(Self::Proc(
+                    left_params
+                        .iter()
+                        .zip(right_params)
+                        .map(|(left, right)| left.join(right))
+                        .collect(),
+                    Box::new(left_return.join(right_return)),
+                ))
+            }
+            (Self::Named(left_name, left_args), Self::Named(right_name, right_args))
+                if left_name == right_name
+                    && (left_args.is_empty()
+                        || right_args.is_empty()
+                        || left_args.len() == right_args.len()) =>
+            {
+                if left_args.is_empty() || right_args.is_empty() {
+                    Some(Self::Named(left_name.clone(), Vec::new()))
+                } else {
+                    Some(Self::Named(
+                        left_name.clone(),
+                        left_args
+                            .iter()
+                            .zip(right_args)
+                            .map(|(left, right)| left.join(right))
+                            .collect(),
+                    ))
+                }
+            }
+            _ => None,
         }
     }
 

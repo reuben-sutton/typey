@@ -770,6 +770,7 @@ pub(crate) fn check_with_rbi_ranges(
     }
     let analyzer = Analyzer {
         source: bytes,
+        line_map: prism::LineMap::new(bytes),
         annotations,
         config,
         methods: BTreeMap::new(),
@@ -802,6 +803,7 @@ pub(crate) fn check_with_rbi_ranges(
 
 struct Analyzer<'src> {
     source: &'src [u8],
+    line_map: prism::LineMap,
     annotations: AnnotationTable,
     config: CheckerConfig,
     methods: BTreeMap<MethodKey, MethodState>,
@@ -3590,8 +3592,8 @@ impl<'src> Analyzer<'src> {
 
     fn apply_inline_assertion<'node>(&mut self, node: &Node<'node>, actual: Type) -> Type {
         let (start, end) = prism::span(node);
-        let start_line = prism::line_number(self.source, start);
-        let end_line = prism::line_number(self.source, end.saturating_sub(1));
+        let start_line = self.line_map.line_number(start);
+        let end_line = self.line_map.line_number(end.saturating_sub(1));
         let assertion = [start_line, end_line]
             .into_iter()
             .filter_map(|line| self.annotations.assertions.get(&line))
