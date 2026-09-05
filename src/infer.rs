@@ -90,6 +90,56 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     result
 }
 
+fn merge_method_signatures(signatures: &[MethodSig]) -> MethodSig {
+    let Some(first) = signatures.first() else {
+        return MethodSig::new(Vec::new(), Type::Any);
+    };
+    let parameter_count = signatures
+        .iter()
+        .map(|signature| signature.params.len())
+        .max()
+        .unwrap_or(0);
+    let params = (0..parameter_count)
+        .map(|index| {
+            signatures.iter().fold(Type::Never, |current, signature| {
+                current.join(signature.params.get(index).unwrap_or(&Type::Any))
+            })
+        })
+        .collect();
+    let mut keywords = BTreeMap::new();
+    for signature in signatures {
+        for (name, parameter) in &signature.keywords {
+            let entry = keywords
+                .entry(name.clone())
+                .or_insert_with(|| signature::KeywordParam {
+                    type_: Type::Never,
+                    required: true,
+                });
+            entry.type_ = entry.type_.join(&parameter.type_);
+            entry.required &= parameter.required;
+        }
+    }
+    let return_type = signatures.iter().fold(Type::Never, |current, signature| {
+        current.join(&signature.return_type)
+    });
+    MethodSig {
+        params,
+        param_names: Vec::new(),
+        return_type,
+        required_params: signatures
+            .iter()
+            .map(|signature| signature.required_params)
+            .min()
+            .unwrap_or(first.required_params),
+        accepts_rest: signatures.iter().any(|signature| signature.accepts_rest),
+        keywords,
+        accepts_keyword_rest: signatures
+            .iter()
+            .any(|signature| signature.accepts_keyword_rest),
+        is_void: signatures.iter().all(|signature| signature.is_void),
+    }
+}
+
 impl MethodKey {
     fn top_level(name: impl Into<String>) -> Self {
         Self {
@@ -513,10 +563,12 @@ struct MethodState {
     accepts_keyword_rest: bool,
     is_void: bool,
     explicit: bool,
+    overloads: Vec<MethodSig>,
 }
 
 impl MethodState {
-    fn explicit(signature: &MethodSig) -> Self {
+    fn explicit_overloads(signatures: &[MethodSig]) -> Self {
+        let signature = merge_method_signatures(signatures);
         Self {
             params: signature.params.iter().cloned().map(Some).collect(),
             keywords: signature
@@ -536,6 +588,7 @@ impl MethodState {
             accepts_keyword_rest: signature.accepts_keyword_rest,
             is_void: signature.is_void,
             explicit: true,
+            overloads: signatures.to_vec(),
         }
     }
 
@@ -587,6 +640,7 @@ impl MethodState {
                 }),
                 is_void: false,
                 explicit: false,
+                overloads: Vec::new(),
             };
         }
 
@@ -601,6 +655,7 @@ impl MethodState {
             accepts_keyword_rest: false,
             is_void: false,
             explicit: false,
+            overloads: Vec::new(),
         }
     }
 
@@ -1390,31 +1445,42 @@ impl<'src> Analyzer<'src> {
         // body evaluation. This makes signatures owner-aware and prevents a
         // method called `remove` (or `initialize`) in one file from changing a
         // same-named method elsewhere in a workspace.
-        let mut source_signatures = BTreeMap::<MethodKey, MethodSig>::new();
-        let mut rbi_signatures = BTreeMap::<MethodKey, MethodSig>::new();
-        for (offset, signature) in &self.annotations.method_annotations {
+        let mut source_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
+        let mut rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
+        for (offset, signatures) in &self.annotations.method_annotations {
             let Some(key) = self.definitions.get(offset) else {
                 continue;
             };
-            let signature = self.parameter_shapes.get(offset).map_or_else(
-                || signature.clone(),
-                |shape| apply_parameter_shape(signature, shape),
-            );
-            let signature = self.resolve_signature_names(&signature, key.owner.as_deref());
+            let signatures = signatures
+                .iter()
+                .map(|signature| {
+                    let signature = self.parameter_shapes.get(offset).map_or_else(
+                        || signature.clone(),
+                        |shape| apply_parameter_shape(signature, shape),
+                    );
+                    self.resolve_signature_names(&signature, key.owner.as_deref())
+                })
+                .collect::<Vec<_>>();
             if self
                 .rbi_ranges
                 .iter()
                 .any(|(start, end)| *offset >= *start && *offset < *end)
             {
-                rbi_signatures.entry(key.clone()).or_insert(signature);
+                rbi_signatures
+                    .entry(key.clone())
+                    .or_default()
+                    .extend(signatures);
             } else {
-                source_signatures.entry(key.clone()).or_insert(signature);
+                source_signatures
+                    .entry(key.clone())
+                    .or_default()
+                    .extend(signatures);
             }
         }
-        for (key, signature) in source_signatures.into_iter().chain(rbi_signatures) {
+        for (key, signatures) in source_signatures.into_iter().chain(rbi_signatures) {
             if let Some(state) = self.methods.get_mut(&key) {
                 if !state.explicit {
-                    *state = MethodState::explicit(&signature);
+                    *state = MethodState::explicit_overloads(&signatures);
                 }
             }
         }
@@ -3612,6 +3678,18 @@ impl<'src> Analyzer<'src> {
         arguments: &CallArguments<'_>,
     ) -> Option<MethodSig> {
         let key = self.resolve_method_key(key)?;
+        if let Some(state) = self.methods.get(&key).filter(|state| state.explicit) {
+            let fallback = state.call_signature();
+            let overloads = if state.overloads.is_empty() {
+                vec![fallback.clone()]
+            } else {
+                state.overloads.clone()
+            };
+            return Some(
+                self.select_overload(&overloads, arguments)
+                    .unwrap_or(fallback),
+            );
+        }
         let (signature, changed) = {
             let state = self.methods.get_mut(&key)?;
             let mut changed = false;
@@ -3639,6 +3717,85 @@ impl<'src> Analyzer<'src> {
             self.changed_methods.insert(key);
         }
         Some(signature)
+    }
+
+    fn select_overload(
+        &self,
+        overloads: &[MethodSig],
+        arguments: &CallArguments<'_>,
+    ) -> Option<MethodSig> {
+        overloads
+            .iter()
+            .find(|signature| self.signature_accepts_arguments(signature, arguments))
+            .cloned()
+    }
+
+    fn signature_accepts_arguments(
+        &self,
+        signature: &MethodSig,
+        arguments: &CallArguments<'_>,
+    ) -> bool {
+        if arguments.forwards_arguments
+            || arguments.has_dynamic_positional_splat
+            || arguments.has_dynamic_keyword_splat
+            || arguments.has_unknown_positional_splat
+            || arguments.has_unknown_keyword_splat
+        {
+            return true;
+        }
+        let keyword_mode = !signature.keywords.is_empty() || signature.accepts_keyword_rest;
+        let positional_types = if keyword_mode {
+            &arguments.positional_types
+        } else {
+            &arguments.argument_types
+        };
+        if positional_types.len() < signature.required_params
+            || (!signature.accepts_rest && positional_types.len() > signature.params.len())
+        {
+            return false;
+        }
+        if keyword_mode && !arguments.has_keyword_splat {
+            let provided = arguments
+                .keyword_arguments
+                .iter()
+                .map(|argument| argument.name.as_str())
+                .collect::<BTreeSet<_>>();
+            if signature
+                .keywords
+                .iter()
+                .any(|(name, parameter)| parameter.required && !provided.contains(name.as_str()))
+            {
+                return false;
+            }
+            if !signature.accepts_keyword_rest
+                && arguments
+                    .keyword_arguments
+                    .iter()
+                    .any(|argument| !signature.keywords.contains_key(&argument.name))
+            {
+                return false;
+            }
+        }
+        if !positional_types
+            .iter()
+            .zip(&signature.params)
+            .all(|(actual, expected)| self.is_assignable(actual, expected))
+        {
+            return false;
+        }
+        if keyword_mode
+            && !arguments.has_keyword_splat
+            && !arguments.keyword_arguments.iter().all(|argument| {
+                signature
+                    .keywords
+                    .get(&argument.name)
+                    .is_some_and(|expected| self.is_assignable(&argument.type_, &expected.type_))
+                    || signature.accepts_keyword_rest
+            })
+        {
+            return false;
+        }
+        true
     }
 
     fn record_method_dependency(&mut self, key: &MethodKey, environment: &Environment) {

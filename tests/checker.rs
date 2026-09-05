@@ -612,6 +612,7 @@ fn ast_annotation_collection_ignores_fixture_text() {
         .method_annotations
         .values()
         .next()
+        .and_then(|signatures| signatures.first())
         .expect("real definition has a signature");
     assert_eq!(signature.params, vec![Type::Integer]);
     assert_eq!(signature.return_type, Type::Integer);

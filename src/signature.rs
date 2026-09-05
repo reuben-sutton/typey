@@ -63,8 +63,9 @@ pub struct AnnotationTable {
     /// The analyzer uses `method_annotations`, which is anchored to Prism
     /// definition offsets and cannot leak between same-named methods.
     pub methods: BTreeMap<String, MethodSig>,
-    /// Method signatures attached to actual Prism `def` nodes.
-    pub method_annotations: BTreeMap<usize, MethodSig>,
+    /// Method signatures attached to actual Prism `def` nodes. Multiple
+    /// consecutive Sorbet `sig` calls represent overloads for one definition.
+    pub method_annotations: BTreeMap<usize, Vec<MethodSig>>,
     /// RBS type aliases collected from `#:` comments. The analyzer resolves
     /// these names against the lexical declaration that uses them.
     pub type_aliases: BTreeMap<String, Type>,
@@ -236,7 +237,11 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
         {
             if let Some(text) = pending_rbs.take() {
                 if let Some(signature) = parse_rbs_signature(&text) {
-                    table.method_annotations.insert(*definition, signature);
+                    table
+                        .method_annotations
+                        .entry(*definition)
+                        .or_default()
+                        .push(signature);
                 }
             }
         }
@@ -267,19 +272,25 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
     // definition only when the intervening source is trivia, which keeps
     // nested method bodies and fixture strings out of the annotation table.
     for definition in &nodes.definitions {
-        let Some((start, end)) = nodes
+        let mut signatures = Vec::new();
+        let mut cursor = *definition;
+        for (start, end) in nodes
             .signatures
             .iter()
             .rev()
-            .find(|(_, end)| {
-                *end <= *definition && only_trivia(&source.as_bytes()[*end..*definition])
-            })
-            .copied()
-        else {
-            continue;
-        };
-        if let Some(signature) = parse_sorbet_signature(&source[start..end]) {
-            table.method_annotations.insert(*definition, signature);
+            .filter(|(_, end)| *end <= *definition)
+        {
+            if !only_trivia(&source.as_bytes()[*end..cursor]) {
+                break;
+            }
+            if let Some(signature) = parse_sorbet_signature(&source[*start..*end]) {
+                signatures.push(signature);
+            }
+            cursor = *start;
+        }
+        signatures.reverse();
+        if !signatures.is_empty() {
+            table.method_annotations.insert(*definition, signatures);
         }
     }
 
