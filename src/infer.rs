@@ -1629,16 +1629,25 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, Type::Nil));
         }
         if let Some(write) = node.as_constant_write_node() {
-            let actual = Self::normal_type(self.eval_node(&write.value(), environment));
+            let value = write.value();
+            let actual = Self::normal_type(self.eval_node(&value, environment));
+            let name = prism::constant_name(write.name());
+            let actual = self
+                .struct_subclass_type(environment, &value, &name)
+                .unwrap_or(actual);
             let type_ = self.apply_inline_assertion(node, actual);
-            self.observe_constant(environment, prism::constant_name(write.name()), &type_);
+            self.observe_constant(environment, name, &type_);
             return Eval::value(self.record(node, type_));
         }
         if let Some(write) = node.as_constant_path_write_node() {
-            let actual = Self::normal_type(self.eval_node(&write.value(), environment));
+            let value = write.value();
+            let actual = Self::normal_type(self.eval_node(&value, environment));
+            let name = self.constant_path_name(&write.target());
+            let actual = self
+                .struct_subclass_type(environment, &value, &name)
+                .unwrap_or(actual);
             let type_ = self.apply_inline_assertion(node, actual);
-            let target = write.target();
-            self.observe_constant(environment, self.constant_path_name(&target), &type_);
+            self.observe_constant(environment, name, &type_);
             return Eval::value(self.record(node, type_));
         }
         if let Some(write) = node.as_class_variable_write_node() {
@@ -4102,6 +4111,24 @@ impl<'src> Analyzer<'src> {
             .map_or_else(|| name.to_owned(), |owner| format!("{owner}::{name}"))
     }
 
+    fn struct_subclass_type<'node>(
+        &self,
+        environment: &Environment,
+        value: &Node<'node>,
+        constant_name: &str,
+    ) -> Option<Type> {
+        let call = value.as_call_node()?;
+        if prism::constant_name(call.name()) != "new" {
+            return None;
+        }
+        let receiver = call.receiver()?;
+        let receiver_name = self.constant_reference_name(&receiver)?;
+        if receiver_name.trim_start_matches("::") != "Struct" {
+            return None;
+        }
+        Some(Type::named(self.constant_key(environment, constant_name)))
+    }
+
     fn observe_constant(&mut self, environment: &Environment, name: String, actual: &Type) {
         let key = self.constant_key(environment, &name);
         let next = self
@@ -4972,12 +4999,12 @@ impl<'src> Analyzer<'src> {
         let mut scope = owner;
         while let Some(current) = scope {
             let candidate = format!("{current}::{name}");
-            if self.classes.contains_key(&candidate) {
+            if self.classes.contains_key(&candidate) || self.constants.contains_key(&candidate) {
                 return candidate;
             }
             scope = current.rsplit_once("::").map(|(parent, _)| parent);
         }
-        if self.classes.contains_key(name) {
+        if self.classes.contains_key(name) || self.constants.contains_key(name) {
             return name.to_owned();
         }
         name.to_owned()
@@ -5004,7 +5031,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn nominal_name_candidates(&self, name: &str) -> Vec<String> {
-        if self.classes.contains_key(name) {
+        if self.classes.contains_key(name) || self.constants.contains_key(name) {
             return vec![name.to_owned()];
         }
         let suffix = format!("::{name}");
@@ -5014,6 +5041,12 @@ impl<'src> Analyzer<'src> {
             .filter(|candidate| candidate.ends_with(&suffix))
             .cloned()
             .collect::<Vec<_>>();
+        candidates.extend(
+            self.constants
+                .keys()
+                .filter(|candidate| candidate.ends_with(&suffix))
+                .cloned(),
+        );
         if candidates.is_empty() {
             candidates.push(name.to_owned());
         }

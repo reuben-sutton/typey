@@ -772,3 +772,18 @@ end
     let result = check(source, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
 }
+
+#[test]
+fn preserves_struct_subclass_constant_identity() {
+    let source = r#"module Node
+  Location = Struct.new(:line, :column)
+
+  #: -> Node::Location
+  def self.build
+    Location.new(1, 2)
+  end
+end
+"#;
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
