@@ -4087,6 +4087,19 @@ impl<'src> Analyzer<'src> {
             Some(&body_signature),
             &mut method_environment,
         );
+        if let Some(parameters) = definition.parameters() {
+            if let Some(block) = parameters.block() {
+                if let Some(name) = block.name() {
+                    method_environment.bind(
+                        prism::constant_name(name),
+                        Type::Proc(
+                            state.block_parameters(),
+                            Box::new(state.block_return_type.clone().unwrap_or(Type::Any)),
+                        ),
+                    );
+                }
+            }
+        }
 
         let previous_expected_return = self.expected_return_type.take();
         self.expected_return_type = if state.explicit && !state.is_void {

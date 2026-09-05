@@ -1553,6 +1553,29 @@ T.reveal_type([1].map { _1 + 1 })
 }
 
 #[test]
+fn propagates_inferred_block_returns_through_block_parameters() {
+    let result = check(
+        r#"
+def apply(&block)
+  block.call(1)
+end
+
+T.reveal_type(apply { |value| value.to_s })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic.message.contains("Revealed type: `String`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_container_types_through_iteration_blocks() {
     let result = check(
         r#"
