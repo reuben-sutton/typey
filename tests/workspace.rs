@@ -155,6 +155,34 @@ fn typed_false_files_keep_declarations_but_suppress_local_diagnostics() {
 }
 
 #[test]
+fn strict_files_accept_cross_file_inference() {
+    let files = vec![
+        WorkspaceFile::new(
+            "strict.rb",
+            "# typed: strict\ndef identity(value)\n  value\nend\n",
+        ),
+        WorkspaceFile::new("caller.rb", "# typed: true\nT.reveal_type(identity(1))\n"),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(
+        !result.has_errors(),
+        "unexpected workspace diagnostics: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == Path::new("caller.rb")
+                && diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Revealed type: `Integer`")
+        }),
+        "unexpected workspace diagnostics: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn reports_diagnostics_against_their_original_workspace_file() {
     let files = vec![
         WorkspaceFile::new(

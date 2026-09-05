@@ -9,7 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::directives::{is_typed_ignore, typed_mode, TypedMode};
-use crate::infer::{check_with_rbi_ranges_and_parse_diagnostics, CheckerConfig};
+use crate::infer::{check_with_policies, CheckerConfig, Strictness};
 use crate::types::Type;
 use std::fs;
 use std::io;
@@ -162,11 +162,20 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
     let mut combined = String::new();
     let mut ranges = Vec::with_capacity(files.len());
     let mut rbi_ranges = Vec::new();
+    let mut strictness_ranges = Vec::new();
     for file in &files {
         let start = combined.len();
         combined.push_str(&file.source);
         let end = combined.len();
         ranges.push(SourceRange { start, end });
+        let strictness = match typed_mode(&file.source) {
+            Some(TypedMode::Strict) => Some(Strictness::Strict),
+            Some(TypedMode::Strong) => Some(Strictness::Strong),
+            _ => None,
+        };
+        if let Some(strictness) = strictness {
+            strictness_ranges.push((start, end, strictness));
+        }
         if is_rbi_path(&file.path) {
             rbi_ranges.push((start, end));
         }
@@ -184,7 +193,7 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
         );
     }
     let (result, parse_diagnostics) =
-        check_with_rbi_ranges_and_parse_diagnostics(&combined, config, &rbi_ranges);
+        check_with_policies(&combined, config, &rbi_ranges, &strictness_ranges);
     let diagnostics = result
         .diagnostics
         .iter()

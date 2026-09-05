@@ -237,6 +237,14 @@ impl Default for CheckerConfig {
     }
 }
 
+fn strictness_rank(strictness: Strictness) -> u8 {
+    match strictness {
+        Strictness::Ignore => 0,
+        Strictness::Strict => 1,
+        Strictness::Strong => 2,
+    }
+}
+
 /// A type recorded for an expression, useful to editors and debugging tools.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InferredType {
@@ -1243,8 +1251,9 @@ impl MethodRegistrar<'_> {
 /// Check a source buffer with direct ruby-prism parsing.
 #[must_use]
 pub fn check(source: &str, config: CheckerConfig) -> CheckResult {
+    let strictness_ranges = source_strictness_ranges(source);
     let (mut result, parse_diagnostics) =
-        check_with_rbi_ranges_and_parse_diagnostics(source, config, &[]);
+        check_with_policies(source, config, &[], &strictness_ranges);
     if typed_mode(source) == Some(TypedMode::False) {
         result
             .diagnostics
@@ -1258,13 +1267,15 @@ pub(crate) fn check_with_rbi_ranges(
     config: CheckerConfig,
     rbi_ranges: &[(usize, usize)],
 ) -> CheckResult {
-    check_with_rbi_ranges_and_parse_diagnostics(source, config, rbi_ranges).0
+    let strictness_ranges = source_strictness_ranges(source);
+    check_with_policies(source, config, rbi_ranges, &strictness_ranges).0
 }
 
-pub(crate) fn check_with_rbi_ranges_and_parse_diagnostics(
+pub(crate) fn check_with_policies(
     source: &str,
     config: CheckerConfig,
     rbi_ranges: &[(usize, usize)],
+    strictness_ranges: &[(usize, usize, Strictness)],
 ) -> (CheckResult, Vec<Diagnostic>) {
     if is_typed_ignore(source) {
         return (CheckResult::default(), Vec::new());
@@ -1311,6 +1322,7 @@ pub(crate) fn check_with_rbi_ranges_and_parse_diagnostics(
         report: true,
         seed_calls: false,
         rbi_ranges: rbi_ranges.to_vec(),
+        strictness_ranges: strictness_ranges.to_vec(),
         filter_method_bodies: false,
         active_methods: BTreeSet::new(),
         changed_methods: BTreeSet::new(),
@@ -1332,6 +1344,15 @@ pub(crate) fn check_with_rbi_ranges_and_parse_diagnostics(
     (result, diagnostics)
 }
 
+fn source_strictness_ranges(source: &str) -> Vec<(usize, usize, Strictness)> {
+    let strictness = match typed_mode(source) {
+        Some(TypedMode::Strict) => Strictness::Strict,
+        Some(TypedMode::Strong) => Strictness::Strong,
+        _ => return Vec::new(),
+    };
+    vec![(0, source.len(), strictness)]
+}
+
 struct Analyzer<'src> {
     source: &'src [u8],
     line_map: prism::LineMap,
@@ -1350,6 +1371,7 @@ struct Analyzer<'src> {
     report: bool,
     seed_calls: bool,
     rbi_ranges: Vec<(usize, usize)>,
+    strictness_ranges: Vec<(usize, usize, Strictness)>,
     filter_method_bodies: bool,
     active_methods: BTreeSet<MethodKey>,
     changed_methods: BTreeSet<MethodKey>,
@@ -2209,10 +2231,7 @@ impl<'src> Analyzer<'src> {
         let mut environment = Environment::default();
         self.eval_node(root, &mut environment);
 
-        // Strictness is deliberately a policy hook for now. The lattice and
-        // explicit annotations are shared by all modes; stronger policies can
-        // add diagnostics here without changing the inference engine.
-        let _strictness = self.config.strictness;
+        self.report_inference_gaps();
         self.diagnostics.sort_by(|left, right| {
             left.start
                 .cmp(&right.start)
@@ -2229,6 +2248,66 @@ impl<'src> Analyzer<'src> {
             diagnostics: self.diagnostics,
             types: self.types,
         }
+    }
+
+    fn report_inference_gaps(&mut self) {
+        if self.config.strictness == Strictness::Ignore && self.strictness_ranges.is_empty() {
+            return;
+        }
+
+        let gaps = self
+            .definitions
+            .iter()
+            .filter_map(|(offset, key)| {
+                let strictness = self.strictness_at(*offset);
+                if strictness == Strictness::Ignore {
+                    return None;
+                }
+                let state = self.methods.get(key)?;
+                if state.explicit {
+                    return None;
+                }
+                let unresolved_parameter = state
+                    .params
+                    .iter()
+                    .any(|type_| type_.as_ref().map_or(true, Type::is_any));
+                let unresolved_keyword = state
+                    .keywords
+                    .values()
+                    .any(|type_| type_.as_ref().map_or(true, Type::is_any));
+                let unresolved_return = state.return_type.as_ref().map_or(true, Type::is_any);
+                (unresolved_parameter || unresolved_keyword || unresolved_return)
+                    .then_some((*offset, key.clone()))
+            })
+            .collect::<Vec<_>>();
+
+        for (offset, key) in gaps {
+            let name = key.owner.as_ref().map_or_else(
+                || key.name.clone(),
+                |owner| format!("{owner}::{}", key.name),
+            );
+            self.diagnostics.push(Diagnostic::error(
+                self.source,
+                format!(
+                    "Method `{name}` has insufficient inferred type information for strict mode"
+                ),
+                offset,
+                offset,
+            ));
+        }
+    }
+
+    fn strictness_at(&self, offset: usize) -> Strictness {
+        let mut strictness = self.config.strictness;
+        for (start, end, candidate) in &self.strictness_ranges {
+            if offset < *start || offset >= *end {
+                continue;
+            }
+            if strictness_rank(*candidate) > strictness_rank(strictness) {
+                strictness = *candidate;
+            }
+        }
+        strictness
     }
 
     fn register_methods<'node>(&mut self, root: &Node<'node>) {

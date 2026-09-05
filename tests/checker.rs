@@ -2620,6 +2620,48 @@ fn typed_false_suppresses_type_errors_but_keeps_syntax_errors() {
 }
 
 #[test]
+fn strict_mode_accepts_methods_with_concrete_inferred_types() {
+    let result = check(
+        r#"# typed: strict
+
+def add(left, right)
+  left + right
+end
+
+T.reveal_type(add(1, 2))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic.message.contains("Revealed type: `Integer`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn strict_mode_reports_unresolved_inference_gaps() {
+    let result = check(
+        "# typed: strict\n\ndef opaque(value)\n  value\nend\n",
+        CheckerConfig::default(),
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("insufficient inferred type information")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn accepts_sorbet_rbs_assertion_spacing_and_comment_tails() {
     let source = "value = nil #: as !nil # trailing comment\nother = 1#:as String\n";
     let annotations = typey::signature::collect(source);
