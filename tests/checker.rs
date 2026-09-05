@@ -1293,6 +1293,42 @@ T.reveal_type(T.unsafe(nil).to_a)
 }
 
 #[test]
+fn preserves_concrete_types_through_more_core_methods() {
+    let result = check(
+        r#"
+values = [1, 2, 3]
+
+T.reveal_type(values.zip(["a"]))
+T.reveal_type(values.flat_map { |value| [value.to_s] })
+T.reveal_type(values.sum)
+T.reveal_type(1.abs)
+T.reveal_type(1.0.abs)
+T.reveal_type("text".bytes)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `T::Array[[Integer, String]]`",
+        "Revealed type: `T::Array[String]`",
+        "Revealed type: `Integer`",
+        "Revealed type: `Float`",
+        "Revealed type: `T::Array[Integer]`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
 fn preserves_container_types_through_iteration_blocks() {
     let result = check(
         r#"

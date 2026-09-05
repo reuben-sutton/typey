@@ -5726,6 +5726,15 @@ impl<'src> Analyzer<'src> {
                 });
                 Type::Array(Box::new(block_type))
             }
+            "flat_map" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                let block_type = site.block.map_or(Type::Any, |block| {
+                    self.eval_block_node(block, std::slice::from_ref(element), environment)
+                });
+                Type::Array(Box::new(self.array_element_type(&block_type)))
+            }
             "each_with_index" => {
                 if site.block.is_none() {
                     return Type::named("Enumerator");
@@ -5797,6 +5806,16 @@ impl<'src> Analyzer<'src> {
                     });
                 Type::Array(Box::new(element))
             }
+            "zip" => {
+                let mut tuple = vec![element.clone()];
+                tuple.extend(
+                    site.argument_types
+                        .iter()
+                        .map(|argument| self.array_element_type(argument)),
+                );
+                Type::Array(Box::new(Type::Tuple(tuple)))
+            }
+            "sum" => Self::numeric_sum_type(element, site.argument_types.first()),
             "+" | "|" => {
                 let element = site
                     .argument_types
@@ -5950,7 +5969,8 @@ impl<'src> Analyzer<'src> {
             "empty?" | "start_with?" | "end_with?" | "include?" => Type::bool(),
             "to_i" | "to_int" => Type::Integer,
             "to_sym" | "intern" => Type::Symbol,
-            "split" => Type::Array(Box::new(Type::String)),
+            "split" | "chars" | "lines" => Type::Array(Box::new(Type::String)),
+            "bytes" | "codepoints" => Type::Array(Box::new(Type::Integer)),
             "strip" | "upcase" | "downcase" | "capitalize" | "chomp" | "to_s" | "dup" | "clone"
             | "+" => Type::String,
             _ => Type::Any,
@@ -5976,6 +5996,7 @@ impl<'src> Analyzer<'src> {
                 }
             }
             "<" | "<=" | ">" | ">=" | "between?" | "even?" | "odd?" | "zero?" => Type::bool(),
+            "abs" | "magnitude" => receiver,
             "to_f" => Type::Float,
             "to_i" | "to_int" => Type::Integer,
             "to_s" => Type::String,
@@ -6770,6 +6791,27 @@ impl<'src> Analyzer<'src> {
             format!("::{name}")
         } else {
             name
+        }
+    }
+
+    fn numeric_sum_type(element: &Type, initial: Option<&Type>) -> Type {
+        let mut saw_float = false;
+        for type_ in [Some(element), initial].into_iter().flatten() {
+            let mut pending = vec![type_];
+            while let Some(type_) = pending.pop() {
+                match type_ {
+                    Type::Integer => {}
+                    Type::Float => saw_float = true,
+                    Type::Union(members) => pending.extend(members),
+                    Type::Never => {}
+                    _ => return Type::Any,
+                }
+            }
+        }
+        if saw_float {
+            Type::Float
+        } else {
+            Type::Integer
         }
     }
 
