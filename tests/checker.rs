@@ -2994,3 +2994,25 @@ value.each { |item| item.to_s }
         inferred.is_send && inferred.start == send_start && inferred.end == send_start + 9
     }));
 }
+
+#[test]
+fn traverses_blocks_on_unknown_super_calls() {
+    let source = r#"
+class Parent
+  def filter(value)
+    T.noreturn
+  end
+end
+
+class Child < Parent
+  def filter
+    super.select { |item| item.to_s }
+  end
+end
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_start = source.rfind("item.to_s").expect("block send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + 9
+    }));
+}

@@ -1,8 +1,11 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+use ruby_prism::{Node, Visit};
 
 use typey::directives::{typed_mode, TypedMode};
 use typey::workspace::{discover_ruby_files, load_workspace_paths};
@@ -144,31 +147,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "[typey] strict inferred types containing T.untyped: {total} ({direct} direct) across {} files",
                     untyped_by_path.len()
                 );
-                let mut application_send_spans = std::collections::BTreeSet::new();
-                let mut application_untyped_send_spans = std::collections::BTreeSet::new();
-                let mut application_untyped_by_origin =
-                    std::collections::BTreeMap::<UntypedOrigin, usize>::new();
-                let mut application_seen_untyped = std::collections::BTreeSet::new();
-                let mut application_sends_by_path =
-                    std::collections::BTreeMap::<PathBuf, (usize, usize)>::new();
+                let mut application_recorded_send_spans = BTreeSet::new();
+                let mut application_untyped_send_spans = BTreeSet::new();
+                let mut application_untyped_by_origin = BTreeMap::<UntypedOrigin, usize>::new();
+                let mut application_seen_untyped = BTreeSet::new();
                 for inferred in &result.types {
                     if !is_application_source(&inferred.path) || !inferred.is_send {
                         continue;
                     }
                     let span = (inferred.path.clone(), inferred.start, inferred.end);
-                    if application_send_spans.insert(span.clone()) {
-                        application_sends_by_path
-                            .entry(inferred.path.clone())
-                            .or_default()
-                            .0 += 1;
-                    }
+                    application_recorded_send_spans.insert(span.clone());
                     if inferred.type_.contains_any() {
-                        if application_untyped_send_spans.insert(span) {
-                            application_sends_by_path
-                                .entry(inferred.path.clone())
-                                .or_default()
-                                .1 += 1;
-                        }
+                        if application_untyped_send_spans.insert(span) {}
                         let origin = inferred.untyped_origin.unwrap_or(UntypedOrigin::Propagated);
                         if application_seen_untyped.insert((
                             inferred.path.clone(),
@@ -180,29 +170,94 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                let application_total = application_send_spans.len();
+                let mut application_syntactic_send_spans = BTreeSet::new();
+                for file in &files {
+                    if !is_application_source(&file.path) {
+                        continue;
+                    }
+                    for (start, end) in syntactic_send_spans(&file.source) {
+                        application_syntactic_send_spans.insert((file.path.clone(), start, end));
+                    }
+                }
+                let application_untracked_send_spans = application_syntactic_send_spans
+                    .difference(&application_recorded_send_spans)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let application_total = application_syntactic_send_spans.len();
                 let application_untyped = application_untyped_send_spans.len();
+                let application_untracked = application_untracked_send_spans.len();
+                let application_unknown = application_untyped + application_untracked;
                 let application_percent = if application_total == 0 {
                     0.0
                 } else {
-                    application_untyped as f64 * 100.0 / application_total as f64
+                    application_unknown as f64 * 100.0 / application_total as f64
                 };
                 eprintln!(
-                    "[typey] application lib sends containing T.untyped: {application_untyped}/{application_total} ({application_percent:.1}%)"
+                    "[typey] application lib send sites unknown (T.untyped or untracked): {application_unknown}/{application_total} ({application_percent:.1}%)"
                 );
+                eprintln!(
+                    "[typey] application lib send sites containing T.untyped: {application_untyped}/{application_total}"
+                );
+                eprintln!(
+                    "[typey] application lib send sites without a recorded type: {application_untracked}/{application_total}"
+                );
+                for (path, start, end) in application_untracked_send_spans.iter().take(20) {
+                    if let Some(source) = sources_by_path.get(path) {
+                        let line = source[..(*start).min(source.len())]
+                            .bytes()
+                            .filter(|byte| *byte == b'\n')
+                            .count()
+                            + 1;
+                        let snippet = source
+                            .get(*start..(*end).min(source.len()))
+                            .unwrap_or_default()
+                            .replace('\n', " ");
+                        eprintln!(
+                            "[typey]   untracked {}:{} ({} recorded nodes) `{snippet}`",
+                            path.display(),
+                            line,
+                            result
+                                .types
+                                .iter()
+                                .filter(|inferred| {
+                                    inferred.path == *path
+                                        && inferred.start == *start
+                                        && inferred.end == *end
+                                })
+                                .count()
+                        );
+                    }
+                }
                 for (origin, count) in application_untyped_by_origin {
                     eprintln!(
                         "[typey] application lib {}: {count} unique spans",
                         untyped_origin_label(origin)
                     );
                 }
-                let mut application_files =
-                    application_sends_by_path.into_iter().collect::<Vec<_>>();
-                application_files.sort_by(|left, right| right.1.cmp(&left.1));
-                for (path, (sends, untyped)) in application_files.into_iter().take(20) {
+                let mut application_files = BTreeMap::<PathBuf, (usize, usize, usize)>::new();
+                for (path, start, end) in &application_syntactic_send_spans {
+                    let entry = application_files.entry(path.clone()).or_default();
+                    entry.0 += 1;
+                    let span = (path.clone(), *start, *end);
+                    if application_untyped_send_spans.contains(&span) {
+                        entry.1 += 1;
+                    }
+                    if application_untracked_send_spans.contains(&span) {
+                        entry.2 += 1;
+                    }
+                }
+                let mut application_files = application_files.into_iter().collect::<Vec<_>>();
+                application_files.sort_by(|left, right| {
+                    (right.1 .1 + right.1 .2)
+                        .cmp(&(left.1 .1 + left.1 .2))
+                        .then_with(|| right.1 .0.cmp(&left.1 .0))
+                });
+                for (path, (sends, untyped, untracked)) in application_files.into_iter().take(20) {
                     eprintln!(
-                        "[typey] application lib file {}: {untyped}/{sends} untyped sends",
-                        path.display()
+                        "[typey] application lib file {}: {}/{} unknown sends ({untyped} untyped, {untracked} untracked)",
+                        path.display(),
+                        untyped + untracked,
+                        sends
                     );
                 }
                 let explicit_untyped = strict_paths
@@ -303,4 +358,124 @@ fn is_application_source(path: &Path) -> bool {
         && path
             .components()
             .any(|component| component.as_os_str() == std::ffi::OsStr::new("lib"))
+}
+
+#[derive(Default)]
+struct SyntacticSendVisitor {
+    spans: BTreeSet<(usize, usize)>,
+}
+
+impl SyntacticSendVisitor {
+    fn record(&mut self, node: &Node<'_>) {
+        let location = node.location();
+        self.spans
+            .insert((location.start_offset(), location.end_offset()));
+    }
+}
+
+impl<'pr> Visit<'pr> for SyntacticSendVisitor {
+    fn visit_call_node(&mut self, node: &ruby_prism::CallNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_call_node(self, node);
+    }
+
+    fn visit_call_and_write_node(&mut self, node: &ruby_prism::CallAndWriteNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_call_and_write_node(self, node);
+    }
+
+    fn visit_call_operator_write_node(&mut self, node: &ruby_prism::CallOperatorWriteNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_call_operator_write_node(self, node);
+    }
+
+    fn visit_call_or_write_node(&mut self, node: &ruby_prism::CallOrWriteNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_call_or_write_node(self, node);
+    }
+
+    fn visit_class_variable_operator_write_node(
+        &mut self,
+        node: &ruby_prism::ClassVariableOperatorWriteNode<'pr>,
+    ) {
+        self.record(&node.as_node());
+        ruby_prism::visit_class_variable_operator_write_node(self, node);
+    }
+
+    fn visit_constant_operator_write_node(
+        &mut self,
+        node: &ruby_prism::ConstantOperatorWriteNode<'pr>,
+    ) {
+        self.record(&node.as_node());
+        ruby_prism::visit_constant_operator_write_node(self, node);
+    }
+
+    fn visit_constant_path_operator_write_node(
+        &mut self,
+        node: &ruby_prism::ConstantPathOperatorWriteNode<'pr>,
+    ) {
+        self.record(&node.as_node());
+        ruby_prism::visit_constant_path_operator_write_node(self, node);
+    }
+
+    fn visit_global_variable_operator_write_node(
+        &mut self,
+        node: &ruby_prism::GlobalVariableOperatorWriteNode<'pr>,
+    ) {
+        self.record(&node.as_node());
+        ruby_prism::visit_global_variable_operator_write_node(self, node);
+    }
+
+    fn visit_index_and_write_node(&mut self, node: &ruby_prism::IndexAndWriteNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_index_and_write_node(self, node);
+    }
+
+    fn visit_index_operator_write_node(&mut self, node: &ruby_prism::IndexOperatorWriteNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_index_operator_write_node(self, node);
+    }
+
+    fn visit_index_or_write_node(&mut self, node: &ruby_prism::IndexOrWriteNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_index_or_write_node(self, node);
+    }
+
+    fn visit_instance_variable_operator_write_node(
+        &mut self,
+        node: &ruby_prism::InstanceVariableOperatorWriteNode<'pr>,
+    ) {
+        self.record(&node.as_node());
+        ruby_prism::visit_instance_variable_operator_write_node(self, node);
+    }
+
+    fn visit_local_variable_operator_write_node(
+        &mut self,
+        node: &ruby_prism::LocalVariableOperatorWriteNode<'pr>,
+    ) {
+        self.record(&node.as_node());
+        ruby_prism::visit_local_variable_operator_write_node(self, node);
+    }
+
+    fn visit_super_node(&mut self, node: &ruby_prism::SuperNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_super_node(self, node);
+    }
+
+    fn visit_forwarding_super_node(&mut self, node: &ruby_prism::ForwardingSuperNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_forwarding_super_node(self, node);
+    }
+
+    fn visit_yield_node(&mut self, node: &ruby_prism::YieldNode<'pr>) {
+        self.record(&node.as_node());
+        ruby_prism::visit_yield_node(self, node);
+    }
+}
+
+fn syntactic_send_spans(source: &str) -> BTreeSet<(usize, usize)> {
+    let parsed = ruby_prism::parse(source.as_bytes());
+    let mut visitor = SyntacticSendVisitor::default();
+    visitor.visit(&parsed.node());
+    visitor.spans
 }

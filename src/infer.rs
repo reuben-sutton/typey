@@ -4555,10 +4555,16 @@ impl<'src> Analyzer<'src> {
                 .arguments
         };
         let Some(target) = target else {
+            if let Some(block) = block {
+                let _ = self.eval_block_node(block, &[Type::Any], environment);
+            }
             return Type::Any;
         };
         self.record_method_dependency(&target, environment);
         let Some(signature) = self.observe_call(&target, &arguments) else {
+            if let Some(block) = block {
+                let _ = self.eval_block_node(block, &[Type::Any], environment);
+            }
             return Type::Any;
         };
         let receiver_type = environment.self_type.clone();
@@ -6198,6 +6204,9 @@ impl<'src> Analyzer<'src> {
         }
 
         if receiver.is_never() {
+            if let Some(block) = site.block {
+                let _ = self.eval_block_node(block, &[Type::Any], environment);
+            }
             return Type::Never;
         }
 
@@ -6259,7 +6268,15 @@ impl<'src> Analyzer<'src> {
                 site.block,
                 environment,
             ),
-            Type::True | Type::False | Type::Nil => self.eval_common_method(name),
+            Type::True | Type::False | Type::Nil => {
+                let type_ = self.eval_common_method(name);
+                if type_.is_any() {
+                    if let Some(block) = site.block {
+                        let _ = self.eval_block_node(block, &[Type::Any], environment);
+                    }
+                }
+                type_
+            }
             Type::Symbol => match name {
                 "to_sym" | "intern" => Type::Symbol,
                 _ => self.eval_common_method(name),
