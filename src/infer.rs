@@ -4189,14 +4189,22 @@ impl<'src> Analyzer<'src> {
                 argument_types,
                 block: block.as_ref(),
             };
-            let mut result = if let Some(key) =
-                self.receiver_method_key(receiver_node.as_ref(), &receiver_type, &name, environment)
-            {
+            let dispatch_receiver_type = if call.is_safe_navigation() {
+                receiver_type.without(&Type::Nil)
+            } else {
+                receiver_type.clone()
+            };
+            let mut result = if let Some(key) = self.receiver_method_key(
+                receiver_node.as_ref(),
+                &dispatch_receiver_type,
+                &name,
+                environment,
+            ) {
                 self.record_method_dependency(&key, environment);
                 if let Some(signature) = self.observe_call(&key, &arguments) {
                     if name == "each" {
                         if let Some(block) = block.as_ref() {
-                            let element = match &receiver_type {
+                            let element = match &dispatch_receiver_type {
                                 Type::Array(element) => element.as_ref().clone(),
                                 Type::Tuple(elements) => elements
                                     .iter()
@@ -4209,12 +4217,18 @@ impl<'src> Analyzer<'src> {
                             let _ = self.eval_block_node(block, &[element], environment);
                         }
                     }
-                    self.invoke_signature(node, &name, &signature, &arguments, Some(&receiver_type))
+                    self.invoke_signature(
+                        node,
+                        &name,
+                        &signature,
+                        &arguments,
+                        Some(&dispatch_receiver_type),
+                    )
                 } else {
-                    self.eval_method_call(&receiver_type, &name, &site, environment)
+                    self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
                 }
             } else {
-                self.eval_method_call(&receiver_type, &name, &site, environment)
+                self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
             };
             if name == "new"
                 && receiver_node

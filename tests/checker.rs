@@ -840,9 +840,8 @@ stringify("wrong")
         .collect::<Vec<_>>();
     assert_eq!(errors.len(), 2, "{errors:?}");
     assert!(
-        errors
-            .iter()
-            .any(|message| message.contains("Expected method `stringify` to return `String`, but found `Integer`")),
+        errors.iter().any(|message| message
+            .contains("Expected method `stringify` to return `String`, but found `Integer`")),
         "{errors:?}"
     );
     assert!(
@@ -851,7 +850,29 @@ stringify("wrong")
             .any(|message| message.contains("Expected `Integer`, but found `String`")),
         "{errors:?}"
     );
-    assert!(!errors.iter().any(|message| message.contains("T.untyped")), "{errors:?}");
+    assert!(
+        !errors.iter().any(|message| message.contains("T.untyped")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn preserves_concrete_types_through_nil_safe_dispatch() {
+    let result = check(
+        r#"
+value = "text" #: String?
+T.reveal_type(value&.length)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(Integer)`")),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
