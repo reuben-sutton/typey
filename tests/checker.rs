@@ -556,6 +556,68 @@ fn lattice_facade_has_top_and_bottom_identities() {
 }
 
 #[test]
+fn exercises_structural_lattice_operations() {
+    assert_eq!(
+        Type::Array(Box::new(Type::Integer)).join(&Type::Array(Box::new(Type::String))),
+        Type::Array(Box::new(Type::union([Type::Integer, Type::String])))
+    );
+    assert_eq!(
+        Type::Hash(Box::new(Type::String), Box::new(Type::Integer))
+            .join(&Type::Hash(Box::new(Type::String), Box::new(Type::Float),)),
+        Type::Hash(
+            Box::new(Type::String),
+            Box::new(Type::union([Type::Float, Type::Integer])),
+        )
+    );
+    assert_eq!(
+        Type::Tuple(vec![Type::Integer, Type::String])
+            .join(&Type::Tuple(vec![Type::Float, Type::String,])),
+        Type::Tuple(vec![
+            Type::union([Type::Float, Type::Integer]),
+            Type::String
+        ])
+    );
+    assert_eq!(
+        Type::Named("Box".to_owned(), vec![Type::Integer])
+            .join(&Type::Named("Box".to_owned(), vec![Type::String],)),
+        Type::Named(
+            "Box".to_owned(),
+            vec![Type::union([Type::Integer, Type::String])],
+        )
+    );
+    assert_eq!(
+        Type::Proc(vec![Type::Integer], Box::new(Type::String))
+            .join(&Type::Proc(vec![Type::Integer], Box::new(Type::Symbol),)),
+        Type::Proc(
+            vec![Type::Integer],
+            Box::new(Type::union([Type::String, Type::Symbol])),
+        )
+    );
+    assert_eq!(
+        Type::union([Type::Integer, Type::String]).meet(&Type::Integer),
+        Type::Integer
+    );
+    assert_eq!(
+        Type::union([Type::Nil, Type::False, Type::String]).truthy_part(),
+        Type::String
+    );
+    assert_eq!(
+        Type::union([Type::Nil, Type::False, Type::String]).falsy_part(),
+        Type::union([Type::False, Type::Nil])
+    );
+    assert_eq!(
+        Type::union([Type::Nil, Type::Integer]).without(&Type::Nil),
+        Type::Integer
+    );
+    assert_eq!(
+        Type::intersection([Type::Object, Type::String]),
+        Type::String
+    );
+    assert!(Type::Proc(vec![Type::Object], Box::new(Type::Integer))
+        .is_subtype_of(&Type::Proc(vec![Type::Integer], Box::new(Type::Object))));
+}
+
+#[test]
 fn parses_the_supported_advanced_sorbet_type_forms() {
     assert_eq!(
         typey::signature::parse_type("T.nilable(String)"),
@@ -968,6 +1030,121 @@ T.reveal_type(mapped)
         notes
             .iter()
             .any(|message| message.contains("Revealed type: `T::Array[String]`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn preserves_concrete_types_through_collection_and_primitive_methods() {
+    let result = check(
+        r#"
+values = [1, 2, 3]
+hash = {"answer" => 1}
+
+T.reveal_type(values.size)
+T.reveal_type(values[0])
+T.reveal_type(values["slice"])
+T.reveal_type(values.compact)
+T.reveal_type(values.join(","))
+T.reveal_type(values.to_a)
+T.reveal_type(hash.keys)
+T.reveal_type(hash.values)
+T.reveal_type(hash.fetch("answer", 0.0))
+T.reveal_type(hash.length)
+T.reveal_type("a b".split)
+T.reveal_type("a".to_sym)
+T.reveal_type(1 / 2)
+T.reveal_type(1 / 2.0)
+T.reveal_type(1.even?)
+T.reveal_type(T.unsafe(nil).to_s)
+T.reveal_type(T.unsafe(nil).nil?)
+T.reveal_type(T.unsafe(nil).to_a)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `Integer`",
+        "Revealed type: `T.nilable(Integer)`",
+        "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `String`",
+        "Revealed type: `T::Array[String]`",
+        "Revealed type: `T.any(Float, Integer)`",
+        "Revealed type: `T::Array[T.untyped]`",
+        "Revealed type: `T::Boolean`",
+        "Revealed type: `Symbol`",
+        "Revealed type: `Float`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        3,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn narrows_array_hash_and_alternation_patterns() {
+    let result = check(
+        r#"
+values = [1, "two"]
+case values
+in [Integer, String]
+  T.reveal_type(values)
+else
+  nil
+end
+
+record = {answer: 1}
+case record
+in answer: answer
+  T.reveal_type(answer)
+else
+  nil
+end
+
+choice = 1
+case choice
+in Integer | String
+  T.reveal_type(choice)
+else
+  nil
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Array[T.any(Integer, String)]`")),
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        2,
         "{notes:?}"
     );
 }
