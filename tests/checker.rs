@@ -64,6 +64,11 @@ fn checks_sorbet_sig_calls() {
 }
 
 #[test]
+fn checks_splat_call_shapes() {
+    check_fixture("tests/fixtures/splat_comparison.rb");
+}
+
+#[test]
 fn resolves_method_summaries_across_fixpoint_rounds() {
     let result = check_fixture("tests/fixtures/fixpoint_flow.rb");
     let notes = result

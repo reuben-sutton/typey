@@ -31,5 +31,5 @@ accepts_rest(1, 2, 3)
 fixed(*[1, "two"])
 
 # These are the dynamic splats Sorbet documents as unsupported.
-fixed(*dynamic_positional)
-fixed_keywords(**dynamic_keywords)
+fixed(*dynamic_positional) # error: Splats are only supported where the size of the array is known statically
+fixed_keywords(**dynamic_keywords) # error: Keyword args with splats are only supported where the shape of the hash is known statically
