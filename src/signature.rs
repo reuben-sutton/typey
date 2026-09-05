@@ -437,8 +437,13 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
     let arrow = find_top_level_arrow(text)?;
     let left = text[..arrow].trim();
     let right = text[arrow + 2..].trim();
+    let mut type_parameters = Vec::new();
     let left = if left.starts_with('[') {
         let close = matching_delimiter(left, 0, '[', ']')?;
+        type_parameters = split_top_level(&left[1..close], ',')
+            .into_iter()
+            .filter_map(|parameter| parse_rbs_type_parameter_name(&parameter))
+            .collect();
         left[close + 1..].trim()
     } else {
         left
@@ -500,7 +505,7 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
         rest_index,
         keywords,
         accepts_keyword_rest,
-        type_parameters: Vec::new(),
+        type_parameters,
         is_void,
     })
 }
@@ -508,6 +513,21 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
 fn parse_type_parameter_name(raw: &str) -> Option<String> {
     let name = raw.trim().trim_start_matches(':').trim_matches(['\'', '"']);
     (!name.is_empty()).then(|| name.to_owned())
+}
+
+fn parse_rbs_type_parameter_name(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let raw = raw
+        .strip_prefix("in ")
+        .or_else(|| raw.strip_prefix("out "))
+        .unwrap_or(raw);
+    let raw = raw
+        .split_once('<')
+        .map_or(raw, |(name, _)| name)
+        .split_once('=')
+        .map_or(raw, |(name, _)| name)
+        .trim();
+    parse_type_parameter_name(raw)
 }
 
 #[must_use]

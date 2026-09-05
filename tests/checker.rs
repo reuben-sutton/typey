@@ -2483,6 +2483,35 @@ fn tracks_optional_and_rest_rbs_parameters_for_calls() {
 }
 
 #[test]
+fn tracks_rbs_method_type_parameters_for_generic_arguments() {
+    let signature = typey::signature::parse_rbs_signature("[T] (Class[T] value) -> void")
+        .expect("signature parses");
+    assert_eq!(signature.type_parameters, vec!["T"]);
+    assert_eq!(
+        signature.params,
+        vec![Type::Named(
+            "Class".to_owned(),
+            vec![Type::TypeVar("T".to_owned())]
+        )]
+    );
+
+    let result = check(
+        r#"
+class Node
+end
+
+#: [T] (Class[T] value) -> void
+def accept(value)
+end
+
+accept(Node)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn accepts_sorbet_rbs_assertion_spacing_and_comment_tails() {
     let source = "value = nil #: as !nil # trailing comment\nother = 1#:as String\n";
     let annotations = typey::signature::collect(source);
