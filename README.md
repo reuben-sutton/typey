@@ -32,11 +32,11 @@ This is still a conformance seed rather than a full Spinel or Sorbet
 replacement. The current dispatch and flow slice also covers included and
 prepended modules, method aliases, `super`, pattern captures, rescue/ensure,
 lexical constants, class variables, globals, singleton classes, extension
-modules, and basic `Proc` calls. Remaining gaps are richer destructuring and
-exception edges, overloads and generic signatures, a complete Ruby
-core/standard-library model, and the broader Spinel feature set (full
-closure/yield propagation, refinements, generic class members, and precise
-dynamic dispatch).
+modules, generic class members, and basic `Proc` calls. Remaining gaps are
+richer destructuring and exception edges, overloads and generic bounds or
+variance, a complete Ruby core/standard-library model, and the broader Spinel
+feature set (full closure/yield propagation, refinements, and precise dynamic
+dispatch).
 
 Run it on stdin, one file, or an entire repository:
 

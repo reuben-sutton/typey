@@ -643,6 +643,68 @@ T.reveal_type(unresolved)
 }
 
 #[test]
+fn specializes_sorbet_generic_type_members() {
+    let result = check(
+        r#"
+class Box
+  extend T::Sig
+  extend T::Generic
+  Elem = type_member
+
+  sig { params(value: Elem).returns(Elem) }
+  def identity(value)
+    value
+  end
+end
+
+class Fixed
+  extend T::Sig
+  extend T::Generic
+  Elem = type_member { {fixed: Integer} }
+
+  sig { returns(Elem) }
+  def value
+    1
+  end
+end
+
+T.reveal_type(Box[Integer].new.identity(1))
+T.reveal_type(Box[String].new.identity("value"))
+T.reveal_type(Box.new.identity(1))
+T.reveal_type(Fixed.new.value)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.untyped`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn parses_rbs_continuations_by_default() {
     let source = "#: (Integer)\n#| -> String\ndef stringify(value)\n  value.to_s\nend\n";
     let annotations = typey::signature::collect(source);

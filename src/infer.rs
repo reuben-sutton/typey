@@ -182,11 +182,18 @@ enum SharedKey {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct GenericMember {
+    index: usize,
+    fixed: Option<Type>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ClassInfo {
     superclass: Option<String>,
     includes: Vec<String>,
     prepends: Vec<String>,
     extends: Vec<String>,
+    type_members: BTreeMap<String, GenericMember>,
 }
 
 /// How much file-mode metadata the checker should use. Typey is intentionally
@@ -909,7 +916,16 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode<'pr>) {
-        let name = self.constant_assignment_name(&prism::constant_name(node.name()));
+        let constant_name = prism::constant_name(node.name());
+        if let Some(owner) = self.class_stack.last() {
+            if let Some(member) = self.parse_generic_member(&node.value()) {
+                let info = self.classes.entry(owner.clone()).or_default();
+                let index = info.type_members.len();
+                info.type_members
+                    .insert(constant_name.clone(), GenericMember { index, ..member });
+            }
+        }
+        let name = self.constant_assignment_name(&constant_name);
         self.register_type_alias(name, &node.value());
         ruby_prism::visit_constant_write_node(self, node);
     }
@@ -1031,6 +1047,22 @@ impl MethodRegistrar<'_> {
         if let Some(type_) = signature::parse_sorbet_type_alias(&prism::text(self.source, value)) {
             self.type_aliases.insert(name, type_);
         }
+    }
+
+    fn parse_generic_member<'node>(&self, value: &Node<'node>) -> Option<GenericMember> {
+        let call = value.as_call_node()?;
+        let name = prism::constant_name(call.name());
+        if !matches!(name.as_str(), "type_member" | "type_template") {
+            return None;
+        }
+        let text = prism::text(self.source, value);
+        let fixed = text
+            .split_once("fixed:")
+            .and_then(|(_, rest)| rest.split('}').next())
+            .map(str::trim)
+            .filter(|type_| !type_.is_empty())
+            .map(signature::parse_type);
+        Some(GenericMember { index: 0, fixed })
     }
 }
 
@@ -1458,7 +1490,97 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    fn generic_member_binding(&self, name: &str, receiver_type: Option<&Type>) -> Option<Type> {
+        let receiver_type = receiver_type.map(Self::receiver_instance_type)?;
+        if let Type::Union(members) = &receiver_type {
+            let mut bindings = members
+                .iter()
+                .filter_map(|member| self.generic_member_binding(name, Some(member)));
+            let first = bindings.next()?;
+            return Some(bindings.fold(first, |current, member| current.join(&member)));
+        }
+        let Type::Named(receiver_owner, arguments) = receiver_type else {
+            return None;
+        };
+        let (declared_owner, member_name) = name.rsplit_once("::")?;
+        let info = self.classes.get(declared_owner)?;
+        let related = receiver_owner == declared_owner
+            || self
+                .classes
+                .get(&receiver_owner)
+                .is_some_and(|receiver_info| {
+                    receiver_info
+                        .includes
+                        .iter()
+                        .any(|owner| owner == declared_owner)
+                        || receiver_info
+                            .prepends
+                            .iter()
+                            .any(|owner| owner == declared_owner)
+                        || receiver_info
+                            .extends
+                            .iter()
+                            .any(|owner| owner == declared_owner)
+                })
+            || self.nominal_subtype(&receiver_owner, declared_owner);
+        if !related {
+            return None;
+        }
+        let member = info.type_members.get(member_name)?;
+        if let Some(fixed) = &member.fixed {
+            return Some(self.resolve_type_names(fixed, Some(declared_owner)));
+        }
+        Some(arguments.get(member.index).cloned().unwrap_or(Type::Any))
+    }
+
+    fn substitute_generic_members(&self, type_: &Type, receiver_type: Option<&Type>) -> Type {
+        match type_ {
+            Type::TypeVar(name) => self
+                .generic_member_binding(name, receiver_type)
+                .unwrap_or_else(|| type_.clone()),
+            Type::Named(name, arguments) => Type::Named(
+                name.clone(),
+                arguments
+                    .iter()
+                    .map(|argument| self.substitute_generic_members(argument, receiver_type))
+                    .collect(),
+            ),
+            Type::Array(element) => Type::Array(Box::new(
+                self.substitute_generic_members(element, receiver_type),
+            )),
+            Type::Hash(key, value) => Type::Hash(
+                Box::new(self.substitute_generic_members(key, receiver_type)),
+                Box::new(self.substitute_generic_members(value, receiver_type)),
+            ),
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| self.substitute_generic_members(element, receiver_type))
+                    .collect(),
+            ),
+            Type::Proc(parameters, result) => Type::Proc(
+                parameters
+                    .iter()
+                    .map(|parameter| self.substitute_generic_members(parameter, receiver_type))
+                    .collect(),
+                Box::new(self.substitute_generic_members(result, receiver_type)),
+            ),
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|member| self.substitute_generic_members(member, receiver_type)),
+            ),
+            Type::Intersection(members) => Type::intersection(
+                members
+                    .iter()
+                    .map(|member| self.substitute_generic_members(member, receiver_type)),
+            ),
+            other => other.clone(),
+        }
+    }
+
     fn substitute_signature_type(
+        &self,
         type_: &Type,
         receiver_type: Option<&Type>,
         bindings: &BTreeMap<String, Type>,
@@ -1466,7 +1588,54 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         let names = type_parameters.iter().cloned().collect::<BTreeSet<_>>();
         let type_ = Self::substitute_instance_type(type_, receiver_type);
+        let type_ = self.substitute_generic_members(&type_, receiver_type);
         Self::substitute_type_parameters(&type_, bindings, &names)
+    }
+
+    fn substitute_method_signature(
+        &self,
+        signature: &MethodSig,
+        receiver_type: Option<&Type>,
+    ) -> MethodSig {
+        let bindings = BTreeMap::new();
+        let mut result = signature.clone();
+        result.params = signature
+            .params
+            .iter()
+            .map(|type_| {
+                self.substitute_signature_type(
+                    type_,
+                    receiver_type,
+                    &bindings,
+                    &signature.type_parameters,
+                )
+            })
+            .collect();
+        result.return_type = self.substitute_signature_type(
+            &signature.return_type,
+            receiver_type,
+            &bindings,
+            &signature.type_parameters,
+        );
+        result.keywords = signature
+            .keywords
+            .iter()
+            .map(|(name, parameter)| {
+                (
+                    name.clone(),
+                    signature::KeywordParam {
+                        type_: self.substitute_signature_type(
+                            &parameter.type_,
+                            receiver_type,
+                            &bindings,
+                            &signature.type_parameters,
+                        ),
+                        required: parameter.required,
+                    },
+                )
+            })
+            .collect();
+        result
     }
 
     fn looks_like_class_name(name: &str) -> bool {
@@ -3042,7 +3211,6 @@ impl<'src> Analyzer<'src> {
             .get(&key)
             .cloned()
             .unwrap_or_else(|| MethodState::inferred(definition.parameters()));
-        let body_signature = state.body_signature();
         let mut method_environment = Environment {
             self_type: key.owner.as_ref().map_or(Type::Object, |owner| {
                 if key.singleton {
@@ -3054,6 +3222,10 @@ impl<'src> Analyzer<'src> {
             method_key: Some(key.clone()),
             ..Environment::default()
         };
+        let body_signature = self.substitute_method_signature(
+            &state.body_signature(),
+            Some(&method_environment.self_type),
+        );
         self.bind_parameters(
             definition.parameters(),
             Some(&body_signature),
@@ -3062,10 +3234,11 @@ impl<'src> Analyzer<'src> {
 
         let previous_expected_return = self.expected_return_type.take();
         self.expected_return_type = if state.explicit && !state.is_void {
-            Some(Self::substitute_instance_type(
-                &state.call_signature().return_type,
+            let signature = self.substitute_method_signature(
+                &state.call_signature(),
                 Some(&method_environment.self_type),
-            ))
+            );
+            Some(signature.return_type)
         } else {
             None
         };
@@ -3077,9 +3250,8 @@ impl<'src> Analyzer<'src> {
         self.expected_return_type = previous_expected_return;
         let inferred_return = body_result.method_return_type();
         if state.explicit && !state.is_void && !self.is_rbi_definition(node) {
-            let mut expected = state.call_signature();
-            expected.return_type = Self::substitute_instance_type(
-                &expected.return_type,
+            let expected = self.substitute_method_signature(
+                &state.call_signature(),
                 Some(&method_environment.self_type),
             );
             if !inferred_return.is_never()
@@ -4047,7 +4219,7 @@ impl<'src> Analyzer<'src> {
             .iter()
             .zip(&signature.params)
             .all(|(actual, expected)| {
-                let expected = Self::substitute_signature_type(
+                let expected = self.substitute_signature_type(
                     expected,
                     None,
                     &type_parameter_bindings,
@@ -4065,7 +4237,7 @@ impl<'src> Analyzer<'src> {
                     .keywords
                     .get(&argument.name)
                     .is_some_and(|expected| {
-                        let expected = Self::substitute_signature_type(
+                        let expected = self.substitute_signature_type(
                             &expected.type_,
                             None,
                             &type_parameter_bindings,
@@ -4678,7 +4850,47 @@ impl<'src> Analyzer<'src> {
                     instance
                 }
             }
-            Type::Named(class, _) if name == "new" => Type::Named(class.clone(), Vec::new()),
+            Type::Named(class, _) if name == "[]" && name_matches(class, "Class") => {
+                let instance = Self::class_object_instance_type(receiver).unwrap_or(Type::Any);
+                let arguments: Vec<Type> = site
+                    .argument_types
+                    .iter()
+                    .map(|argument| {
+                        Self::class_object_value_type(argument).unwrap_or_else(|| argument.clone())
+                    })
+                    .collect();
+                match instance {
+                    Type::Named(class, _) if name_matches(&class, "Array") => {
+                        arguments.first().cloned().map_or_else(
+                            || Type::Array(Box::new(Type::Any)),
+                            |element| Type::Array(Box::new(element)),
+                        )
+                    }
+                    Type::Named(class, _) if name_matches(&class, "Hash") => {
+                        if arguments.len() == 2 {
+                            Type::Hash(
+                                Box::new(arguments[0].clone()),
+                                Box::new(arguments[1].clone()),
+                            )
+                        } else {
+                            Type::Hash(Box::new(Type::Any), Box::new(Type::Any))
+                        }
+                    }
+                    Type::Named(class, _) => Type::Named(class, arguments),
+                    _ => Type::Any,
+                }
+            }
+            Type::Named(class, arguments) if name == "new" => {
+                if self
+                    .classes
+                    .get(class)
+                    .is_some_and(|info| !info.type_members.is_empty())
+                {
+                    Type::Named(class.clone(), arguments.clone())
+                } else {
+                    Type::Named(class.clone(), Vec::new())
+                }
+            }
             Type::Named(class, arguments)
                 if name == "each" && name_matches(class, "Enumerable") =>
             {
@@ -5070,7 +5282,7 @@ impl<'src> Analyzer<'src> {
                 .zip(&signature.params)
             {
                 if let Some(argument) = arguments.argument_nodes.get(*argument_index) {
-                    let expected = Self::substitute_signature_type(
+                    let expected = self.substitute_signature_type(
                         expected,
                         receiver_type,
                         &type_parameter_bindings,
@@ -5090,7 +5302,7 @@ impl<'src> Analyzer<'src> {
                 .zip(&signature.params)
             {
                 if let Some(argument) = arguments.argument_nodes.get(*argument_index) {
-                    let expected = Self::substitute_signature_type(
+                    let expected = self.substitute_signature_type(
                         expected,
                         receiver_type,
                         &type_parameter_bindings,
@@ -5103,7 +5315,7 @@ impl<'src> Analyzer<'src> {
         if keyword_mode && !arguments.forwards_arguments && !arguments.has_unknown_keyword_splat {
             for argument in &arguments.keyword_arguments {
                 if let Some(expected) = signature.keywords.get(&argument.name) {
-                    let expected = Self::substitute_signature_type(
+                    let expected = self.substitute_signature_type(
                         &expected.type_,
                         receiver_type,
                         &type_parameter_bindings,
@@ -5116,7 +5328,7 @@ impl<'src> Analyzer<'src> {
         if arguments.has_unknown_positional_splat || arguments.has_unknown_keyword_splat {
             Type::Any
         } else {
-            Self::substitute_signature_type(
+            self.substitute_signature_type(
                 &signature.return_type,
                 receiver_type,
                 &type_parameter_bindings,
@@ -5158,6 +5370,18 @@ impl<'src> Analyzer<'src> {
     fn resolve_type_names(&self, type_: &Type, owner: Option<&str>) -> Type {
         match type_ {
             Type::Named(name, arguments) => {
+                if arguments.is_empty()
+                    && owner.is_some_and(|owner| {
+                        self.classes
+                            .get(owner)
+                            .is_some_and(|info| info.type_members.contains_key(name))
+                    })
+                {
+                    return Type::TypeVar(format!(
+                        "{}::{name}",
+                        owner.expect("owner is present for a type member")
+                    ));
+                }
                 if arguments.is_empty() {
                     if let Some((alias_name, alias_type)) = self.find_type_alias(name, owner) {
                         if alias_type != *type_ {
