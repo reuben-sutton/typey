@@ -293,6 +293,35 @@ impl Type {
         matches!(self, Self::Any)
     }
 
+    /// Return whether this type contains `T.untyped` at any nesting depth.
+    #[must_use]
+    pub fn contains_any(&self) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Named(_, arguments) => arguments.iter().any(Self::contains_any),
+            Self::Array(element) => element.contains_any(),
+            Self::Hash(key, value) => key.contains_any() || value.contains_any(),
+            Self::Tuple(elements) => elements.iter().any(Self::contains_any),
+            Self::Proc(parameters, result) => {
+                parameters.iter().any(Self::contains_any) || result.contains_any()
+            }
+            Self::Union(members) | Self::Intersection(members) => {
+                members.iter().any(Self::contains_any)
+            }
+            Self::Never
+            | Self::Nil
+            | Self::True
+            | Self::False
+            | Self::Integer
+            | Self::Float
+            | Self::String
+            | Self::Symbol
+            | Self::Object
+            | Self::TypeVar(_)
+            | Self::AttachedClass => false,
+        }
+    }
+
     #[must_use]
     pub fn is_never(&self) -> bool {
         matches!(self, Self::Never)

@@ -586,6 +586,8 @@ fn lattice_facade_has_top_and_bottom_identities() {
     assert_eq!(Type::Integer.meet(&Type::String), Type::Never);
     let dynamic_array = Type::Array(Box::new(Type::Any));
     let call_node_array = Type::Array(Box::new(Type::named("Prism::CallNode")));
+    assert!(dynamic_array.contains_any());
+    assert!(!call_node_array.contains_any());
     assert_eq!(dynamic_array.join(&call_node_array), dynamic_array);
     assert_eq!(call_node_array.join(&dynamic_array), dynamic_array);
     assert_eq!(
