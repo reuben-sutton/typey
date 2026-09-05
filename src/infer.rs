@@ -15,6 +15,72 @@ struct MethodKey {
     singleton: bool,
 }
 
+fn name_matches(name: &str, bare: &str) -> bool {
+    name == bare || name == format!("T::{bare}")
+}
+
+#[derive(Clone, Debug, Default)]
+struct ParameterShape {
+    required_positional: usize,
+    accepts_rest: bool,
+    keywords: BTreeMap<String, bool>,
+    accepts_keyword_rest: bool,
+}
+
+impl ParameterShape {
+    fn from_parameters<'node>(parameters: Option<ParametersNode<'node>>) -> Self {
+        let Some(parameters) = parameters else {
+            return Self::default();
+        };
+        let required_positional = parameters.requireds().len();
+        let accepts_rest = parameters.rest().is_some();
+        let mut keywords = BTreeMap::new();
+        for parameter in &parameters.keywords() {
+            if let Some(required) = parameter.as_required_keyword_parameter_node() {
+                keywords.insert(prism::constant_name(required.name()), true);
+            } else if let Some(optional) = parameter.as_optional_keyword_parameter_node() {
+                keywords.insert(prism::constant_name(optional.name()), false);
+            }
+        }
+        Self {
+            required_positional,
+            accepts_rest,
+            keywords,
+            accepts_keyword_rest: parameters.keyword_rest().is_some(),
+        }
+    }
+}
+
+fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> MethodSig {
+    if signature.param_names.is_empty() || signature.param_names.len() != signature.params.len() {
+        return signature.clone();
+    }
+
+    let mut result = signature.clone();
+    let mut params = Vec::new();
+    let mut keywords = result.keywords.clone();
+    for (name, type_) in signature.param_names.iter().zip(&signature.params) {
+        if let Some(required) = shape.keywords.get(name) {
+            keywords.insert(
+                name.clone(),
+                signature::KeywordParam {
+                    type_: type_.clone(),
+                    required: *required,
+                },
+            );
+        } else {
+            params.push(type_.clone());
+        }
+    }
+    result.params = params;
+    result.param_names.clear();
+    result.required_params = shape.required_positional.min(result.params.len());
+    result.accepts_rest |= shape.accepts_rest;
+    result.accepts_keyword_rest |= shape.accepts_keyword_rest;
+    result.keywords = keywords;
+    result
+}
+
 impl MethodKey {
     fn top_level(name: impl Into<String>) -> Self {
         Self {
@@ -310,6 +376,41 @@ struct CallSite<'a, 'node> {
     block: Option<&'a Node<'node>>,
 }
 
+struct KeywordArgument<'node> {
+    name: String,
+    node: Node<'node>,
+    type_: Type,
+}
+
+struct CallArguments<'node> {
+    argument_nodes: Vec<Node<'node>>,
+    argument_types: Vec<Type>,
+    positional_indices: Vec<usize>,
+    positional_types: Vec<Type>,
+    keyword_arguments: Vec<KeywordArgument<'node>>,
+    has_keyword_splat: bool,
+}
+
+struct CallArgumentEvaluation<'node> {
+    arguments: CallArguments<'node>,
+    abrupt: OutcomeTypes,
+    abrupt_flow: Flow,
+    all_normal: bool,
+}
+
+impl<'node> Default for CallArguments<'node> {
+    fn default() -> Self {
+        Self {
+            argument_nodes: Vec::new(),
+            argument_types: Vec::new(),
+            positional_indices: Vec::new(),
+            positional_types: Vec::new(),
+            keyword_arguments: Vec::new(),
+            has_keyword_splat: false,
+        }
+    }
+}
+
 impl Eval {
     fn value(type_: Type) -> Self {
         Self {
@@ -397,10 +498,14 @@ impl Eval {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MethodState {
     params: Vec<Option<Type>>,
+    keywords: BTreeMap<String, Option<Type>>,
+    required_keywords: BTreeSet<String>,
     return_type: Option<Type>,
     return_terminates: bool,
     required_params: usize,
     accepts_rest: bool,
+    accepts_keyword_rest: bool,
+    is_void: bool,
     explicit: bool,
 }
 
@@ -408,16 +513,30 @@ impl MethodState {
     fn explicit(signature: &MethodSig) -> Self {
         Self {
             params: signature.params.iter().cloned().map(Some).collect(),
+            keywords: signature
+                .keywords
+                .iter()
+                .map(|(name, parameter)| (name.clone(), Some(parameter.type_.clone())))
+                .collect(),
+            required_keywords: signature
+                .keywords
+                .iter()
+                .filter_map(|(name, parameter)| parameter.required.then_some(name.clone()))
+                .collect(),
             return_type: Some(signature.return_type.clone()),
             return_terminates: signature.return_type.is_never(),
             required_params: signature.required_params,
             accepts_rest: signature.accepts_rest,
+            accepts_keyword_rest: signature.accepts_keyword_rest,
+            is_void: signature.is_void,
             explicit: true,
         }
     }
 
     fn inferred<'node>(parameters: Option<ParametersNode<'node>>) -> Self {
         let mut params = Vec::new();
+        let mut keywords = BTreeMap::new();
+        let mut required_keywords = BTreeSet::new();
         let mut required_params = 0;
 
         if let Some(parameters) = parameters {
@@ -437,27 +556,38 @@ impl MethodState {
                 required_params += 1;
             }
             for parameter in &parameters.keywords() {
-                params.push(None);
-                if parameter.as_required_keyword_parameter_node().is_some() {
-                    required_params += 1;
+                if let Some(required) = parameter.as_required_keyword_parameter_node() {
+                    let name = prism::constant_name(required.name());
+                    keywords.insert(name.clone(), None);
+                    required_keywords.insert(name);
+                } else if let Some(optional) = parameter.as_optional_keyword_parameter_node() {
+                    keywords.insert(prism::constant_name(optional.name()), None);
                 }
             }
             return Self {
                 params,
+                keywords,
+                required_keywords,
                 return_type: None,
                 return_terminates: false,
                 required_params,
                 accepts_rest,
+                accepts_keyword_rest: parameters.keyword_rest().is_some(),
+                is_void: false,
                 explicit: false,
             };
         }
 
         Self {
             params,
+            keywords,
+            required_keywords,
             return_type: None,
             return_terminates: false,
             required_params,
             accepts_rest: false,
+            accepts_keyword_rest: false,
+            is_void: false,
             explicit: false,
         }
     }
@@ -469,9 +599,25 @@ impl MethodState {
                 .iter()
                 .map(|type_| type_.clone().unwrap_or(Type::Any))
                 .collect(),
+            param_names: Vec::new(),
             return_type: Type::Any,
             required_params: self.required_params,
             accepts_rest: self.accepts_rest,
+            keywords: self
+                .keywords
+                .iter()
+                .map(|(name, type_)| {
+                    (
+                        name.clone(),
+                        signature::KeywordParam {
+                            type_: type_.clone().unwrap_or(Type::Any),
+                            required: self.required_keywords.contains(name),
+                        },
+                    )
+                })
+                .collect(),
+            accepts_keyword_rest: self.accepts_keyword_rest,
+            is_void: false,
         }
     }
 
@@ -482,9 +628,25 @@ impl MethodState {
                 .iter()
                 .map(|type_| type_.clone().unwrap_or(Type::Any))
                 .collect(),
+            param_names: Vec::new(),
             return_type: self.return_type.clone().unwrap_or(Type::Never),
             required_params: self.required_params,
             accepts_rest: self.accepts_rest,
+            keywords: self
+                .keywords
+                .iter()
+                .map(|(name, type_)| {
+                    (
+                        name.clone(),
+                        signature::KeywordParam {
+                            type_: type_.clone().unwrap_or(Type::Any),
+                            required: self.required_keywords.contains(name),
+                        },
+                    )
+                })
+                .collect(),
+            accepts_keyword_rest: self.accepts_keyword_rest,
+            is_void: self.is_void,
         }
     }
 
@@ -493,6 +655,24 @@ impl MethodState {
             return false;
         }
         let Some(slot) = self.params.get_mut(index) else {
+            return false;
+        };
+        let next = slot
+            .as_ref()
+            .map_or_else(|| actual.clone(), |current| current.join(actual));
+        if slot.as_ref() == Some(&next) {
+            false
+        } else {
+            *slot = Some(next);
+            true
+        }
+    }
+
+    fn observe_keyword(&mut self, name: &str, actual: &Type) -> bool {
+        if self.explicit {
+            return false;
+        }
+        let Some(slot) = self.keywords.get_mut(name) else {
             return false;
         };
         let next = slot
@@ -528,6 +708,7 @@ struct MethodRegistrar<'a> {
     source: &'a [u8],
     methods: &'a mut BTreeMap<MethodKey, MethodState>,
     definitions: &'a mut BTreeMap<usize, MethodKey>,
+    parameter_shapes: &'a mut BTreeMap<usize, ParameterShape>,
     classes: &'a mut BTreeMap<String, ClassInfo>,
     aliases: &'a mut BTreeMap<MethodKey, MethodKey>,
     class_stack: Vec<String>,
@@ -538,6 +719,7 @@ struct MethodRegistrar<'a> {
 impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     fn visit_def_node(&mut self, node: &DefNode<'pr>) {
         let name = prism::constant_name(node.name());
+        let definition_start = prism::span(&node.as_node()).0;
         let key = if let Some(receiver) = node.receiver() {
             let owner = if receiver.as_self_node().is_some() {
                 self.class_stack.last().cloned()
@@ -568,8 +750,11 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         } else {
             MethodKey::top_level(name)
         };
-        self.definitions
-            .insert(prism::span(&node.as_node()).0, key.clone());
+        self.definitions.insert(definition_start, key.clone());
+        self.parameter_shapes.insert(
+            definition_start,
+            ParameterShape::from_parameters(node.parameters()),
+        );
         self.methods
             .entry(key)
             .or_insert_with(|| MethodState::inferred(node.parameters()));
@@ -580,17 +765,13 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
 
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'pr>) {
         let name = self.scope_name(&node.constant_path());
-        let superclass = node.superclass().map(|superclass| {
-            prism::text(self.source, &superclass)
-                .trim_start_matches("::")
-                .to_owned()
-        });
-        self.classes
-            .entry(name.clone())
-            .or_insert_with(|| ClassInfo {
-                superclass,
-                ..ClassInfo::default()
-            });
+        let superclass = node
+            .superclass()
+            .map(|superclass| self.scope_reference(&superclass));
+        let info = self.classes.entry(name.clone()).or_default();
+        if info.superclass.is_none() {
+            info.superclass = superclass;
+        }
         self.class_stack.push(name);
         let singleton_stack = std::mem::take(&mut self.singleton_stack);
         ruby_prism::visit_class_node(self, node);
@@ -678,6 +859,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                         ruby_prism::visit_call_node(self, node);
                         return;
                     };
+                    let module = self.scope_reference_text(module);
                     let info = self.classes.entry(owner.clone()).or_default();
                     match name.as_str() {
                         "include" => info.includes.push(module.clone()),
@@ -733,6 +915,28 @@ impl MethodRegistrar<'_> {
             .trim_matches('\'')
             .to_owned()
     }
+
+    fn scope_reference<'node>(&self, node: &Node<'node>) -> String {
+        self.scope_reference_text(&prism::text(self.source, node))
+    }
+
+    fn scope_reference_text(&self, text: &str) -> String {
+        let absolute = text.trim_start().starts_with("::");
+        let raw = text.trim().trim_start_matches("::");
+        if absolute || raw.contains("::") || self.class_stack.is_empty() {
+            raw.to_owned()
+        } else {
+            let candidate = format!(
+                "{}::{raw}",
+                self.class_stack.last().expect("stack is not empty")
+            );
+            if self.classes.contains_key(&candidate) {
+                candidate
+            } else {
+                raw.to_owned()
+            }
+        }
+    }
 }
 
 /// Check a source buffer with direct ruby-prism parsing.
@@ -776,6 +980,7 @@ pub(crate) fn check_with_rbi_ranges(
         config,
         methods: BTreeMap::new(),
         definitions: BTreeMap::new(),
+        parameter_shapes: BTreeMap::new(),
         classes: BTreeMap::new(),
         aliases: BTreeMap::new(),
         ivars: BTreeMap::new(),
@@ -808,6 +1013,7 @@ struct Analyzer<'src> {
     config: CheckerConfig,
     methods: BTreeMap<MethodKey, MethodState>,
     definitions: BTreeMap<usize, MethodKey>,
+    parameter_shapes: BTreeMap<usize, ParameterShape>,
     classes: BTreeMap<String, ClassInfo>,
     aliases: BTreeMap<MethodKey, MethodKey>,
     ivars: BTreeMap<IvarKey, Type>,
@@ -976,6 +1182,7 @@ impl<'src> Analyzer<'src> {
             source: self.source,
             methods: &mut self.methods,
             definitions: &mut self.definitions,
+            parameter_shapes: &mut self.parameter_shapes,
             classes: &mut self.classes,
             aliases: &mut self.aliases,
             class_stack: Vec::new(),
@@ -983,6 +1190,7 @@ impl<'src> Analyzer<'src> {
             method_depth: 0,
         };
         registrar.visit(root);
+        self.normalize_class_graph();
 
         // Resolve annotation offsets through the same definition table used by
         // body evaluation. This makes signatures owner-aware and prevents a
@@ -994,18 +1202,19 @@ impl<'src> Analyzer<'src> {
             let Some(key) = self.definitions.get(offset) else {
                 continue;
             };
+            let signature = self.parameter_shapes.get(offset).map_or_else(
+                || signature.clone(),
+                |shape| apply_parameter_shape(signature, shape),
+            );
+            let signature = self.resolve_signature_names(&signature, key.owner.as_deref());
             if self
                 .rbi_ranges
                 .iter()
                 .any(|(start, end)| *offset >= *start && *offset < *end)
             {
-                rbi_signatures
-                    .entry(key.clone())
-                    .or_insert_with(|| signature.clone());
+                rbi_signatures.entry(key.clone()).or_insert(signature);
             } else {
-                source_signatures
-                    .entry(key.clone())
-                    .or_insert_with(|| signature.clone());
+                source_signatures.entry(key.clone()).or_insert(signature);
             }
         }
         for (key, signature) in source_signatures
@@ -2218,9 +2427,10 @@ impl<'src> Analyzer<'src> {
             Eval::value(Type::Nil)
         };
         let inferred_return = body_result.method_return_type();
-        if state.explicit && !self.is_rbi_definition(node) {
+        if state.explicit && !state.is_void && !self.is_rbi_definition(node) {
             let expected = state.call_signature();
-            if !inferred_return.is_never() && !inferred_return.is_subtype_of(&expected.return_type)
+            if !inferred_return.is_never()
+                && !self.is_assignable(&inferred_return, &expected.return_type)
             {
                 self.error(
                     node,
@@ -2271,38 +2481,39 @@ impl<'src> Analyzer<'src> {
             return Type::Any;
         };
         let target = self.super_method_key(&current);
-        let mut argument_nodes = Vec::new();
-        let argument_types = if let Some(forwarding) = forwarding {
+        let arguments = if let Some(forwarding) = forwarding {
             if let Some(block) = forwarding.block() {
                 let _ = self.eval_block(&block, &[], environment);
             }
-            self.methods
+            let types = self
+                .methods
                 .get(&current)
                 .map(|state| state.call_signature().params)
-                .unwrap_or_default()
+                .unwrap_or_default();
+            let positional_types = types.clone();
+            CallArguments {
+                argument_nodes: Vec::new(),
+                argument_types: types,
+                positional_indices: Vec::new(),
+                positional_types,
+                keyword_arguments: Vec::new(),
+                has_keyword_splat: false,
+            }
         } else {
-            argument_nodes = arguments
+            let argument_nodes = arguments
                 .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
                 .unwrap_or_default();
-            argument_nodes
-                .iter()
-                .map(|argument| self.eval_node(argument, environment).type_)
-                .collect::<Vec<_>>()
+            self.evaluate_call_arguments(argument_nodes, environment)
+                .arguments
         };
         let Some(target) = target else {
             return Type::Any;
         };
         self.record_method_dependency(&target, environment);
-        let Some(signature) = self.observe_call(&target, &argument_types) else {
+        let Some(signature) = self.observe_call(&target, &arguments) else {
             return Type::Any;
         };
-        self.invoke_signature(
-            node,
-            &target.name,
-            &signature,
-            &argument_nodes,
-            &argument_types,
-        )
+        self.invoke_signature(node, &target.name, &signature, &arguments)
     }
 
     fn super_method_key(&self, current: &MethodKey) -> Option<MethodKey> {
@@ -2361,7 +2572,14 @@ impl<'src> Analyzer<'src> {
             .and_then(|node| node.as_rest_parameter_node())
         {
             if let Some(name) = rest.name() {
-                self.bind_parameter(environment, name, signature, index);
+                let element_type = signature
+                    .and_then(|signature| signature.params.get(index))
+                    .cloned()
+                    .unwrap_or(Type::Any);
+                environment.bind(
+                    prism::constant_name(name),
+                    Type::Array(Box::new(element_type)),
+                );
             }
             index += 1;
         }
@@ -2373,11 +2591,9 @@ impl<'src> Analyzer<'src> {
         }
         for parameter in &parameters.keywords() {
             if let Some(required) = parameter.as_required_keyword_parameter_node() {
-                self.bind_parameter(environment, required.name(), signature, index);
-                index += 1;
+                self.bind_keyword_parameter(environment, required.name(), signature);
             } else if let Some(optional) = parameter.as_optional_keyword_parameter_node() {
-                self.bind_parameter(environment, optional.name(), signature, index);
-                index += 1;
+                self.bind_keyword_parameter(environment, optional.name(), signature);
             }
         }
         if let Some(rest) = parameters
@@ -2413,6 +2629,19 @@ impl<'src> Analyzer<'src> {
             .cloned()
             .unwrap_or(Type::Any);
         environment.bind(prism::constant_name(name), type_);
+    }
+
+    fn bind_keyword_parameter<'node>(
+        &self,
+        environment: &mut Environment,
+        name: ruby_prism::ConstantId<'node>,
+        signature: Option<&MethodSig>,
+    ) {
+        let name = prism::constant_name(name);
+        let type_ = signature
+            .and_then(|signature| signature.keywords.get(&name))
+            .map_or(Type::Any, |parameter| parameter.type_.clone());
+        environment.bind(name, type_);
     }
 
     fn eval_if<'node>(
@@ -2585,6 +2814,110 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    fn evaluate_call_arguments<'node>(
+        &mut self,
+        argument_nodes: Vec<Node<'node>>,
+        environment: &mut Environment,
+    ) -> CallArgumentEvaluation<'node> {
+        let mut evaluated = CallArguments::default();
+        let mut abrupt = OutcomeTypes::default();
+        let mut abrupt_flow = Flow::empty();
+        let mut all_normal = true;
+
+        for (argument_index, argument) in argument_nodes.iter().enumerate() {
+            if let Some(keyword_hash) = argument.as_keyword_hash_node() {
+                let mut key = Type::Never;
+                let mut value = Type::Never;
+                let mut keyword_arguments = Vec::new();
+                let mut keyword_shape = true;
+                let mut child_flow = Flow::normal();
+                let mut child_abrupt = OutcomeTypes::default();
+
+                for child in &keyword_hash.elements() {
+                    if let Some(assoc) = child.as_assoc_node() {
+                        let key_node = assoc.key();
+                        let key_result = self.eval_node(&key_node, environment);
+                        key = key.join(&key_result.type_);
+                        child_abrupt = child_abrupt.join(&key_result.abrupt);
+                        child_flow = child_flow.without(FlowKind::Normal).union(key_result.flow);
+
+                        let value_node = assoc.value();
+                        let value_result = self.eval_node(&value_node, environment);
+                        value = value.join(&value_result.type_);
+                        child_abrupt = child_abrupt.join(&value_result.abrupt);
+                        child_flow = child_flow
+                            .without(FlowKind::Normal)
+                            .union(value_result.flow);
+
+                        if let Some(symbol) = key_node.as_symbol_node() {
+                            keyword_arguments.push(KeywordArgument {
+                                name: String::from_utf8_lossy(symbol.unescaped()).into_owned(),
+                                node: value_node,
+                                type_: value_result.type_,
+                            });
+                        } else {
+                            keyword_shape = false;
+                        }
+                    } else if let Some(splat) = child.as_assoc_splat_node() {
+                        if let Some(expression) = splat.value() {
+                            let result = self.eval_node(&expression, environment);
+                            child_abrupt = child_abrupt.join(&result.abrupt);
+                            child_flow = child_flow.without(FlowKind::Normal).union(result.flow);
+                            if let Type::Hash(splat_key, splat_value) = result.type_ {
+                                key = key.join(&splat_key);
+                                value = value.join(&splat_value);
+                            } else {
+                                key = Type::Any;
+                                value = Type::Any;
+                            }
+                        }
+                        evaluated.has_keyword_splat = true;
+                    } else {
+                        keyword_shape = false;
+                        let result = self.eval_node(&child, environment);
+                        child_abrupt = child_abrupt.join(&result.abrupt);
+                        child_flow = child_flow.without(FlowKind::Normal).union(result.flow);
+                    }
+                }
+
+                if keyword_shape {
+                    let key = if key.is_never() { Type::Any } else { key };
+                    let value = if value.is_never() { Type::Any } else { value };
+                    let type_ = self.apply_inline_assertion(
+                        argument,
+                        Type::Hash(Box::new(key), Box::new(value)),
+                    );
+                    let type_ = self.record(argument, type_);
+                    evaluated.argument_types.push(type_);
+                    evaluated.keyword_arguments.extend(keyword_arguments);
+                    abrupt = abrupt.join(&child_abrupt);
+                    abrupt_flow = abrupt_flow.union(child_flow.without(FlowKind::Normal));
+                    all_normal &= child_flow.contains(FlowKind::Normal);
+                    continue;
+                }
+            }
+
+            let result = self.eval_node(argument, environment);
+            evaluated.argument_types.push(result.type_.clone());
+            evaluated.positional_types.push(result.type_);
+            evaluated.positional_indices.push(argument_index);
+            abrupt = abrupt.join(&result.abrupt);
+            abrupt_flow = abrupt_flow.union(result.flow.without(FlowKind::Normal));
+            all_normal &= result.flow.contains(FlowKind::Normal);
+        }
+
+        // Keyword hashes remain in the complete argument list for built-in
+        // method models, but only their named entries participate in a
+        // keyword-shaped signature.
+        evaluated.argument_nodes = argument_nodes;
+        CallArgumentEvaluation {
+            arguments: evaluated,
+            abrupt,
+            abrupt_flow,
+            all_normal,
+        }
+    }
+
     fn eval_call<'node>(
         &mut self,
         node: &Node<'node>,
@@ -2596,10 +2929,12 @@ impl<'src> Analyzer<'src> {
             .arguments()
             .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
             .unwrap_or_default();
-        let mut argument_types = Vec::with_capacity(argument_nodes.len());
-        let mut abrupt = OutcomeTypes::default();
-        let mut abrupt_flow = Flow::empty();
-        let mut all_normal = true;
+        let evaluated = self.evaluate_call_arguments(argument_nodes, environment);
+        let arguments = evaluated.arguments;
+        let argument_types = &arguments.argument_types;
+        let mut abrupt = evaluated.abrupt;
+        let mut abrupt_flow = evaluated.abrupt_flow;
+        let mut all_normal = evaluated.all_normal;
         let receiver_node = call.receiver();
         let receiver_type = if let Some(receiver) = receiver_node.as_ref() {
             let result = self.eval_node(receiver, environment);
@@ -2610,19 +2945,17 @@ impl<'src> Analyzer<'src> {
         } else {
             Type::Object
         };
-        for argument in &argument_nodes {
-            let result = self.eval_node(argument, environment);
-            argument_types.push(result.type_.clone());
-            abrupt = abrupt.join(&result.abrupt);
-            abrupt_flow = abrupt_flow.union(result.flow.without(FlowKind::Normal));
-            all_normal &= result.flow.contains(FlowKind::Normal);
-        }
-
         let callee_type = if receiver_node
             .as_ref()
             .is_some_and(|receiver| self.constant_reference_name(receiver).as_deref() == Some("T"))
         {
-            self.eval_t_call(node, &name, &argument_nodes, &argument_types, environment)
+            self.eval_t_call(
+                node,
+                &name,
+                &arguments.argument_nodes,
+                argument_types,
+                environment,
+            )
         } else if receiver_node.is_none()
             && matches!(name.as_str(), "lambda" | "proc")
             && call.block().is_some()
@@ -2634,25 +2967,19 @@ impl<'src> Analyzer<'src> {
         } else if receiver_node.is_none() {
             let key = self.implicit_method_key(&name, environment);
             self.record_method_dependency(&key, environment);
-            if let Some(signature) = self.observe_call(&key, &argument_types) {
-                self.invoke_signature(node, &name, &signature, &argument_nodes, &argument_types)
+            if let Some(signature) = self.observe_call(&key, &arguments) {
+                self.invoke_signature(node, &name, &signature, &arguments)
             } else if key.singleton {
                 if let Some(owner) = key.owner.clone() {
                     if name == "new" {
-                        self.infer_initializer_call(
-                            node,
-                            &owner,
-                            &argument_nodes,
-                            &argument_types,
-                            environment,
-                        );
+                        self.infer_initializer_call(node, &owner, &arguments, environment);
                         Type::named(owner)
                     } else {
                         self.eval_global_call(
                             node,
                             &name,
-                            &argument_nodes,
-                            &argument_types,
+                            &arguments.argument_nodes,
+                            argument_types,
                             environment,
                         )
                     }
@@ -2660,27 +2987,33 @@ impl<'src> Analyzer<'src> {
                     self.eval_global_call(
                         node,
                         &name,
-                        &argument_nodes,
-                        &argument_types,
+                        &arguments.argument_nodes,
+                        argument_types,
                         environment,
                     )
                 }
             } else {
-                self.eval_global_call(node, &name, &argument_nodes, &argument_types, environment)
+                self.eval_global_call(
+                    node,
+                    &name,
+                    &arguments.argument_nodes,
+                    argument_types,
+                    environment,
+                )
             }
         } else {
             let block = call.block();
             let site = CallSite {
-                argument_nodes: &argument_nodes,
-                argument_types: &argument_types,
+                argument_nodes: &arguments.argument_nodes,
+                argument_types,
                 block: block.as_ref(),
             };
             let mut result = if let Some(key) =
                 self.receiver_method_key(receiver_node.as_ref(), &receiver_type, &name, environment)
             {
                 self.record_method_dependency(&key, environment);
-                if let Some(signature) = self.observe_call(&key, &argument_types) {
-                    self.invoke_signature(node, &name, &signature, &argument_nodes, &argument_types)
+                if let Some(signature) = self.observe_call(&key, &arguments) {
+                    self.invoke_signature(node, &name, &signature, &arguments)
                 } else {
                     self.eval_method_call(&receiver_type, &name, &site, environment)
                 }
@@ -2693,13 +3026,7 @@ impl<'src> Analyzer<'src> {
                     .is_some_and(|receiver| self.constant_reference_name(receiver).is_some())
             {
                 if let Type::Named(owner, _) = &receiver_type {
-                    self.infer_initializer_call(
-                        node,
-                        owner,
-                        &argument_nodes,
-                        &argument_types,
-                        environment,
-                    );
+                    self.infer_initializer_call(node, owner, &arguments, environment);
                     result = Type::named(owner.clone());
                 }
             }
@@ -2783,13 +3110,27 @@ impl<'src> Analyzer<'src> {
         })
     }
 
-    fn observe_call(&mut self, key: &MethodKey, argument_types: &[Type]) -> Option<MethodSig> {
+    fn observe_call(
+        &mut self,
+        key: &MethodKey,
+        arguments: &CallArguments<'_>,
+    ) -> Option<MethodSig> {
         let key = self.resolve_method_key(key)?;
         let (signature, changed) = {
             let state = self.methods.get_mut(&key)?;
             let mut changed = false;
-            for (index, actual) in argument_types.iter().enumerate() {
+            let positional_types = if state.accepts_keyword_rest || !state.keywords.is_empty() {
+                &arguments.positional_types
+            } else {
+                &arguments.argument_types
+            };
+            for (index, actual) in positional_types.iter().enumerate() {
                 changed |= state.observe_argument(index, actual);
+            }
+            if state.accepts_keyword_rest || !state.keywords.is_empty() {
+                for argument in &arguments.keyword_arguments {
+                    changed |= state.observe_keyword(&argument.name, &argument.type_);
+                }
             }
             (state.call_signature(), changed)
         };
@@ -2895,8 +3236,7 @@ impl<'src> Analyzer<'src> {
         &mut self,
         node: &Node<'node>,
         owner: &str,
-        argument_nodes: &[Node<'node>],
-        argument_types: &[Type],
+        arguments: &CallArguments<'node>,
         environment: &Environment,
     ) {
         let key = MethodKey {
@@ -2905,14 +3245,8 @@ impl<'src> Analyzer<'src> {
             singleton: false,
         };
         self.record_method_dependency(&key, environment);
-        if let Some(signature) = self.observe_call(&key, argument_types) {
-            let _ = self.invoke_signature(
-                node,
-                "initialize",
-                &signature,
-                argument_nodes,
-                argument_types,
-            );
+        if let Some(signature) = self.observe_call(&key, arguments) {
+            let _ = self.invoke_signature(node, "initialize", &signature, arguments);
         }
     }
 
@@ -3063,13 +3397,14 @@ impl<'src> Analyzer<'src> {
 
     fn constant_type(&mut self, environment: &Environment, name: &str) -> Type {
         let name = name.trim_start_matches("::");
+        let result_owner = self.lexical_owner(environment);
         let mut candidates = vec![self.constant_key(environment, name)];
         if candidates[0] != name {
             candidates.push(name.to_owned());
         }
-        let mut owner = self.lexical_owner(environment);
+        let mut owner = result_owner.clone();
         let mut visited = BTreeSet::new();
-        while let Some(current) = owner {
+        while let Some(current) = owner.clone() {
             if !visited.insert(current.clone()) {
                 break;
             }
@@ -3092,10 +3427,15 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(index) = selected {
             if let Some(type_) = self.constants.get(&candidates[index]) {
-                return type_.clone();
+                return self.resolve_type_names(type_, result_owner.as_deref());
             }
         }
-        signature::parse_type(name)
+        let resolved = self.resolve_name(name, result_owner.as_deref());
+        if resolved != name || self.classes.contains_key(&resolved) {
+            Type::named(resolved)
+        } else {
+            signature::parse_type(name)
+        }
     }
 
     fn class_var_owner(&self, environment: &Environment) -> String {
@@ -3288,6 +3628,17 @@ impl<'src> Analyzer<'src> {
 
         match receiver {
             Type::Array(element) => self.eval_array_method(element, name, site, environment),
+            Type::Tuple(elements) => {
+                let element = elements
+                    .iter()
+                    .fold(Type::Never, |current, element| current.join(element));
+                let element = if element.is_never() {
+                    Type::Any
+                } else {
+                    element
+                };
+                self.eval_array_method(&element, name, site, environment)
+            }
             Type::Hash(key, value) => self.eval_hash_method(key, value, name, site, environment),
             Type::String => self.eval_string_method(name, site.argument_types),
             Type::Integer => self.eval_numeric_method(Type::Integer, name, site.argument_types),
@@ -3568,40 +3919,380 @@ impl<'src> Analyzer<'src> {
         node: &Node<'node>,
         name: &str,
         signature: &MethodSig,
-        argument_nodes: &[Node<'node>],
-        argument_types: &[Type],
+        arguments: &CallArguments<'node>,
     ) -> Type {
-        if argument_types.len() < signature.required_params
-            || (!signature.accepts_rest && argument_types.len() > signature.params.len())
-        {
-            let expected =
-                if signature.required_params == signature.params.len() && !signature.accepts_rest {
+        let keyword_mode = !signature.keywords.is_empty() || signature.accepts_keyword_rest;
+        let argument_types = if keyword_mode {
+            &arguments.positional_types
+        } else {
+            &arguments.argument_types
+        };
+        let positional_error = argument_types.len() < signature.required_params
+            || (!signature.accepts_rest && argument_types.len() > signature.params.len());
+        let provided_keywords = arguments
+            .keyword_arguments
+            .iter()
+            .map(|argument| argument.name.as_str())
+            .collect::<BTreeSet<_>>();
+        let missing_keywords = keyword_mode
+            && !arguments.has_keyword_splat
+            && signature.keywords.iter().any(|(name, parameter)| {
+                parameter.required && !provided_keywords.contains(name.as_str())
+            });
+        let unknown_keyword = keyword_mode
+            && !signature.accepts_keyword_rest
+            && arguments
+                .keyword_arguments
+                .iter()
+                .any(|argument| !signature.keywords.contains_key(&argument.name));
+
+        if positional_error || missing_keywords || unknown_keyword {
+            let expected = if keyword_mode {
+                let required_keywords = signature
+                    .keywords
+                    .iter()
+                    .filter_map(|(name, parameter)| parameter.required.then_some(name.as_str()))
+                    .collect::<Vec<_>>();
+                if required_keywords.is_empty() {
                     signature.params.len().to_string()
                 } else {
-                    format!("at least {}", signature.required_params)
-                };
+                    format!(
+                        "at least {} positional arguments and keywords ({})",
+                        signature.required_params,
+                        required_keywords.join(", ")
+                    )
+                }
+            } else if signature.required_params == signature.params.len() && !signature.accepts_rest
+            {
+                signature.params.len().to_string()
+            } else {
+                format!("at least {}", signature.required_params)
+            };
             self.error(
                 node,
                 format!(
                     "Wrong number of arguments for `{name}`: expected {expected}, found {}",
-                    argument_types.len()
+                    argument_types.len() + arguments.keyword_arguments.len()
                 ),
             );
         }
-        for ((argument, actual), expected) in argument_nodes
-            .iter()
-            .zip(argument_types)
-            .zip(&signature.params)
-        {
-            self.check_assignable(argument, actual, expected);
+        if keyword_mode {
+            for ((argument_index, actual), expected) in arguments
+                .positional_indices
+                .iter()
+                .zip(argument_types)
+                .zip(&signature.params)
+            {
+                if let Some(argument) = arguments.argument_nodes.get(*argument_index) {
+                    self.check_assignable(argument, actual, expected);
+                }
+            }
+        } else {
+            for ((argument, actual), expected) in arguments
+                .argument_nodes
+                .iter()
+                .zip(argument_types)
+                .zip(&signature.params)
+            {
+                self.check_assignable(argument, actual, expected);
+            }
+        }
+        if keyword_mode {
+            for argument in &arguments.keyword_arguments {
+                if let Some(expected) = signature.keywords.get(&argument.name) {
+                    self.check_assignable(&argument.node, &argument.type_, &expected.type_);
+                }
+            }
         }
         signature.return_type.clone()
     }
 
     fn check_assignable<'node>(&mut self, node: &Node<'node>, actual: &Type, expected: &Type) {
-        if !actual.is_subtype_of(expected) {
+        if !self.is_assignable(actual, expected) {
             self.error(node, format!("Expected `{expected}`, but found `{actual}`"));
         }
+    }
+
+    fn resolve_signature_names(&self, signature: &MethodSig, owner: Option<&str>) -> MethodSig {
+        let mut result = signature.clone();
+        result.params = signature
+            .params
+            .iter()
+            .map(|type_| self.resolve_type_names(type_, owner))
+            .collect();
+        result.return_type = self.resolve_type_names(&signature.return_type, owner);
+        result.keywords = signature
+            .keywords
+            .iter()
+            .map(|(name, parameter)| {
+                (
+                    name.clone(),
+                    signature::KeywordParam {
+                        type_: self.resolve_type_names(&parameter.type_, owner),
+                        required: parameter.required,
+                    },
+                )
+            })
+            .collect();
+        result
+    }
+
+    fn resolve_type_names(&self, type_: &Type, owner: Option<&str>) -> Type {
+        match type_ {
+            Type::Named(name, arguments) => {
+                let resolved = if name == "instance" && arguments.is_empty() {
+                    owner.map_or_else(|| name.clone(), ToOwned::to_owned)
+                } else {
+                    self.resolve_name(name, owner)
+                };
+                Type::Named(
+                    resolved,
+                    arguments
+                        .iter()
+                        .map(|argument| self.resolve_type_names(argument, owner))
+                        .collect(),
+                )
+            }
+            Type::Array(element) => Type::Array(Box::new(self.resolve_type_names(element, owner))),
+            Type::Hash(key, value) => Type::Hash(
+                Box::new(self.resolve_type_names(key, owner)),
+                Box::new(self.resolve_type_names(value, owner)),
+            ),
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| self.resolve_type_names(element, owner))
+                    .collect(),
+            ),
+            Type::Proc(parameters, result) => Type::Proc(
+                parameters
+                    .iter()
+                    .map(|parameter| self.resolve_type_names(parameter, owner))
+                    .collect(),
+                Box::new(self.resolve_type_names(result, owner)),
+            ),
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|member| self.resolve_type_names(member, owner)),
+            ),
+            Type::Intersection(members) => Type::intersection(
+                members
+                    .iter()
+                    .map(|member| self.resolve_type_names(member, owner)),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    fn resolve_name(&self, name: &str, owner: Option<&str>) -> String {
+        if self.classes.contains_key(name) {
+            return name.to_owned();
+        }
+        let mut scope = owner;
+        while let Some(current) = scope {
+            let candidate = format!("{current}::{name}");
+            if self.classes.contains_key(&candidate) {
+                return candidate;
+            }
+            scope = current.rsplit_once("::").map(|(parent, _)| parent);
+        }
+        name.to_owned()
+    }
+
+    fn resolve_global_name(&self, name: &str) -> String {
+        if self.classes.contains_key(name) {
+            return name.to_owned();
+        }
+        let suffix = format!("::{name}");
+        let mut matches = self
+            .classes
+            .keys()
+            .filter(|candidate| candidate.ends_with(&suffix))
+            .cloned();
+        let Some(candidate) = matches.next() else {
+            return name.to_owned();
+        };
+        if matches.next().is_none() {
+            candidate
+        } else {
+            name.to_owned()
+        }
+    }
+
+    fn nominal_names_match(&self, actual: &str, expected: &str) -> bool {
+        if actual == expected {
+            return true;
+        }
+        let actual = self.resolve_global_name(actual);
+        let expected = self.resolve_global_name(expected);
+        actual == expected
+            || (self.classes.contains_key(&actual) && expected.ends_with(&format!("::{actual}")))
+            || (self.classes.contains_key(&expected) && actual.ends_with(&format!("::{expected}")))
+    }
+
+    fn normalize_class_graph(&mut self) {
+        let owners = self.classes.keys().cloned().collect::<Vec<_>>();
+        for owner in owners {
+            let Some(info) = self.classes.get(&owner).cloned() else {
+                continue;
+            };
+            let superclass = info
+                .superclass
+                .as_deref()
+                .map(|name| self.resolve_name(name, Some(&owner)));
+            let includes = info
+                .includes
+                .iter()
+                .map(|name| self.resolve_name(name, Some(&owner)))
+                .collect();
+            let prepends = info
+                .prepends
+                .iter()
+                .map(|name| self.resolve_name(name, Some(&owner)))
+                .collect();
+            let extends = info
+                .extends
+                .iter()
+                .map(|name| self.resolve_name(name, Some(&owner)))
+                .collect();
+            if let Some(info) = self.classes.get_mut(&owner) {
+                info.superclass = superclass;
+                info.includes = includes;
+                info.prepends = prepends;
+                info.extends = extends;
+            }
+        }
+    }
+
+    fn is_assignable(&self, actual: &Type, expected: &Type) -> bool {
+        if actual.is_any()
+            || expected.is_any()
+            || actual.is_never()
+            || matches!(expected, Type::TypeVar(_))
+        {
+            return true;
+        }
+        if actual == expected || actual.is_subtype_of(expected) {
+            return true;
+        }
+        if let Type::Union(expected_members) = expected {
+            return expected_members
+                .iter()
+                .any(|member| self.is_assignable(actual, member));
+        }
+        if let Type::Union(actual_members) = actual {
+            return actual_members
+                .iter()
+                .all(|member| self.is_assignable(member, expected));
+        }
+        if let Type::Intersection(expected_members) = expected {
+            return expected_members
+                .iter()
+                .all(|member| self.is_assignable(actual, member));
+        }
+        if let Type::Intersection(actual_members) = actual {
+            return actual_members
+                .iter()
+                .any(|member| self.is_assignable(member, expected));
+        }
+        match (actual, expected) {
+            (Type::Array(actual), Type::Array(expected)) => self.is_assignable(actual, expected),
+            (Type::Hash(actual_key, actual_value), Type::Hash(expected_key, expected_value)) => {
+                self.is_assignable(actual_key, expected_key)
+                    && self.is_assignable(actual_value, expected_value)
+            }
+            (Type::Tuple(actual), Type::Tuple(expected)) => {
+                actual.len() == expected.len()
+                    && actual
+                        .iter()
+                        .zip(expected)
+                        .all(|(actual, expected)| self.is_assignable(actual, expected))
+            }
+            (Type::Tuple(actual), Type::Array(expected)) => actual
+                .iter()
+                .all(|actual| self.is_assignable(actual, expected)),
+            (Type::Array(actual), Type::Named(name, arguments))
+                if arguments.len() == 1 && name_matches(name, "Enumerable") =>
+            {
+                self.is_assignable(actual, &arguments[0])
+            }
+            (Type::Tuple(actual), Type::Named(name, arguments))
+                if arguments.len() == 1 && name_matches(name, "Enumerable") =>
+            {
+                actual
+                    .iter()
+                    .all(|actual| self.is_assignable(actual, &arguments[0]))
+            }
+            (Type::Array(actual), Type::Named(name, arguments))
+                if arguments.len() == 1 && name_matches(name, "Array") =>
+            {
+                self.is_assignable(actual, &arguments[0])
+            }
+            (Type::Tuple(actual), Type::Named(name, arguments))
+                if arguments.len() == 1 && name_matches(name, "Array") =>
+            {
+                actual
+                    .iter()
+                    .all(|actual| self.is_assignable(actual, &arguments[0]))
+            }
+            (Type::Hash(actual_key, actual_value), Type::Named(name, arguments))
+                if arguments.len() == 2 && name_matches(name, "Hash") =>
+            {
+                self.is_assignable(actual_key, &arguments[0])
+                    && self.is_assignable(actual_value, &arguments[1])
+            }
+            (
+                Type::Proc(actual_params, actual_return),
+                Type::Proc(expected_params, expected_return),
+            ) => {
+                actual_params.len() == expected_params.len()
+                    && actual_params
+                        .iter()
+                        .zip(expected_params)
+                        .all(|(actual, expected)| self.is_assignable(expected, actual))
+                    && self.is_assignable(actual_return, expected_return)
+            }
+            (Type::Named(actual_name, actual_args), Type::Named(expected_name, expected_args)) => {
+                if self.nominal_names_match(actual_name, expected_name) {
+                    expected_args.is_empty()
+                        || actual_args.is_empty()
+                        || (actual_args.len() == expected_args.len()
+                            && actual_args
+                                .iter()
+                                .zip(expected_args)
+                                .all(|(actual, expected)| self.is_assignable(actual, expected)))
+                } else {
+                    expected_args.is_empty() && self.nominal_subtype(actual_name, expected_name)
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn nominal_subtype(&self, actual: &str, expected: &str) -> bool {
+        if actual == expected {
+            return true;
+        }
+        let mut pending = vec![actual.to_owned()];
+        let mut visited = BTreeSet::new();
+        while let Some(name) = pending.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if name == expected {
+                return true;
+            }
+            let Some(info) = self.classes.get(&name) else {
+                continue;
+            };
+            if let Some(superclass) = &info.superclass {
+                pending.push(superclass.clone());
+            }
+            pending.extend(info.includes.iter().cloned());
+            pending.extend(info.prepends.iter().cloned());
+        }
+        false
     }
 
     fn apply_inline_assertion<'node>(&mut self, node: &Node<'node>, actual: Type) -> Type {

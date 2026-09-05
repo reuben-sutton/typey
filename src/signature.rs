@@ -3,11 +3,26 @@ use ruby_prism::{CallNode, DefNode, Node, Visit};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeywordParam {
+    pub type_: Type,
+    pub required: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MethodSig {
     pub params: Vec<Type>,
+    /// Names from Sorbet's `params(name: Type)` form. RBS keyword parameters
+    /// are stored in `keywords`; these names let the analyzer reconcile
+    /// Sorbet's syntax with the actual Prism parameter shape.
+    pub param_names: Vec<String>,
     pub return_type: Type,
     pub required_params: usize,
     pub accepts_rest: bool,
+    pub keywords: BTreeMap<String, KeywordParam>,
+    pub accepts_keyword_rest: bool,
+    /// `void` is an effect/contract: calls produce Nil, but the final Ruby
+    /// expression in the implementation is not checked as a return value.
+    pub is_void: bool,
 }
 
 impl MethodSig {
@@ -16,6 +31,10 @@ impl MethodSig {
         Self {
             required_params: params.len(),
             accepts_rest: false,
+            accepts_keyword_rest: false,
+            is_void: false,
+            keywords: BTreeMap::new(),
+            param_names: Vec::new(),
             params,
             return_type,
         }
@@ -298,21 +317,31 @@ fn only_trivia(source: &[u8]) -> bool {
 
 #[must_use]
 pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
+    let mut param_names = Vec::new();
     let params = extract_call(text, "params").map_or_else(Vec::new, |body| {
         split_top_level(&body, ',')
             .into_iter()
-            .filter_map(|part| part.split_once(':').map(|(_, ty)| parse_type(ty)))
+            .filter_map(|part| {
+                split_top_level_colon(&part).map(|(name, ty)| {
+                    param_names.push(name.trim().trim_start_matches('*').to_owned());
+                    parse_type(ty)
+                })
+            })
             .collect()
     });
 
-    let return_type = if text.contains(".void") {
+    let is_void = text.contains(".void");
+    let return_type = if is_void {
         Type::Nil
     } else {
         extract_call(text, "returns").map_or(Type::Any, |body| parse_type(&body))
     };
 
     if text.contains("params") || text.contains("returns") || text.contains(".void") {
-        Some(MethodSig::new(params, return_type))
+        let mut signature = MethodSig::new(params, return_type);
+        signature.param_names = param_names;
+        signature.is_void = is_void;
+        Some(signature)
     } else {
         None
     }
@@ -324,8 +353,16 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
     let arrow = find_top_level_arrow(text)?;
     let left = text[..arrow].trim();
     let right = text[arrow + 2..].trim();
+    let left = if left.starts_with('[') {
+        let close = matching_delimiter(left, 0, '[', ']')?;
+        left[close + 1..].trim()
+    } else {
+        left
+    };
     let mut required_params = 0;
     let mut accepts_rest = false;
+    let mut accepts_keyword_rest = false;
+    let mut keywords = BTreeMap::new();
     let params = if left.starts_with('(') {
         let close = matching_delimiter(left, 0, '(', ')')?;
         split_top_level(&left[1..close], ',')
@@ -334,6 +371,25 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
             .filter_map(|part| {
                 let trimmed = part.trim();
                 if trimmed.starts_with('{') || trimmed.starts_with("?{") {
+                    return None;
+                }
+                if trimmed.starts_with("**") {
+                    accepts_keyword_rest = true;
+                    return None;
+                }
+                if let Some((name, type_)) = split_top_level_colon(trimmed) {
+                    let name = name.trim();
+                    let required = !name.starts_with('?');
+                    let name = name.trim_start_matches('?').to_owned();
+                    if !name.is_empty() {
+                        keywords.insert(
+                            name,
+                            KeywordParam {
+                                type_: parse_type(type_),
+                                required,
+                            },
+                        );
+                    }
                     return None;
                 }
                 if trimmed.starts_with('*') {
@@ -347,11 +403,16 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
     } else {
         Vec::new()
     };
+    let is_void = right == "void";
     Some(MethodSig {
         params,
+        param_names: Vec::new(),
         return_type: parse_type(right),
         required_params,
         accepts_rest,
+        keywords,
+        accepts_keyword_rest,
+        is_void,
     })
 }
 
@@ -378,6 +439,10 @@ pub fn parse_type(raw: &str) -> Type {
     if intersection.len() > 1 {
         return Type::intersection(intersection.into_iter().map(|part| parse_type(&part)));
     }
+    let tuple = split_top_level(&text, ',');
+    if tuple.len() > 1 {
+        return Type::Tuple(tuple.into_iter().map(|part| parse_type(&part)).collect());
+    }
 
     if let Some(inner) = text.strip_suffix('?') {
         return Type::union([Type::Nil, parse_type(inner)]);
@@ -386,6 +451,18 @@ pub fn parse_type(raw: &str) -> Type {
         // RBS uses a leading ? on method parameters to mean optional, not
         // nilable. At this layer the type itself remains the inner type.
         return parse_type(inner);
+    }
+
+    if text.starts_with('[') && matching_delimiter(&text, 0, '[', ']') == Some(text.len() - 1) {
+        let body = &text[1..text.len() - 1];
+        return Type::Tuple(if body.trim().is_empty() {
+            Vec::new()
+        } else {
+            split_top_level(body, ',')
+                .into_iter()
+                .map(|part| parse_type(&part))
+                .collect()
+        });
     }
 
     let normalized = text.trim_start_matches("::");
@@ -479,6 +556,14 @@ pub fn parse_type(raw: &str) -> Type {
     if normalized == "Hash" {
         return Type::Hash(Box::new(Type::Any), Box::new(Type::Any));
     }
+    if normalized.len() == 1
+        && normalized
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_uppercase)
+    {
+        return Type::TypeVar(normalized.to_owned());
+    }
     Type::Named(normalized.to_owned(), Vec::new())
 }
 
@@ -497,7 +582,12 @@ fn parse_rbs_parameter(raw: String) -> Type {
     }
     let tokens = text.split_whitespace().collect::<Vec<_>>();
     if tokens.len() > 1 {
-        parse_type(tokens[0])
+        let name_start = text
+            .char_indices()
+            .rev()
+            .find(|(_, character)| character.is_whitespace())
+            .map_or(text.len(), |(index, _)| index);
+        parse_type(text[..name_start].trim())
     } else {
         parse_type(&text)
     }

@@ -25,6 +25,8 @@ pub enum Type {
     Array(Box<Type>),
     /// A hash with inferred key and value types.
     Hash(Box<Type>, Box<Type>),
+    /// A fixed-length tuple, used by RBS `[A, B]` signatures.
+    Tuple(Vec<Type>),
     /// A callable type.  This is intentionally compact until block typing is
     /// expanded to model keyword and rest parameters.
     Proc(Vec<Type>, Box<Type>),
@@ -135,6 +137,14 @@ impl Type {
                     Box::new(left_return.join(right_return)),
                 ))
             }
+            (Self::Tuple(left), Self::Tuple(right)) if left.len() == right.len() => {
+                Some(Self::Tuple(
+                    left.iter()
+                        .zip(right)
+                        .map(|(left, right)| left.join(right))
+                        .collect(),
+                ))
+            }
             (Self::Named(left_name, left_args), Self::Named(right_name, right_args))
                 if left_name == right_name
                     && (left_args.is_empty()
@@ -199,6 +209,12 @@ impl Type {
             (Self::Hash(left_key, left_value), Self::Hash(right_key, right_value)) => Self::Hash(
                 Box::new(left_key.meet(right_key)),
                 Box::new(left_value.meet(right_value)),
+            ),
+            (Self::Tuple(left), Self::Tuple(right)) if left.len() == right.len() => Self::Tuple(
+                left.iter()
+                    .zip(right)
+                    .map(|(left, right)| left.meet(right))
+                    .collect(),
             ),
             (Self::Proc(left_params, left_return), Self::Proc(right_params, right_return))
                 if left_params.len() == right_params.len() =>
@@ -362,6 +378,7 @@ impl Type {
             | (Self::Symbol, Self::Object)
             | (Self::Array(_), Self::Object)
             | (Self::Hash(_, _), Self::Object)
+            | (Self::Tuple(_), Self::Object)
             | (Self::Named(_, _), Self::Object)
             | (Self::Proc(_, _), Self::Object) => true,
             (Self::Integer, Self::Named(name, args)) | (Self::Float, Self::Named(name, args))
@@ -375,6 +392,16 @@ impl Type {
             (Self::Array(actual), Self::Array(expected)) => actual.is_subtype_of(expected),
             (Self::Hash(actual_key, actual_value), Self::Hash(expected_key, expected_value)) => {
                 actual_key.is_subtype_of(expected_key) && actual_value.is_subtype_of(expected_value)
+            }
+            (Self::Tuple(actual), Self::Tuple(expected)) => {
+                actual.len() == expected.len()
+                    && actual
+                        .iter()
+                        .zip(expected)
+                        .all(|(actual, expected)| actual.is_subtype_of(expected))
+            }
+            (Self::Tuple(actual), Self::Array(expected)) => {
+                actual.iter().all(|actual| actual.is_subtype_of(expected))
             }
             (
                 Self::Proc(actual_params, actual_return),
@@ -496,6 +523,16 @@ impl fmt::Display for Type {
             }
             Self::Array(element) => write!(f, "T::Array[{element}]"),
             Self::Hash(key, value) => write!(f, "T::Hash[{key}, {value}]"),
+            Self::Tuple(types) => {
+                write!(f, "[")?;
+                for (index, type_) in types.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{type_}")?;
+                }
+                write!(f, "]")
+            }
             Self::Proc(params, result) => {
                 write!(f, "T.proc")?;
                 if !params.is_empty() {

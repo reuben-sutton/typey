@@ -334,7 +334,17 @@ fn lattice_facade_has_top_and_bottom_identities() {
         typey::signature::parse_type("T.proc.params(value: Integer).returns(String)"),
         Type::Proc(vec![Type::Integer], Box::new(Type::String))
     );
+    assert_eq!(
+        typey::signature::parse_type("[Integer, String]"),
+        Type::Tuple(vec![Type::Integer, Type::String])
+    );
+    assert_eq!(
+        typey::signature::parse_type("Array[(Integer, String)]"),
+        Type::Array(Box::new(Type::Tuple(vec![Type::Integer, Type::String])))
+    );
     assert!(Type::Integer.is_subtype_of(&Type::Object));
+    assert!(Type::Tuple(vec![Type::Integer, Type::String])
+        .is_subtype_of(&Type::Array(Box::new(Type::Object))));
 }
 
 #[test]
@@ -400,4 +410,41 @@ fn ast_annotation_collection_ignores_fixture_text() {
         .expect("real definition has a signature");
     assert_eq!(signature.params, vec![Type::Integer]);
     assert_eq!(signature.return_type, Type::Integer);
+}
+
+#[test]
+fn checks_rbs_and_sorbet_keyword_arguments_by_name() {
+    let source = r#"#: (value: String, ?suffix: String) -> String
+def rbs_join(value:, suffix: "")
+  value + suffix
+end
+
+sig { params(value: String, suffix: String).returns(String) }
+def sorbet_join(value:, suffix: "")
+  value + suffix
+end
+
+rbs_join(value: "a", suffix: "b")
+sorbet_join(value: "a", suffix: "b")
+"#;
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn uses_declared_inheritance_for_assignability() {
+    let source = r#"class Parent
+end
+
+class Child < Parent
+end
+
+#: (Parent) -> void
+def accept(value)
+end
+
+accept(Child.new)
+"#;
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
 }
