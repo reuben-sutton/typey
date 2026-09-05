@@ -5718,6 +5718,15 @@ impl<'src> Analyzer<'src> {
                     Type::Named(class.clone(), Vec::new())
                 }
             }
+            Type::Named(class, _) if name_matches(class, "Regexp") => match name {
+                "match" => Type::union([Type::Nil, Type::named("MatchData")]),
+                "match?" | "===" => Type::bool(),
+                "=~" => Type::union([Type::Nil, Type::Integer]),
+                "source" | "to_s" => Type::String,
+                "options" => Type::Integer,
+                "encoding" => Type::named("Encoding"),
+                _ => self.eval_common_method(name),
+            },
             Type::Named(class, arguments)
                 if name == "each" && name_matches(class, "Enumerable") =>
             {
@@ -6068,6 +6077,9 @@ impl<'src> Analyzer<'src> {
             "to_sym" | "intern" => Type::Symbol,
             "split" | "chars" | "lines" => Type::Array(Box::new(Type::String)),
             "bytes" | "codepoints" => Type::Array(Box::new(Type::Integer)),
+            "match" => Type::union([Type::Nil, Type::named("MatchData")]),
+            "match?" => Type::bool(),
+            "=~" => Type::union([Type::Nil, Type::Integer]),
             "strip" | "upcase" | "downcase" | "capitalize" | "chomp" | "to_s" | "dup" | "clone"
             | "+" => Type::String,
             _ => Type::Any,
