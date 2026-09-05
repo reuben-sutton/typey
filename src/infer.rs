@@ -1204,6 +1204,9 @@ impl<'src> Analyzer<'src> {
             Type::Named(name, arguments) if name == "instance" && arguments.is_empty() => {
                 receiver_type.map_or_else(|| type_.clone(), Self::receiver_instance_type)
             }
+            Type::AttachedClass => {
+                receiver_type.map_or_else(|| Type::AttachedClass, Self::receiver_instance_type)
+            }
             Type::Named(name, arguments) => Type::Named(
                 name.clone(),
                 arguments
@@ -4456,7 +4459,8 @@ impl<'src> Analyzer<'src> {
             | Type::Proc(_, _)
             | Type::Intersection(_)
             | Type::Union(_)
-            | Type::TypeVar(_) => {
+            | Type::TypeVar(_)
+            | Type::AttachedClass => {
                 let _ = (site, environment);
                 Type::Any
             }

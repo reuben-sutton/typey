@@ -520,9 +520,55 @@ fn lattice_facade_has_top_and_bottom_identities() {
         typey::signature::parse_type("T::Class[Example]"),
         Type::Named("Class".to_owned(), vec![Type::named("Example")])
     );
+    assert_eq!(
+        typey::signature::parse_type("T.attached_class"),
+        Type::AttachedClass
+    );
     assert!(Type::Integer.is_subtype_of(&Type::Object));
     assert!(Type::Tuple(vec![Type::Integer, Type::String])
         .is_subtype_of(&Type::Array(Box::new(Type::Object))));
+}
+
+#[test]
+fn specializes_attached_class_through_inherited_class_methods() {
+    let result = check(
+        r#"
+class Base
+  extend T::Sig
+
+  sig { returns(T.attached_class) }
+  def self.build
+    new
+  end
+end
+
+class Child < Base
+end
+
+T.reveal_type(Base.build)
+T.reveal_type(Child.build)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Base`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Child`")),
+        "{notes:?}"
+    );
 }
 
 #[test]

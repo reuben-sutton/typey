@@ -37,6 +37,12 @@ pub enum Type {
     Intersection(Vec<Type>),
     /// A named generic parameter that has not been solved yet.
     TypeVar(String),
+    /// Sorbet's late-bound class associated with the current class receiver.
+    ///
+    /// Unlike `T.self_type`, this is primarily used by class/module methods:
+    /// when an inherited method is called through `Child`, it resolves to the
+    /// `Child` instance type rather than the method's declaring class.
+    AttachedClass,
 }
 
 impl Type {
@@ -585,6 +591,7 @@ impl fmt::Display for Type {
                 write!(f, ")")
             }
             Self::TypeVar(name) => write!(f, "{name}"),
+            Self::AttachedClass => write!(f, "T.attached_class"),
         }
     }
 }
