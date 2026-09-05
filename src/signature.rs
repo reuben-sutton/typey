@@ -18,6 +18,8 @@ pub struct MethodSig {
     pub return_type: Type,
     pub required_params: usize,
     pub accepts_rest: bool,
+    /// Positional slot whose type applies to every variadic argument.
+    pub rest_index: Option<usize>,
     pub keywords: BTreeMap<String, KeywordParam>,
     pub accepts_keyword_rest: bool,
     /// Sorbet method-level type parameters declared by `type_parameters`.
@@ -35,6 +37,7 @@ impl MethodSig {
         Self {
             required_params: params.len(),
             accepts_rest: false,
+            rest_index: None,
             accepts_keyword_rest: false,
             is_void: false,
             keywords: BTreeMap::new(),
@@ -43,6 +46,26 @@ impl MethodSig {
             type_parameters: Vec::new(),
             return_type,
         }
+    }
+
+    #[must_use]
+    pub fn positional_type(&self, index: usize, argument_count: usize) -> Option<&Type> {
+        let Some(rest_index) = self.rest_index else {
+            return self.params.get(index);
+        };
+        if index < rest_index {
+            return self.params.get(index);
+        }
+
+        let post_count = self.params.len().saturating_sub(rest_index + 1);
+        let has_all_posts = argument_count >= rest_index + post_count;
+        if has_all_posts && post_count > 0 {
+            let post_start = argument_count - post_count;
+            if index >= post_start {
+                return self.params.get(rest_index + 1 + index - post_start);
+            }
+        }
+        self.params.get(rest_index)
     }
 }
 
@@ -422,45 +445,48 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
     };
     let mut required_params = 0;
     let mut accepts_rest = false;
+    let mut rest_index = None;
     let mut accepts_keyword_rest = false;
     let mut keywords = BTreeMap::new();
     let params = if left.starts_with('(') {
         let close = matching_delimiter(left, 0, '(', ')')?;
-        split_top_level(&left[1..close], ',')
-            .into_iter()
-            .filter(|part| !part.trim().is_empty())
-            .filter_map(|part| {
-                let trimmed = part.trim();
-                if trimmed.starts_with('{') || trimmed.starts_with("?{") {
-                    return None;
+        let mut params = Vec::new();
+        for part in split_top_level(&left[1..close], ',') {
+            if part.trim().is_empty() {
+                continue;
+            }
+            let trimmed = part.trim();
+            if trimmed.starts_with('{') || trimmed.starts_with("?{") {
+                continue;
+            }
+            if trimmed.starts_with("**") {
+                accepts_keyword_rest = true;
+                continue;
+            }
+            if let Some((name, type_)) = split_top_level_colon(trimmed) {
+                let name = name.trim();
+                let required = !name.starts_with('?');
+                let name = name.trim_start_matches('?').to_owned();
+                if !name.is_empty() {
+                    keywords.insert(
+                        name,
+                        KeywordParam {
+                            type_: parse_type(type_),
+                            required,
+                        },
+                    );
                 }
-                if trimmed.starts_with("**") {
-                    accepts_keyword_rest = true;
-                    return None;
-                }
-                if let Some((name, type_)) = split_top_level_colon(trimmed) {
-                    let name = name.trim();
-                    let required = !name.starts_with('?');
-                    let name = name.trim_start_matches('?').to_owned();
-                    if !name.is_empty() {
-                        keywords.insert(
-                            name,
-                            KeywordParam {
-                                type_: parse_type(type_),
-                                required,
-                            },
-                        );
-                    }
-                    return None;
-                }
-                if trimmed.starts_with('*') {
-                    accepts_rest = true;
-                } else if !trimmed.starts_with('?') {
-                    required_params += 1;
-                }
-                Some(parse_rbs_parameter(part))
-            })
-            .collect()
+                continue;
+            }
+            if trimmed.starts_with('*') {
+                accepts_rest = true;
+                rest_index = Some(params.len());
+            } else if !trimmed.starts_with('?') {
+                required_params += 1;
+            }
+            params.push(parse_rbs_parameter(part));
+        }
+        params
     } else {
         Vec::new()
     };
@@ -471,6 +497,7 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
         return_type: parse_type(right),
         required_params,
         accepts_rest,
+        rest_index,
         keywords,
         accepts_keyword_rest,
         type_parameters: Vec::new(),

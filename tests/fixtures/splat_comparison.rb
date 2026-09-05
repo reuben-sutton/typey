@@ -31,6 +31,7 @@ end
 
 # Rest parameters themselves are supported.
 accepts_rest(1, 2, 3)
+accepts_rest(1, "wrong") # error: Expected `Integer`, but found `String`
 
 # A literal has a statically known shape and can be expanded.
 fixed(*[1, "two"])

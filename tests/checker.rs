@@ -2141,6 +2141,33 @@ T.reveal_type(identity("value"))
 }
 
 #[test]
+fn infers_type_parameters_across_typed_rest_arguments() {
+    let result = check(
+        r#"
+extend T::Sig
+
+sig { type_parameters(:U).params(values: T.type_parameter(:U)).returns(T.type_parameter(:U)) }
+def first(*values)
+  T.must(values[0])
+end
+
+T.reveal_type(first(1, "value"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T.any(Integer, String)`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_unbound_sorbet_type_parameters_and_checks_method_bodies() {
     let result = check(
         r#"
@@ -2293,6 +2320,7 @@ fn tracks_optional_and_rest_rbs_parameters_for_calls() {
     let rest = typey::signature::parse_rbs_signature("(Integer, *String) -> String").unwrap();
     assert_eq!(rest.required_params, 1);
     assert!(rest.accepts_rest);
+    assert_eq!(rest.rest_index, Some(1));
 }
 
 #[test]

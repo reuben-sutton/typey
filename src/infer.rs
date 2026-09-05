@@ -27,6 +27,7 @@ fn name_matches(name: &str, bare: &str) -> bool {
 struct ParameterShape {
     required_positional: usize,
     accepts_rest: bool,
+    rest_index: Option<usize>,
     keywords: BTreeMap<String, bool>,
     accepts_keyword_rest: bool,
 }
@@ -41,6 +42,9 @@ impl ParameterShape {
             || parameters
                 .keyword_rest()
                 .is_some_and(|node| node.as_forwarding_parameter_node().is_some());
+        let rest_index = parameters
+            .rest()
+            .map(|_| parameters.requireds().len() + parameters.optionals().len());
         let mut keywords = BTreeMap::new();
         for parameter in &parameters.keywords() {
             if let Some(required) = parameter.as_required_keyword_parameter_node() {
@@ -52,6 +56,7 @@ impl ParameterShape {
         Self {
             required_positional,
             accepts_rest,
+            rest_index,
             keywords,
             accepts_keyword_rest: parameters.keyword_rest().is_some_and(|node| {
                 node.as_keyword_rest_parameter_node().is_some()
@@ -86,6 +91,7 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     result.param_names.clear();
     result.required_params = shape.required_positional.min(result.params.len());
     result.accepts_rest |= shape.accepts_rest;
+    result.rest_index = shape.rest_index;
     result.accepts_keyword_rest |= shape.accepts_keyword_rest;
     result.keywords = keywords;
     result
@@ -133,6 +139,10 @@ fn merge_method_signatures(signatures: &[MethodSig]) -> MethodSig {
             .min()
             .unwrap_or(first.required_params),
         accepts_rest: signatures.iter().any(|signature| signature.accepts_rest),
+        rest_index: signatures
+            .iter()
+            .find(|signature| signature.accepts_rest)
+            .and_then(|signature| signature.rest_index),
         keywords,
         accepts_keyword_rest: signatures
             .iter()
@@ -621,7 +631,7 @@ impl MethodState {
         let signature = merge_method_signatures(signatures);
         Self {
             params: signature.params.iter().cloned().map(Some).collect(),
-            rest_index: None,
+            rest_index: signature.rest_index,
             keywords: signature
                 .keywords
                 .iter()
@@ -731,6 +741,7 @@ impl MethodState {
             return_type: Type::Any,
             required_params: self.required_params,
             accepts_rest: self.accepts_rest,
+            rest_index: self.rest_index,
             keywords: self
                 .keywords
                 .iter()
@@ -761,6 +772,7 @@ impl MethodState {
             return_type: self.return_type.clone().unwrap_or(Type::Never),
             required_params: self.required_params,
             accepts_rest: self.accepts_rest,
+            rest_index: self.rest_index,
             keywords: self
                 .keywords
                 .iter()
@@ -1457,8 +1469,10 @@ impl<'src> Analyzer<'src> {
         } else {
             &arguments.argument_types
         };
-        for (actual, expected) in positional_types.iter().zip(&signature.params) {
-            self.collect_type_parameter_binding(expected, actual, &names, &mut bindings);
+        for (index, actual) in positional_types.iter().enumerate() {
+            if let Some(expected) = signature.positional_type(index, positional_types.len()) {
+                self.collect_type_parameter_binding(expected, actual, &names, &mut bindings);
+            }
         }
         if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
             for argument in &arguments.keyword_arguments {
@@ -5157,19 +5171,18 @@ impl<'src> Analyzer<'src> {
             }
         }
         let type_parameter_bindings = self.infer_type_parameter_bindings(signature, arguments);
-        if !positional_types
-            .iter()
-            .zip(&signature.params)
-            .all(|(actual, expected)| {
-                let expected = self.substitute_signature_type(
-                    expected,
-                    None,
-                    &type_parameter_bindings,
-                    &signature.type_parameters,
-                );
-                self.is_assignable(actual, &expected)
-            })
-        {
+        if !positional_types.iter().enumerate().all(|(index, actual)| {
+            let Some(expected) = signature.positional_type(index, positional_types.len()) else {
+                return false;
+            };
+            let expected = self.substitute_signature_type(
+                expected,
+                None,
+                &type_parameter_bindings,
+                &signature.type_parameters,
+            );
+            self.is_assignable(actual, &expected)
+        }) {
             return false;
         }
         if keyword_mode
@@ -6457,13 +6470,16 @@ impl<'src> Analyzer<'src> {
             && !arguments.has_unknown_positional_splat
             && !arguments.has_unknown_keyword_splat
         {
-            for ((argument_index, actual), expected) in arguments
+            for (index, (argument_index, actual)) in arguments
                 .positional_indices
                 .iter()
                 .zip(argument_types)
-                .zip(&signature.params)
+                .enumerate()
             {
-                if let Some(argument) = arguments.argument_nodes.get(*argument_index) {
+                if let (Some(argument), Some(expected)) = (
+                    arguments.argument_nodes.get(*argument_index),
+                    signature.positional_type(index, argument_types.len()),
+                ) {
                     let expected = self.substitute_signature_type(
                         expected,
                         receiver_type,
@@ -6477,13 +6493,16 @@ impl<'src> Analyzer<'src> {
             && !arguments.has_unknown_positional_splat
             && !arguments.has_unknown_keyword_splat
         {
-            for ((argument_index, actual), expected) in arguments
+            for (index, (argument_index, actual)) in arguments
                 .argument_indices
                 .iter()
                 .zip(argument_types)
-                .zip(&signature.params)
+                .enumerate()
             {
-                if let Some(argument) = arguments.argument_nodes.get(*argument_index) {
+                if let (Some(argument), Some(expected)) = (
+                    arguments.argument_nodes.get(*argument_index),
+                    signature.positional_type(index, argument_types.len()),
+                ) {
                     let expected = self.substitute_signature_type(
                         expected,
                         receiver_type,
