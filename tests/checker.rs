@@ -2559,6 +2559,45 @@ accept(Node)
 }
 
 #[test]
+fn propagates_rbs_block_parameter_types_and_method_type_parameters() {
+    let signature = typey::signature::parse_rbs_signature(
+        "[T] (Class[T] arg_type) { (T arg) -> void } -> void",
+    )
+    .expect("signature parses");
+    assert_eq!(
+        signature.block,
+        Some(Type::Proc(
+            vec![Type::TypeVar("T".to_owned())],
+            Box::new(Type::Nil)
+        ))
+    );
+
+    let result = check(
+        r#"
+#: [T] (Class[T] arg_type) { (T arg) -> void } -> void
+def each_arg(arg_type, &block)
+  yield(T.unsafe(nil)) if true
+end
+
+each_arg(Integer) do |arg|
+  T.reveal_type(arg)
+  nil
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic.message.contains("Revealed type: `Integer`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn accepts_sorbet_rbs_assertion_spacing_and_comment_tails() {
     let source = "value = nil #: as !nil # trailing comment\nother = 1#:as String\n";
     let annotations = typey::signature::collect(source);

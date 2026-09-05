@@ -143,7 +143,9 @@ fn typed_false_files_keep_declarations_but_suppress_local_diagnostics() {
         result
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.diagnostic.severity == typey::diagnostic::Severity::Error)
+            .filter(
+                |diagnostic| diagnostic.diagnostic.severity == typey::diagnostic::Severity::Error
+            )
             .count(),
         1,
         "unexpected workspace diagnostics: {:?}",

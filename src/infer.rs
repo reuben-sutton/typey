@@ -156,6 +156,11 @@ fn merge_method_signatures(signatures: &[MethodSig]) -> MethodSig {
                 }
                 names
             }),
+        block: signatures
+            .iter()
+            .filter_map(|signature| signature.block.as_ref())
+            .cloned()
+            .reduce(|current, block| current.join(&block)),
         is_void: signatures.iter().all(|signature| signature.is_void),
     }
 }
@@ -616,6 +621,7 @@ struct MethodState {
     keywords: BTreeMap<String, Option<Type>>,
     yield_params: Vec<Option<Type>>,
     block_return_type: Option<Type>,
+    block: Option<Type>,
     required_keywords: BTreeSet<String>,
     return_type: Option<Type>,
     return_terminates: bool,
@@ -630,6 +636,17 @@ struct MethodState {
 impl MethodState {
     fn explicit_overloads(signatures: &[MethodSig]) -> Self {
         let signature = merge_method_signatures(signatures);
+        let (yield_params, block_return_type) = signature
+            .block
+            .as_ref()
+            .and_then(|block| match block {
+                Type::Proc(parameters, return_type) => Some((
+                    parameters.iter().cloned().map(Some).collect(),
+                    Some((**return_type).clone()),
+                )),
+                _ => None,
+            })
+            .unwrap_or_default();
         Self {
             params: signature.params.iter().cloned().map(Some).collect(),
             rest_index: signature.rest_index,
@@ -638,8 +655,9 @@ impl MethodState {
                 .iter()
                 .map(|(name, parameter)| (name.clone(), Some(parameter.type_.clone())))
                 .collect(),
-            yield_params: Vec::new(),
-            block_return_type: None,
+            yield_params,
+            block_return_type,
+            block: signature.block.clone(),
             required_keywords: signature
                 .keywords
                 .iter()
@@ -698,6 +716,7 @@ impl MethodState {
                 keywords,
                 yield_params: Vec::new(),
                 block_return_type: None,
+                block: None,
                 required_keywords,
                 return_type: None,
                 return_terminates: false,
@@ -719,6 +738,7 @@ impl MethodState {
             keywords,
             yield_params: Vec::new(),
             block_return_type: None,
+            block: None,
             required_keywords,
             return_type: None,
             return_terminates: false,
@@ -758,6 +778,7 @@ impl MethodState {
                 .collect(),
             accepts_keyword_rest: self.accepts_keyword_rest,
             type_parameters: Vec::new(),
+            block: self.block.clone(),
             is_void: false,
         }
     }
@@ -789,6 +810,14 @@ impl MethodState {
                 .collect(),
             accepts_keyword_rest: self.accepts_keyword_rest,
             type_parameters: Vec::new(),
+            block: self.block.clone().or_else(|| {
+                (!self.yield_params.is_empty() || self.block_return_type.is_some()).then(|| {
+                    Type::Proc(
+                        self.block_parameters(),
+                        Box::new(self.block_return_type.clone().unwrap_or(Type::Any)),
+                    )
+                })
+            }),
             is_void: self.is_void,
         }
     }
@@ -864,10 +893,24 @@ impl MethodState {
     }
 
     fn block_parameters(&self) -> Vec<Type> {
+        if let Some(Type::Proc(parameters, _)) = &self.block {
+            return parameters.clone();
+        }
         self.yield_params
             .iter()
             .map(|type_| type_.clone().unwrap_or(Type::Any))
             .collect()
+    }
+
+    fn block_result_type(&self) -> Type {
+        self.block
+            .as_ref()
+            .and_then(|block| match block {
+                Type::Proc(_, result) => Some((**result).clone()),
+                _ => None,
+            })
+            .or_else(|| self.block_return_type.clone())
+            .unwrap_or(Type::Any)
     }
 
     fn observe_yield_arguments(&mut self, actual: &[Type]) -> bool {
@@ -1983,6 +2026,14 @@ impl<'src> Analyzer<'src> {
                 )
             })
             .collect();
+        result.block = signature.block.as_ref().map(|block| {
+            self.substitute_signature_type(
+                block,
+                receiver_type,
+                &bindings,
+                &signature.type_parameters,
+            )
+        });
         result
     }
 
@@ -4179,7 +4230,7 @@ impl<'src> Analyzer<'src> {
                         prism::constant_name(name),
                         Type::Proc(
                             state.block_parameters(),
-                            Box::new(state.block_return_type.clone().unwrap_or(Type::Any)),
+                            Box::new(state.block_result_type()),
                         ),
                     );
                 }
@@ -4285,7 +4336,15 @@ impl<'src> Analyzer<'src> {
         let Some(signature) = self.observe_call(&target, &arguments) else {
             return Type::Any;
         };
-        self.observe_block_call(&target, block, environment);
+        let receiver_type = environment.self_type.clone();
+        self.observe_block_call(
+            &target,
+            block,
+            &signature,
+            &arguments,
+            Some(&receiver_type),
+            environment,
+        );
         self.invoke_signature(
             node,
             &target.name,
@@ -4904,7 +4963,15 @@ impl<'src> Analyzer<'src> {
             let key = self.implicit_method_key(&name, environment);
             self.record_method_dependency(&key, environment);
             if let Some(signature) = self.observe_call(&key, &arguments) {
-                self.observe_block_call(&key, block.as_ref(), environment);
+                let receiver_type = environment.self_type.clone();
+                self.observe_block_call(
+                    &key,
+                    block.as_ref(),
+                    &signature,
+                    &arguments,
+                    Some(&receiver_type),
+                    environment,
+                );
                 self.invoke_signature(
                     node,
                     &name,
@@ -4963,7 +5030,14 @@ impl<'src> Analyzer<'src> {
             ) {
                 self.record_method_dependency(&key, environment);
                 if let Some(signature) = self.observe_call(&key, &arguments) {
-                    self.observe_block_call(&key, block.as_ref(), environment);
+                    self.observe_block_call(
+                        &key,
+                        block.as_ref(),
+                        &signature,
+                        &arguments,
+                        Some(&dispatch_receiver_type),
+                        environment,
+                    );
                     self.invoke_signature(
                         node,
                         &name,
@@ -5117,6 +5191,9 @@ impl<'src> Analyzer<'src> {
         &mut self,
         key: &MethodKey,
         block: Option<&Node<'node>>,
+        signature: &MethodSig,
+        arguments: &CallArguments<'node>,
+        receiver_type: Option<&Type>,
         environment: &mut Environment,
     ) {
         let Some(block) = block else {
@@ -5125,15 +5202,41 @@ impl<'src> Analyzer<'src> {
         let Some(key) = self.resolve_method_key(key) else {
             return;
         };
-        let expected = self
-            .methods
-            .get(&key)
-            .map_or_else(Vec::new, MethodState::block_parameters);
+        let mut bindings = self.infer_type_parameter_bindings(signature, arguments);
+        bindings.extend(self.infer_generic_member_bindings(signature, arguments, receiver_type));
+        let block_signature = signature.block.as_ref().map(|block| {
+            self.substitute_signature_type(
+                block,
+                receiver_type,
+                &bindings,
+                &signature.type_parameters,
+            )
+        });
+        let expected = block_signature
+            .as_ref()
+            .and_then(|block| match block {
+                Type::Proc(parameters, _) => Some(parameters.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                self.methods
+                    .get(&key)
+                    .map_or_else(Vec::new, MethodState::block_parameters)
+            });
         let block_type = self.eval_block_node(block, &expected, environment);
-        if self
-            .methods
-            .get_mut(&key)
-            .is_some_and(|state| state.observe_block_return(&block_type))
+        if let Some(Type::Proc(_, expected_return)) = block_signature.as_ref() {
+            if !expected_return.is_any()
+                && !expected_return.is_nil()
+                && !self.is_assignable(&block_type, expected_return)
+            {
+                self.check_assignable(block, &block_type, expected_return);
+            }
+        }
+        if self.methods.get(&key).is_some_and(|state| !state.explicit)
+            && self
+                .methods
+                .get_mut(&key)
+                .is_some_and(|state| state.observe_block_return(&block_type))
         {
             self.changed_methods.insert(key);
         }
@@ -6848,6 +6951,9 @@ impl<'src> Analyzer<'src> {
                 )
             })
             .collect();
+        result.block = signature.block.as_ref().map(|block| {
+            self.resolve_type_names_with_locals(block, owner, &signature.type_parameters)
+        });
         result
     }
 

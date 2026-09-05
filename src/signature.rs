@@ -26,6 +26,9 @@ pub struct MethodSig {
     /// The names are used to solve `T.type_parameter(:Name)` occurrences at
     /// each call site.
     pub type_parameters: Vec<String>,
+    /// RBS block contract, represented as a callable type. The block's
+    /// parameters are used when evaluating `yield` and passed blocks.
+    pub block: Option<Type>,
     /// `void` is an effect/contract: calls produce Nil, but the final Ruby
     /// expression in the implementation is not checked as a return value.
     pub is_void: bool,
@@ -44,6 +47,7 @@ impl MethodSig {
             param_names: Vec::new(),
             params,
             type_parameters: Vec::new(),
+            block: None,
             return_type,
         }
     }
@@ -453,6 +457,7 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
     let mut rest_index = None;
     let mut accepts_keyword_rest = false;
     let mut keywords = BTreeMap::new();
+    let mut block = None;
     let params = if left.starts_with('(') {
         let close = matching_delimiter(left, 0, '(', ')')?;
         let mut params = Vec::new();
@@ -462,6 +467,7 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
             }
             let trimmed = part.trim();
             if trimmed.starts_with('{') || trimmed.starts_with("?{") {
+                block = parse_rbs_block_type(trimmed);
                 continue;
             }
             if trimmed.starts_with("**") {
@@ -491,6 +497,9 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
             }
             params.push(parse_rbs_parameter(part));
         }
+        if block.is_none() {
+            block = parse_rbs_block_type(left[close + 1..].trim());
+        }
         params
     } else {
         Vec::new()
@@ -506,8 +515,18 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
         keywords,
         accepts_keyword_rest,
         type_parameters,
+        block,
         is_void,
     })
+}
+
+fn parse_rbs_block_type(text: &str) -> Option<Type> {
+    let text = text.trim().strip_prefix('?').unwrap_or(text).trim();
+    let close = matching_delimiter(text, 0, '{', '}')?;
+    if close + 1 != text.len() {
+        return None;
+    }
+    parse_rbs_proc_type(&format!("^{}", text[1..close].trim()))
 }
 
 fn parse_type_parameter_name(raw: &str) -> Option<String> {
