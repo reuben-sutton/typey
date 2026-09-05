@@ -1540,6 +1540,49 @@ T.reveal_type(hash["other"] = "text")
 }
 
 #[test]
+fn preserves_index_compound_assignment_results() {
+    let result = check(
+        r#"
+values = [1]
+hash = {"answer" => 1}
+
+T.reveal_type(values[0] += 2.0)
+T.reveal_type(hash["answer"] += 2.0)
+T.reveal_type(values[0] &&= "updated")
+T.reveal_type(hash["missing"] ||= "fallback")
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Float`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.nilable(String)`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.any(Integer, String)`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn preserves_built_in_class_object_and_global_call_types() {
     let result = check(
         r#"

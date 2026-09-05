@@ -500,6 +500,20 @@ struct CallArgumentEvaluation<'node> {
     all_normal: bool,
 }
 
+struct IndexAccess<'node> {
+    receiver_type: Type,
+    arguments: CallArguments<'node>,
+    abrupt: OutcomeTypes,
+    abrupt_flow: Flow,
+    all_normal: bool,
+}
+
+enum IndexAssignmentKind {
+    Operator(String),
+    And,
+    Or,
+}
+
 impl Eval {
     fn value(type_: Type) -> Self {
         Self {
@@ -2212,6 +2226,79 @@ impl<'src> Analyzer<'src> {
         Eval::from_parts(normal_type, abrupt, flow)
     }
 
+    fn eval_index_access<'node>(
+        &mut self,
+        receiver_node: Option<Node<'node>>,
+        arguments: Option<ruby_prism::ArgumentsNode<'node>>,
+        environment: &mut Environment,
+    ) -> IndexAccess<'node> {
+        let receiver_result = receiver_node.as_ref().map_or_else(
+            || Eval::value(Type::Object),
+            |receiver| self.eval_node(receiver, environment),
+        );
+        let argument_nodes = arguments
+            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let evaluated = self.evaluate_call_arguments(argument_nodes, environment);
+        let receiver_type = receiver_result.normal_type.clone().unwrap_or(Type::Never);
+        IndexAccess {
+            receiver_type,
+            arguments: evaluated.arguments,
+            abrupt: receiver_result.abrupt.join(&evaluated.abrupt),
+            abrupt_flow: receiver_result
+                .flow
+                .without(FlowKind::Normal)
+                .union(evaluated.abrupt_flow),
+            all_normal: receiver_result.normal_type.is_some() && evaluated.all_normal,
+        }
+    }
+
+    fn eval_index_assignment<'node>(
+        &mut self,
+        node: &Node<'node>,
+        receiver_node: Option<Node<'node>>,
+        arguments: Option<ruby_prism::ArgumentsNode<'node>>,
+        value_node: Node<'node>,
+        kind: IndexAssignmentKind,
+        environment: &mut Environment,
+    ) -> Eval {
+        let access = self.eval_index_access(receiver_node, arguments, environment);
+        let site = CallSite {
+            argument_nodes: &access.arguments.argument_nodes,
+            argument_types: &access.arguments.argument_types,
+            block: None,
+        };
+        let current = self.eval_method_call(&access.receiver_type, "[]", &site, environment);
+        let value_result = match kind {
+            IndexAssignmentKind::Operator(operator) => self.eval_compound_assignment(
+                current.without(&Type::Nil),
+                &operator,
+                &value_node,
+                environment,
+            ),
+            IndexAssignmentKind::And => self.eval_and_assignment(current, &value_node, environment),
+            IndexAssignmentKind::Or => self.eval_or_assignment(current, &value_node, environment),
+        };
+        let normal_type = if access.all_normal {
+            value_result.normal_type
+        } else {
+            None
+        };
+        let normal_type = normal_type.map(|type_| self.apply_inline_assertion(node, type_));
+        let abrupt = access.abrupt.join(&value_result.abrupt);
+        let flow = access
+            .abrupt_flow
+            .union(value_result.flow.without(FlowKind::Normal));
+        let flow = if normal_type.is_some() {
+            Flow::normal().union(flow)
+        } else {
+            flow
+        };
+        let mut result = Eval::from_parts(normal_type, abrupt, flow);
+        result.type_ = self.record(node, result.type_.clone());
+        result
+    }
+
     fn eval_node<'node>(&mut self, node: &Node<'node>, environment: &mut Environment) -> Eval {
         if self.config.debug {
             self.debug_nodes += 1;
@@ -2942,6 +3029,37 @@ impl<'src> Analyzer<'src> {
             } else {
                 return Eval::value(type_);
             }
+        }
+        if let Some(write) = node.as_index_operator_write_node() {
+            let operator = prism::constant_name(write.binary_operator());
+            return self.eval_index_assignment(
+                node,
+                write.receiver(),
+                write.arguments(),
+                write.value(),
+                IndexAssignmentKind::Operator(operator),
+                environment,
+            );
+        }
+        if let Some(write) = node.as_index_and_write_node() {
+            return self.eval_index_assignment(
+                node,
+                write.receiver(),
+                write.arguments(),
+                write.value(),
+                IndexAssignmentKind::And,
+                environment,
+            );
+        }
+        if let Some(write) = node.as_index_or_write_node() {
+            return self.eval_index_assignment(
+                node,
+                write.receiver(),
+                write.arguments(),
+                write.value(),
+                IndexAssignmentKind::Or,
+                environment,
+            );
         }
         if let Some(call) = node.as_call_node() {
             let mut result = self.eval_call(node, &call, environment);
