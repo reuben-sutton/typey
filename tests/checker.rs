@@ -1391,11 +1391,47 @@ T.reveal_type(__ENCODING__)
         .collect::<Vec<_>>();
     for expected in [
         "Revealed type: `T.nilable(String)`",
-        "Revealed type: `Range`",
+        "Revealed type: `Range[Integer, Integer]`",
         "Revealed type: `Regexp`",
         "Revealed type: `Integer`",
         "Revealed type: `String`",
         "Revealed type: `Encoding`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
+fn preserves_range_endpoint_and_iteration_types() {
+    let result = check(
+        r#"
+T.reveal_type((1..3).begin)
+T.reveal_type((1..3).end)
+T.reveal_type((1..3).exclude_end?)
+T.reveal_type((1..3).to_a)
+T.reveal_type((1..3).each { |value| value.to_s })
+T.reveal_type((1..3).each)
+T.reveal_type((1..3).first)
+T.reveal_type((1..3).last)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `Integer`",
+        "Revealed type: `T::Boolean`",
+        "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `Range[Integer, Integer]`",
+        "Revealed type: `Enumerator`",
     ] {
         assert!(
             notes.iter().any(|message| message.contains(expected)),

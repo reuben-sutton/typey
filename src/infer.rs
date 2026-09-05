@@ -2909,13 +2909,16 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, type_));
         }
         if let Some(range) = node.as_range_node() {
-            if let Some(left) = range.left() {
-                self.eval_node(&left, environment);
-            }
-            if let Some(right) = range.right() {
-                self.eval_node(&right, environment);
-            }
-            let type_ = self.apply_inline_assertion(node, Type::named("Range"));
+            let left_type = range
+                .left()
+                .map_or(Type::Nil, |left| self.eval_node(&left, environment).type_);
+            let right_type = range
+                .right()
+                .map_or(Type::Nil, |right| self.eval_node(&right, environment).type_);
+            let type_ = self.apply_inline_assertion(
+                node,
+                Type::Named("Range".to_owned(), vec![left_type, right_type]),
+            );
             return Eval::value(self.record(node, type_));
         }
         if node.as_regular_expression_node().is_some() {
@@ -5875,6 +5878,41 @@ impl<'src> Analyzer<'src> {
                 "encoding" => Type::named("Encoding"),
                 _ => self.eval_common_method(name),
             },
+            Type::Named(class, arguments) if name_matches(class, "Range") => {
+                let begin = arguments.first().cloned().unwrap_or(Type::Any);
+                let end = arguments.get(1).cloned().unwrap_or(Type::Any);
+                let element = begin.join(&end).without(&Type::Nil);
+                let element = if element.is_never() {
+                    Type::Any
+                } else {
+                    element
+                };
+                match name {
+                    "begin" => begin,
+                    "end" => end,
+                    "exclude_end?" => Type::bool(),
+                    "include?" | "cover?" | "member?" => Type::bool(),
+                    "to_a" => Type::Array(Box::new(element)),
+                    "each" | "step" => {
+                        if site.block.is_none() {
+                            Type::named("Enumerator")
+                        } else {
+                            if let Some(block) = site.block {
+                                let _ = self.eval_block_node(
+                                    block,
+                                    std::slice::from_ref(&element),
+                                    environment,
+                                );
+                            }
+                            Type::Named(class.clone(), arguments.clone())
+                        }
+                    }
+                    "first" => begin,
+                    "last" => end,
+                    "to_s" | "inspect" => Type::String,
+                    _ => self.eval_common_method(name),
+                }
+            }
             Type::Named(class, arguments)
                 if name == "each" && name_matches(class, "Enumerable") =>
             {
