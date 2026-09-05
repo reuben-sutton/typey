@@ -1436,6 +1436,77 @@ T.reveal_type(flag)
 }
 
 #[test]
+fn tracks_nonlocal_compound_assignments() {
+    let result = check(
+        r#"
+$total = 1
+$total += 2.0
+
+TOTAL = 1
+TOTAL += 2.0
+
+class Counter
+  @@total = 1
+  @@total += 2.0
+
+  def initialize
+    @total = 1
+    @total += 2.0
+    @ready = true
+    @ready &&= "yes"
+  end
+
+  def total
+    @total
+  end
+
+  def ready
+    @ready
+  end
+
+  def self.class_total
+    @@total
+  end
+end
+
+T.reveal_type($total)
+T.reveal_type(TOTAL)
+T.reveal_type(Counter.new.total)
+T.reveal_type(Counter.new.ready)
+T.reveal_type(Counter.class_total)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T.any(Float, Integer)`"))
+            .count(),
+        4,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T.any(String, TrueClass)`"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+    assert!(
+        !notes.iter().any(|message| message.contains("T.untyped")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn preserves_built_in_class_object_and_global_call_types() {
     let result = check(
         r#"
