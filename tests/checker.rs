@@ -2965,3 +2965,32 @@ end
         "expected compound assignment send sites, got {send_count}"
     );
 }
+
+#[test]
+fn evaluates_multi_assignment_rhs_calls() {
+    let source = r#"
+def build
+  [1, 2]
+end
+
+first, second = build
+"#;
+    let result = check(source, CheckerConfig::default());
+    let build_start = source.rfind("build").expect("build call");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == build_start && inferred.end == build_start + 5
+    }));
+}
+
+#[test]
+fn traverses_blocks_on_unknown_receivers() {
+    let source = r#"
+value = T.unsafe([])
+value.each { |item| item.to_s }
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_start = source.rfind("item.to_s").expect("block send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + 9
+    }));
+}

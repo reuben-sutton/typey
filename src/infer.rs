@@ -2733,6 +2733,50 @@ impl<'src> Analyzer<'src> {
             }
             return Eval::value(self.record(node, Type::Nil));
         }
+        if let Some(multi) = node.as_multi_write_node() {
+            let mut result = self.eval_node(&multi.value(), environment);
+            if let Some(type_) = result.normal_type.clone() {
+                let lefts = multi.lefts().into_iter().collect::<Vec<_>>();
+                let rights = multi.rights().into_iter().collect::<Vec<_>>();
+                let known_length = multi
+                    .value()
+                    .as_array_node()
+                    .map(|array| array.elements().len());
+                for (index, target) in lefts.iter().enumerate() {
+                    self.bind_for_target(
+                        target,
+                        self.multi_assignment_element_type(&type_, index, known_length),
+                        environment,
+                    );
+                }
+                if let Some(rest) = multi.rest() {
+                    self.bind_for_target(
+                        &rest,
+                        Type::union([
+                            Type::Nil,
+                            Type::Array(Box::new(self.array_element_type(&type_))),
+                        ]),
+                        environment,
+                    );
+                }
+                let right_start = known_length
+                    .map(|length| lefts.len().max(length.saturating_sub(rights.len())))
+                    .unwrap_or(0);
+                for (index, target) in rights.iter().enumerate() {
+                    self.bind_for_target(
+                        target,
+                        self.multi_assignment_element_type(
+                            &type_,
+                            right_start + index,
+                            known_length,
+                        ),
+                        environment,
+                    );
+                }
+            }
+            result.type_ = self.record(node, result.type_.clone());
+            return result;
+        }
         if let Some(write) = node.as_constant_operator_write_node() {
             let name = prism::constant_name(write.name());
             let current = self.constant_type(environment, &name);
@@ -4310,6 +4354,34 @@ impl<'src> Analyzer<'src> {
             for child in &multi.rights() {
                 self.bind_for_target(&child, type_.clone(), environment);
             }
+        }
+    }
+
+    fn multi_assignment_element_type(
+        &self,
+        type_: &Type,
+        index: usize,
+        known_length: Option<usize>,
+    ) -> Type {
+        match type_ {
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|member| self.multi_assignment_element_type(member, index, known_length)),
+            ),
+            Type::Tuple(elements) => elements.get(index).cloned().unwrap_or(Type::Nil),
+            Type::Array(element) => {
+                if known_length.is_some_and(|length| index >= length) {
+                    Type::Nil
+                } else if known_length.is_some() {
+                    element.as_ref().clone()
+                } else {
+                    Type::union([element.as_ref().clone(), Type::Nil])
+                }
+            }
+            Type::Nil => Type::Nil,
+            Type::Any => Type::Any,
+            _ => Type::Any,
         }
     }
 
@@ -6319,18 +6391,17 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Named(class.clone(), arguments.clone())
             }
-            Type::Named(_, _) => self.eval_common_method(name),
-            Type::Any => self.eval_common_method(name),
-            Type::Object
-            | Type::Never
-            | Type::Proc(_, _)
-            | Type::Intersection(_)
-            | Type::Union(_)
+            Type::Named(_, _)
+            | Type::Any
+            | Type::Object
             | Type::TypeVar(_)
             | Type::AttachedClass => {
-                let _ = (site, environment);
-                Type::Any
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, &[Type::Any], environment);
+                }
+                self.eval_common_method(name)
             }
+            Type::Never | Type::Proc(_, _) | Type::Intersection(_) | Type::Union(_) => Type::Any,
         }
     }
 
