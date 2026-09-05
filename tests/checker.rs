@@ -449,6 +449,61 @@ fn carries_explicit_flow_outcomes_through_loops_and_rescues() {
 }
 
 #[test]
+fn covers_unless_until_and_begin_else_flow() {
+    let result = check(
+        r#"
+flag = nil #: String?
+unless flag
+  T.reveal_type(flag)
+end
+
+until false
+  break "done"
+end
+loop_result = until false
+  break "done"
+end
+T.reveal_type(loop_result)
+
+begin_result = begin
+  1
+rescue StandardError
+  2
+else
+  "completed"
+end
+T.reveal_type(begin_result)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `NilClass`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.nilable(String)`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.any(Integer, String)`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn refines_locals_with_meet_and_joins_paths() {
     let result = check_fixture("tests/fixtures/lattice_flow.rb");
     let notes = result
@@ -789,6 +844,47 @@ T.reveal_type(first(["value"]))
 }
 
 #[test]
+fn specializes_type_parameters_inside_hashes() {
+    let result = check(
+        r#"
+extend T::Sig
+
+sig {
+  type_parameters(:U)
+    .params(values: T::Hash[String, T.type_parameter(:U)])
+    .returns(T::Array[T.nilable(T.type_parameter(:U))])
+}
+def values_to_array(values)
+  [values["value"]]
+end
+
+T.reveal_type(values_to_array({"value" => 1}))
+T.reveal_type(values_to_array({"value" => "text"}))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Array[T.nilable(Integer)]`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Array[T.nilable(String)]`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn specializes_attached_and_self_types_through_inheritance() {
     let result = check(
         r#"
@@ -914,6 +1010,71 @@ stringify("wrong")
     );
     assert!(
         !errors.iter().any(|message| message.contains("T.untyped")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn reports_overload_and_argument_shape_errors() {
+    let result = check(
+        r#"
+extend T::Sig
+
+sig { params(value: String).returns(String) }
+sig { params(value: Integer).returns(Integer) }
+def identity(value)
+  value
+end
+
+identity(:bad)
+
+#: (String, ?String) -> String
+def optional(value, suffix = "")
+  value + suffix
+end
+
+optional()
+optional("a", "b", "c")
+
+#: (value: String, ?suffix: String) -> String
+def keyword_join(value:, suffix: "")
+  value + suffix
+end
+
+keyword_join
+keyword_join(value: "a", extra: "!")
+"#,
+        CheckerConfig::default(),
+    );
+    let errors = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 5, "{errors:?}");
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|message| message.contains("Expected `T.any(Integer, String)"))
+            .count(),
+        1,
+        "{errors:?}"
+    );
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|message| message.contains("Wrong number of arguments for `optional`"))
+            .count(),
+        2,
+        "{errors:?}"
+    );
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|message| message.contains("Wrong number of arguments for `keyword_join`"))
+            .count(),
+        2,
         "{errors:?}"
     );
 }
@@ -1080,6 +1241,61 @@ T.reveal_type(T.unsafe(nil).to_a)
         "Revealed type: `T::Boolean`",
         "Revealed type: `Symbol`",
         "Revealed type: `Float`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        3,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn preserves_built_in_class_object_and_global_call_types() {
+    let result = check(
+        r#"
+T.reveal_type(Array.new)
+T.reveal_type(Hash.new)
+T.reveal_type(Integer("1"))
+T.reveal_type(Float("1.0"))
+T.reveal_type(String(1))
+T.reveal_type(Symbol("name"))
+T.reveal_type(rand)
+T.reveal_type(sleep(0))
+T.reveal_type(puts("ignored"))
+T.reveal_type(T.any(1, "value"))
+T.reveal_type(T.any(Integer, String))
+T.reveal_type(T.all(Object, String))
+T.reveal_type(T.nilable(String))
+T.reveal_type(T.bind(1, Integer))
+T.reveal_type(T.cast(1, String))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `Array`",
+        "Revealed type: `Hash`",
+        "Revealed type: `Integer`",
+        "Revealed type: `Float`",
+        "Revealed type: `String`",
+        "Revealed type: `Symbol`",
+        "Revealed type: `NilClass`",
+        "Revealed type: `T.any(Integer, String)`",
+        "Revealed type: `T.nilable(String)`",
     ] {
         assert!(
             notes.iter().any(|message| message.contains(expected)),
@@ -1272,6 +1488,51 @@ T.reveal_type(Fixed.new.value)
         notes
             .iter()
             .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn specializes_sorbet_type_template_members() {
+    let result = check(
+        r#"
+class Box
+  extend T::Sig
+  extend T::Generic
+  Template = type_template
+
+  sig { params(value: Template).returns(Template) }
+  def identity(value)
+    value
+  end
+end
+
+T.reveal_type(Box[Integer].new.identity(1))
+T.reveal_type(Box[String].new.identity("value"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `String`"))
+            .count(),
+        1,
         "{notes:?}"
     );
 }

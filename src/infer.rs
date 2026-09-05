@@ -4904,6 +4904,12 @@ impl<'src> Analyzer<'src> {
         argument_types: &[Type],
         environment: &mut Environment,
     ) -> Type {
+        let value_types = || {
+            argument_types
+                .iter()
+                .map(|type_| Self::class_object_value_type(type_).unwrap_or_else(|| type_.clone()))
+                .collect::<Vec<_>>()
+        };
         match name {
             "reveal_type" => {
                 if let Some(type_) = argument_types.first() {
@@ -4949,10 +4955,12 @@ impl<'src> Analyzer<'src> {
             }
             "nilable" => argument_types
                 .first()
-                .cloned()
+                .and_then(|type_| {
+                    Self::class_object_value_type(type_).or_else(|| Some(type_.clone()))
+                })
                 .map_or(Type::Any, |type_| Type::union([Type::Nil, type_])),
-            "any" => Type::union(argument_types.iter().cloned()),
-            "all" => Type::intersection(argument_types.iter().cloned()),
+            "any" => Type::union(value_types()),
+            "all" => Type::intersection(value_types()),
             "noreturn" => Type::Never,
             _ => {
                 let _ = environment;
