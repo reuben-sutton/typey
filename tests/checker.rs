@@ -556,6 +556,64 @@ fn lattice_facade_has_top_and_bottom_identities() {
 }
 
 #[test]
+fn parses_the_supported_advanced_sorbet_type_forms() {
+    assert_eq!(
+        typey::signature::parse_type("T.nilable(String)"),
+        Type::union([Type::Nil, Type::String])
+    );
+    assert_eq!(
+        typey::signature::parse_type("T.any(Integer, String)"),
+        Type::union([Type::Integer, Type::String])
+    );
+    assert_eq!(
+        typey::signature::parse_type("T.all(Object, String)"),
+        Type::intersection([Type::Object, Type::String])
+    );
+    assert_eq!(
+        typey::signature::parse_type("T.class_of(String)"),
+        Type::Named("Class".to_owned(), vec![Type::String])
+    );
+    assert_eq!(
+        typey::signature::parse_type("T.type_parameter(:U)"),
+        Type::TypeVar("U".to_owned())
+    );
+    assert_eq!(
+        typey::signature::parse_type("T.proc.params(value: String).returns(Integer)"),
+        Type::Proc(vec![Type::String], Box::new(Type::Integer))
+    );
+    assert_eq!(
+        typey::signature::parse_type("T::Map[String, Integer]"),
+        Type::Named("T::Map".to_owned(), vec![Type::String, Type::Integer],)
+    );
+
+    let signature = typey::signature::parse_sorbet_signature(
+        "sig { type_parameters(:U, :V).params(value: U, other: V).returns(T.nilable(U)) }",
+    )
+    .expect("signature parses");
+    assert_eq!(signature.type_parameters, vec!["U", "V"]);
+    assert_eq!(
+        signature.params,
+        vec![Type::TypeVar("U".into()), Type::TypeVar("V".into())]
+    );
+    assert_eq!(
+        signature.return_type,
+        Type::union([Type::Nil, Type::TypeVar("U".into())])
+    );
+
+    assert_eq!(
+        typey::signature::parse_sorbet_type_alias("T.type_alias { T::Array[String] }"),
+        Some(Type::Array(Box::new(Type::String)))
+    );
+    assert_eq!(
+        typey::signature::parse_rbs_type_alias("type Result = Integer | String"),
+        Some((
+            "Result".to_owned(),
+            Type::union([Type::Integer, Type::String])
+        ))
+    );
+}
+
+#[test]
 fn specializes_attached_class_through_inherited_class_methods() {
     let result = check(
         r#"
