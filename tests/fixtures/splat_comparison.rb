@@ -19,6 +19,11 @@ def dynamic_positional
   T::Array[T.untyped].new
 end
 
+sig { returns(T::Array[Integer]) }
+def dynamic_integers
+  [1, 2]
+end
+
 sig { returns(T::Hash[Symbol, T.untyped]) }
 def dynamic_keywords
   T::Hash[Symbol, T.untyped].new
@@ -32,6 +37,7 @@ end
 # Rest parameters themselves are supported.
 accepts_rest(1, 2, 3)
 accepts_rest(1, "wrong") # error: Expected `Integer`, but found `String`
+accepts_rest(*dynamic_integers)
 
 # A literal has a statically known shape and can be expanded.
 fixed(*[1, "two"])

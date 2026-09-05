@@ -494,6 +494,7 @@ struct CallArguments<'node> {
     keyword_arguments: Vec<KeywordArgument<'node>>,
     has_keyword_splat: bool,
     has_dynamic_positional_splat: bool,
+    dynamic_positional_splat_types: Vec<Type>,
     has_dynamic_keyword_splat: bool,
     has_unknown_positional_splat: bool,
     has_unknown_keyword_splat: bool,
@@ -1472,6 +1473,20 @@ impl<'src> Analyzer<'src> {
         for (index, actual) in positional_types.iter().enumerate() {
             if let Some(expected) = signature.positional_type(index, positional_types.len()) {
                 self.collect_type_parameter_binding(expected, actual, &names, &mut bindings);
+            }
+        }
+        if signature.accepts_rest && signature.rest_index == Some(0) {
+            if let Some(expected) = signature.params.first() {
+                for splat_type in &arguments.dynamic_positional_splat_types {
+                    if let Type::Array(element) = splat_type {
+                        self.collect_type_parameter_binding(
+                            expected,
+                            element,
+                            &names,
+                            &mut bindings,
+                        );
+                    }
+                }
             }
         }
         if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
@@ -4246,6 +4261,7 @@ impl<'src> Analyzer<'src> {
                 keyword_arguments: Vec::new(),
                 has_keyword_splat: false,
                 has_dynamic_positional_splat: false,
+                dynamic_positional_splat_types: Vec::new(),
                 has_dynamic_keyword_splat: false,
                 has_unknown_positional_splat: false,
                 has_unknown_keyword_splat: false,
@@ -4767,6 +4783,9 @@ impl<'src> Analyzer<'src> {
                     evaluated.has_unknown_positional_splat = true;
                 } else {
                     evaluated.has_dynamic_positional_splat = true;
+                    evaluated
+                        .dynamic_positional_splat_types
+                        .push(result.type_.clone());
                 }
                 abrupt = abrupt.join(&result.abrupt);
                 abrupt_flow = abrupt_flow.union(result.flow.without(FlowKind::Normal));
@@ -6619,11 +6638,41 @@ impl<'src> Analyzer<'src> {
         } else {
             &arguments.argument_types
         };
+        let mut dynamic_splat_shape_error = false;
         if arguments.has_dynamic_positional_splat {
-            self.error(
-                node,
-                "Splats are only supported where the size of the array is known statically",
-            );
+            let expected_rest = signature
+                .accepts_rest
+                .then_some(signature.rest_index)
+                .flatten()
+                .filter(|index| *index == 0)
+                .and_then(|_| signature.params.first())
+                .map(|expected| {
+                    self.substitute_signature_type(
+                        expected,
+                        receiver_type,
+                        &type_parameter_bindings,
+                        &signature.type_parameters,
+                    )
+                });
+            if let Some(expected) = expected_rest {
+                for splat_type in &arguments.dynamic_positional_splat_types {
+                    if let Type::Array(element) = splat_type {
+                        if !self.is_assignable(element, &expected) {
+                            self.check_assignable(node, element, &expected);
+                        }
+                    } else {
+                        dynamic_splat_shape_error = true;
+                    }
+                }
+            } else {
+                dynamic_splat_shape_error = true;
+            }
+            if dynamic_splat_shape_error {
+                self.error(
+                    node,
+                    "Splats are only supported where the size of the array is known statically",
+                );
+            }
         }
         if arguments.has_dynamic_keyword_splat {
             self.error(
