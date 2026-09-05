@@ -5,7 +5,6 @@ use crate::types::{Type, TypeLattice};
 use ruby_prism::{CallNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit};
 use std::collections::{BTreeMap, BTreeSet};
 
-const MAX_FIXPOINT_ROUNDS: usize = 32;
 const DEBUG_NODE_INTERVAL: usize = 1_000;
 
 fn ivar_refinement_key(name: &str) -> String {
@@ -37,7 +36,10 @@ impl ParameterShape {
             return Self::default();
         };
         let required_positional = parameters.requireds().len();
-        let accepts_rest = parameters.rest().is_some();
+        let accepts_rest = parameters.rest().is_some()
+            || parameters
+                .keyword_rest()
+                .is_some_and(|node| node.as_forwarding_parameter_node().is_some());
         let mut keywords = BTreeMap::new();
         for parameter in &parameters.keywords() {
             if let Some(required) = parameter.as_required_keyword_parameter_node() {
@@ -50,7 +52,10 @@ impl ParameterShape {
             required_positional,
             accepts_rest,
             keywords,
-            accepts_keyword_rest: parameters.keyword_rest().is_some(),
+            accepts_keyword_rest: parameters.keyword_rest().is_some_and(|node| {
+                node.as_keyword_rest_parameter_node().is_some()
+                    || node.as_forwarding_parameter_node().is_some()
+            }),
         }
     }
 }
@@ -394,6 +399,10 @@ struct CallArguments<'node> {
     positional_types: Vec<Type>,
     keyword_arguments: Vec<KeywordArgument<'node>>,
     has_keyword_splat: bool,
+    /// The call uses Ruby's `...` forwarding form. There is no concrete
+    /// argument list at this syntax site; it is the caller's complete
+    /// positional, keyword, and block argument set.
+    forwards_arguments: bool,
 }
 
 struct CallArgumentEvaluation<'node> {
@@ -539,7 +548,10 @@ impl MethodState {
             for _ in &parameters.optionals() {
                 params.push(None);
             }
-            let accepts_rest = parameters.rest().is_some();
+            let accepts_rest = parameters.rest().is_some()
+                || parameters
+                    .keyword_rest()
+                    .is_some_and(|node| node.as_forwarding_parameter_node().is_some());
             if accepts_rest {
                 params.push(None);
             }
@@ -564,7 +576,10 @@ impl MethodState {
                 return_terminates: false,
                 required_params,
                 accepts_rest,
-                accepts_keyword_rest: parameters.keyword_rest().is_some(),
+                accepts_keyword_rest: parameters.keyword_rest().is_some_and(|node| {
+                    node.as_keyword_rest_parameter_node().is_some()
+                        || node.as_forwarding_parameter_node().is_some()
+                }),
                 is_void: false,
                 explicit: false,
             };
@@ -676,23 +691,6 @@ impl MethodState {
             *slot = Some(next);
             true
         }
-    }
-
-    fn set_return(&mut self, actual: &Type, terminates: bool) -> bool {
-        if self.explicit {
-            return false;
-        }
-        let next = actual.clone();
-        let mut changed = false;
-        if self.return_type.as_ref() != Some(&next) {
-            self.return_type = Some(next);
-            changed = true;
-        }
-        if self.return_terminates != terminates {
-            self.return_terminates = terminates;
-            changed = true;
-        }
-        changed
     }
 }
 
@@ -1019,6 +1017,8 @@ pub(crate) fn check_with_rbi_ranges(
         filter_method_bodies: false,
         active_methods: BTreeSet::new(),
         changed_methods: BTreeSet::new(),
+        pending_returns: BTreeMap::new(),
+        collecting_returns: false,
         method_callers: BTreeMap::new(),
         method_shared_reads: BTreeMap::new(),
         shared_readers: BTreeMap::new(),
@@ -1055,6 +1055,8 @@ struct Analyzer<'src> {
     filter_method_bodies: bool,
     active_methods: BTreeSet<MethodKey>,
     changed_methods: BTreeSet<MethodKey>,
+    pending_returns: BTreeMap<MethodKey, (Type, bool)>,
+    collecting_returns: bool,
     method_callers: BTreeMap<MethodKey, BTreeSet<MethodKey>>,
     method_shared_reads: BTreeMap<MethodKey, BTreeSet<SharedKey>>,
     shared_readers: BTreeMap<SharedKey, BTreeSet<MethodKey>>,
@@ -1187,6 +1189,31 @@ impl<'src> Analyzer<'src> {
             && tail.chars().any(|character| character.is_ascii_lowercase())
     }
 
+    fn record_inferred_return(&mut self, key: MethodKey, actual: Type, terminates: bool) {
+        match self.pending_returns.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((actual, terminates));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (current, current_terminates) = entry.get_mut();
+                *current = current.join(&actual);
+                *current_terminates &= terminates;
+            }
+        }
+    }
+
+    fn commit_inferred_returns(&mut self) {
+        let pending_returns = std::mem::take(&mut self.pending_returns);
+        for (key, (return_type, return_terminates)) in pending_returns {
+            if let Some(state) = self.methods.get_mut(&key) {
+                if !state.explicit {
+                    state.return_type = Some(return_type);
+                    state.return_terminates = return_terminates;
+                }
+            }
+        }
+    }
+
     fn run<'node>(mut self, root: &Node<'node>) -> CheckResult {
         if self.config.debug {
             eprintln!("[typey] registering declarations");
@@ -1216,40 +1243,63 @@ impl<'src> Analyzer<'src> {
         if self.config.debug {
             eprintln!("[typey] seeding top-level call sites");
         }
+        self.pending_returns.clear();
+        self.collecting_returns = true;
         let mut environment = Environment::default();
         self.eval_node(root, &mut environment);
+        self.collecting_returns = false;
+        self.commit_inferred_returns();
         self.seed_calls = false;
         self.changed_methods.clear();
         self.changed_shared.clear();
 
         let mut pending_methods = self.methods.keys().cloned().collect::<BTreeSet<_>>();
-        let mut converged = pending_methods.is_empty();
-        for round in 0..MAX_FIXPOINT_ROUNDS {
+        let mut round = 0;
+        // The worklist is driven solely by actual summary changes. There is
+        // no arbitrary round limit: once no method or shared value changes,
+        // the pending set is empty and the analysis has reached its fixed
+        // point.
+        loop {
             if pending_methods.is_empty() {
-                converged = true;
                 break;
             }
 
+            round += 1;
             self.active_methods = pending_methods.clone();
             self.filter_method_bodies = true;
             self.changed_methods.clear();
             self.changed_shared.clear();
             self.debug_phase = "inference";
-            self.debug_round = round + 1;
+            self.debug_round = round;
             self.types.clear();
             self.debug_nodes = 0;
             if self.config.debug {
                 eprintln!(
-                    "[typey] worklist round {}/{}: evaluating {} scheduled methods",
-                    round + 1,
-                    MAX_FIXPOINT_ROUNDS,
+                    "[typey] worklist round {round}: evaluating {} scheduled methods",
                     pending_methods.len()
                 );
             }
+            // Return summaries are computed synchronously: every method body
+            // reads the summaries committed by the previous round, and all
+            // candidates from this round are committed together below. This
+            // avoids source-order effects when a caller appears before its
+            // callee or when conditional branches define the same method.
+            let previous_methods = self.methods.clone();
+            self.pending_returns.clear();
+            self.collecting_returns = true;
             let mut environment = Environment::default();
             self.eval_node(root, &mut environment);
+            self.collecting_returns = false;
+            self.commit_inferred_returns();
 
-            let changed_methods = self.changed_methods.clone();
+            let changed_methods = self
+                .methods
+                .iter()
+                .filter_map(|(method, state)| {
+                    (previous_methods.get(method) != Some(state)).then_some(method.clone())
+                })
+                .collect::<BTreeSet<_>>();
+            self.changed_methods = changed_methods.clone();
             let changed_shared = self.changed_shared.clone();
             let mut next_pending = BTreeSet::new();
             for method in &changed_methods {
@@ -1263,28 +1313,15 @@ impl<'src> Analyzer<'src> {
                     next_pending.extend(readers.iter().cloned());
                 }
             }
-            converged = next_pending.is_empty();
             if self.config.debug {
                 eprintln!(
-                    "[typey] worklist round {}/{} complete: {} changed methods, {} changed shared keys, {} scheduled next",
-                    round + 1,
-                    MAX_FIXPOINT_ROUNDS,
+                    "[typey] worklist round {round} complete: {} changed methods, {} changed shared keys, {} scheduled next",
                     changed_methods.len(),
-                    next_pending.len(),
-                    changed_shared.len()
+                    changed_shared.len(),
+                    next_pending.len()
                 );
             }
             pending_methods = next_pending;
-            if converged {
-                break;
-            }
-        }
-        if self.config.debug && !converged {
-            eprintln!(
-                "[typey] worklist reached the {}-round limit with {} methods pending",
-                MAX_FIXPOINT_ROUNDS,
-                pending_methods.len()
-            );
         }
 
         // Re-run once with settled summaries. This final pass is the only pass
@@ -1418,12 +1455,8 @@ impl<'src> Analyzer<'src> {
                     );
                 } else {
                     eprintln!(
-                        "[typey] fixpoint round {}/{} {} pass: visited {} nodes (source offset {})",
-                        self.debug_round,
-                        MAX_FIXPOINT_ROUNDS,
-                        self.debug_phase,
-                        self.debug_nodes,
-                        start
+                        "[typey] fixpoint round {} {} pass: visited {} nodes (source offset {})",
+                        self.debug_round, self.debug_phase, self.debug_nodes, start
                     );
                 }
             }
@@ -2061,8 +2094,16 @@ impl<'src> Analyzer<'src> {
             let mut rescue_environment = base.clone();
             let mut exception_type = Type::Never;
             for exception in &rescue.exceptions() {
-                exception_type =
-                    exception_type.join(&self.eval_node(&exception, &mut rescue_environment).type_);
+                let evaluated = self.eval_node(&exception, &mut rescue_environment).type_;
+                let exception_type_for_clause = if exception.as_splat_node().is_some() {
+                    self.array_element_type(&evaluated)
+                } else {
+                    evaluated
+                };
+                let exception_type_for_clause =
+                    Self::class_object_value_type(&exception_type_for_clause)
+                        .unwrap_or(exception_type_for_clause);
+                exception_type = exception_type.join(&exception_type_for_clause);
             }
             if exception_type.is_never() {
                 exception_type = Type::named("StandardError");
@@ -2462,7 +2503,7 @@ impl<'src> Analyzer<'src> {
         let mut break_type = Type::Never;
         let mut abrupt = OutcomeTypes::default();
         let mut terminal_flow = Flow::empty();
-        for _ in 0..MAX_FIXPOINT_ROUNDS {
+        loop {
             let mut condition_environment = head.clone();
             let condition_result = self.eval_node(predicate, &mut condition_environment);
             abrupt = abrupt.join(
@@ -2562,7 +2603,7 @@ impl<'src> Analyzer<'src> {
             .without(FlowKind::Normal)
             .without(FlowKind::Break)
             .without(FlowKind::Next);
-        for _ in 0..MAX_FIXPOINT_ROUNDS {
+        loop {
             let mut body_environment = head.clone();
             self.bind_for_target(
                 &for_node.index(),
@@ -2742,24 +2783,12 @@ impl<'src> Analyzer<'src> {
                     ),
                 );
             }
-        } else if let Some(current) = self.methods.get_mut(&key) {
-            let changed = current.set_return(
-                &inferred_return,
+        } else if self.collecting_returns {
+            self.record_inferred_return(
+                key,
+                inferred_return,
                 body_result.flow == Flow::abrupt(FlowKind::Raise),
             );
-            if changed {
-                self.changed_methods.insert(key.clone());
-            }
-        } else {
-            let mut current = MethodState::inferred(definition.parameters());
-            let changed = current.set_return(
-                &inferred_return,
-                body_result.flow == Flow::abrupt(FlowKind::Raise),
-            );
-            self.methods.insert(key.clone(), current);
-            if changed {
-                self.changed_methods.insert(key);
-            }
         }
         let _ = outer;
         Eval::value(self.record(node, Type::Nil))
@@ -2800,6 +2829,7 @@ impl<'src> Analyzer<'src> {
                 positional_types,
                 keyword_arguments: Vec::new(),
                 has_keyword_splat: false,
+                forwards_arguments: true,
             }
         } else {
             let argument_nodes = arguments
@@ -3191,6 +3221,10 @@ impl<'src> Analyzer<'src> {
         let mut all_normal = true;
 
         for (argument_index, argument) in argument_nodes.iter().enumerate() {
+            if argument.as_forwarding_arguments_node().is_some() {
+                evaluated.forwards_arguments = true;
+                continue;
+            }
             if let Some(keyword_hash) = argument.as_keyword_hash_node() {
                 let mut key = Type::Never;
                 let mut value = Type::Never;
@@ -3316,6 +3350,7 @@ impl<'src> Analyzer<'src> {
         } else {
             Type::Object
         };
+        let block = call.block();
         let callee_type = if receiver_node.as_ref().is_some_and(|receiver| {
             self.constant_reference_name(receiver)
                 .is_some_and(|name| name.trim_start_matches("::") == "T")
@@ -3336,6 +3371,14 @@ impl<'src> Analyzer<'src> {
             });
             Type::Proc(Vec::new(), Box::new(return_type))
         } else if receiver_node.is_none() {
+            if name == "each"
+                && Self::named_type_name(&environment.self_type)
+                    .is_some_and(|owner| name_matches(&owner, "Enumerable"))
+            {
+                if let Some(block) = block.as_ref() {
+                    let _ = self.eval_block_node(block, &[Type::Any], environment);
+                }
+            }
             let key = self.implicit_method_key(&name, environment);
             self.record_method_dependency(&key, environment);
             if let Some(signature) = self.observe_call(&key, &arguments) {
@@ -3379,7 +3422,6 @@ impl<'src> Analyzer<'src> {
                 )
             }
         } else {
-            let block = call.block();
             let site = CallSite {
                 argument_nodes: &arguments.argument_nodes,
                 argument_types,
@@ -3390,6 +3432,21 @@ impl<'src> Analyzer<'src> {
             {
                 self.record_method_dependency(&key, environment);
                 if let Some(signature) = self.observe_call(&key, &arguments) {
+                    if name == "each" {
+                        if let Some(block) = block.as_ref() {
+                            let element = match &receiver_type {
+                                Type::Array(element) => element.as_ref().clone(),
+                                Type::Tuple(elements) => elements
+                                    .iter()
+                                    .fold(Type::Never, |current, element| current.join(element)),
+                                Type::Named(_, arguments) => {
+                                    arguments.first().cloned().unwrap_or(Type::Any)
+                                }
+                                _ => Type::Any,
+                            };
+                            let _ = self.eval_block_node(block, &[element], environment);
+                        }
+                    }
                     self.invoke_signature(node, &name, &signature, &arguments, Some(&receiver_type))
                 } else {
                     self.eval_method_call(&receiver_type, &name, &site, environment)
@@ -3502,12 +3559,14 @@ impl<'src> Analyzer<'src> {
             } else {
                 &arguments.argument_types
             };
-            for (index, actual) in positional_types.iter().enumerate() {
-                changed |= state.observe_argument(index, actual);
-            }
-            if state.accepts_keyword_rest || !state.keywords.is_empty() {
-                for argument in &arguments.keyword_arguments {
-                    changed |= state.observe_keyword(&argument.name, &argument.type_);
+            if !arguments.forwards_arguments {
+                for (index, actual) in positional_types.iter().enumerate() {
+                    changed |= state.observe_argument(index, actual);
+                }
+                if state.accepts_keyword_rest || !state.keywords.is_empty() {
+                    for argument in &arguments.keyword_arguments {
+                        changed |= state.observe_keyword(&argument.name, &argument.type_);
+                    }
                 }
             }
             (state.call_signature(), changed)
@@ -4088,6 +4147,16 @@ impl<'src> Analyzer<'src> {
                 }
             }
             Type::Named(class, _) if name == "new" => Type::Named(class.clone(), Vec::new()),
+            Type::Named(class, arguments)
+                if name == "each" && name_matches(class, "Enumerable") =>
+            {
+                let element = arguments.first().cloned().unwrap_or(Type::Any);
+                if let Some(block) = site.block {
+                    let _ =
+                        self.eval_block_node(block, std::slice::from_ref(&element), environment);
+                }
+                Type::Named(class.clone(), arguments.clone())
+            }
             Type::Named(_, _) => self.eval_common_method(name),
             Type::Any
             | Type::Object
@@ -4361,19 +4430,22 @@ impl<'src> Analyzer<'src> {
         } else {
             &arguments.argument_types
         };
-        let positional_error = argument_types.len() < signature.required_params
-            || (!signature.accepts_rest && argument_types.len() > signature.params.len());
+        let positional_error = !arguments.forwards_arguments
+            && (argument_types.len() < signature.required_params
+                || (!signature.accepts_rest && argument_types.len() > signature.params.len()));
         let provided_keywords = arguments
             .keyword_arguments
             .iter()
             .map(|argument| argument.name.as_str())
             .collect::<BTreeSet<_>>();
-        let missing_keywords = keyword_mode
+        let missing_keywords = !arguments.forwards_arguments
+            && keyword_mode
             && !arguments.has_keyword_splat
             && signature.keywords.iter().any(|(name, parameter)| {
                 parameter.required && !provided_keywords.contains(name.as_str())
             });
-        let unknown_keyword = keyword_mode
+        let unknown_keyword = !arguments.forwards_arguments
+            && keyword_mode
             && !signature.accepts_keyword_rest
             && arguments
                 .keyword_arguments
@@ -4410,7 +4482,7 @@ impl<'src> Analyzer<'src> {
                 ),
             );
         }
-        if keyword_mode {
+        if keyword_mode && !arguments.forwards_arguments {
             for ((argument_index, actual), expected) in arguments
                 .positional_indices
                 .iter()
@@ -4422,7 +4494,7 @@ impl<'src> Analyzer<'src> {
                     self.check_assignable(argument, actual, &expected);
                 }
             }
-        } else {
+        } else if !arguments.forwards_arguments {
             for ((argument, actual), expected) in arguments
                 .argument_nodes
                 .iter()
@@ -4433,7 +4505,7 @@ impl<'src> Analyzer<'src> {
                 self.check_assignable(argument, actual, &expected);
             }
         }
-        if keyword_mode {
+        if keyword_mode && !arguments.forwards_arguments {
             for argument in &arguments.keyword_arguments {
                 if let Some(expected) = signature.keywords.get(&argument.name) {
                     let expected = Self::substitute_instance_type(&expected.type_, receiver_type);
@@ -4833,14 +4905,6 @@ impl<'src> Analyzer<'src> {
         {
             return true;
         }
-        if actual_candidates.iter().any(|actual| {
-            actual == "StandardError"
-                && expected_candidates
-                    .iter()
-                    .any(|expected| expected == "Exception")
-        }) {
-            return true;
-        }
         actual_candidates.iter().any(|actual| {
             expected_candidates.iter().any(|expected| {
                 if actual == expected {
@@ -4855,6 +4919,9 @@ impl<'src> Analyzer<'src> {
                     if name == *expected {
                         return true;
                     }
+                    if let Some(superclass) = Self::builtin_superclass(&name) {
+                        pending.push(superclass.to_owned());
+                    }
                     let Some(info) = self.classes.get(&name) else {
                         continue;
                     };
@@ -4867,6 +4934,19 @@ impl<'src> Analyzer<'src> {
                 false
             })
         })
+    }
+
+    fn builtin_superclass(name: &str) -> Option<&'static str> {
+        match name.rsplit_once("::").map_or(name, |(_, tail)| tail) {
+            "StandardError" => Some("Exception"),
+            "ArgumentError" | "EncodingError" | "FiberError" | "IOError" | "IndexError"
+            | "KeyError" | "LocalJumpError" | "NameError" | "NoMethodError" | "RangeError"
+            | "RegexpError" | "RuntimeError" | "StopIteration" | "SystemCallError"
+            | "TypeError" | "ZeroDivisionError" => Some("StandardError"),
+            "EOFError" => Some("IOError"),
+            "FloatDomainError" => Some("RangeError"),
+            _ => None,
+        }
     }
 
     fn apply_inline_assertion<'node>(&mut self, node: &Node<'node>, actual: Type) -> Type {

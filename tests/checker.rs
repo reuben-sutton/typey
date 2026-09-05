@@ -40,6 +40,16 @@ fn check_fixture(path: &str) -> typey::CheckResult {
     result
 }
 
+fn assert_no_errors(source: &str) {
+    let result = check(source, CheckerConfig::default());
+    let errors = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "unexpected diagnostics: {errors:?}");
+}
+
 #[test]
 fn checks_rbs_comments_and_trailing_assertions() {
     let result = check_fixture("tests/fixtures/rbs_comments.rb");
@@ -74,6 +84,38 @@ fn resolves_method_summaries_across_fixpoint_rounds() {
             .filter(|message| message.contains("T.any(Integer, String)"))
             .count(),
         2,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn joins_conditional_method_definitions_instead_of_overwriting() {
+    let result = check(
+        r#"
+if RUBY_VERSION >= "4.0"
+  def versioned_value
+    1
+  end
+else
+  def versioned_value
+    "legacy"
+  end
+end
+
+T.reveal_type(versioned_value)
+"#,
+        CheckerConfig::default(),
+    );
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("T.any(Integer, String)")),
         "{notes:?}"
     );
 }
@@ -127,6 +169,108 @@ fn resolves_mixins_aliases_and_super() {
             .count(),
         1,
         "{notes:?}"
+    );
+}
+
+#[test]
+fn handles_ruby_forwarding_and_zsuper() {
+    assert_no_errors(
+        r#"
+def target(value)
+  value
+end
+
+def wrapper(...)
+  target(...)
+end
+
+class Parent
+  def call(value)
+    value
+  end
+end
+
+class Child < Parent
+  def call(...)
+    super
+  end
+end
+
+wrapper(1)
+Child.new.call(2)
+"#,
+    );
+}
+
+#[test]
+fn substitutes_self_type_and_builtin_exception_subtypes() {
+    assert_no_errors(
+        r#"
+class Box
+  sig { returns(T.nilable(T.self_type)) }
+  def presence
+    self if true
+  end
+end
+
+class Reporter
+  sig { params(error: Exception).void }
+  def report(error); end
+
+  sig { params(error: T.any(Exception, String)).void }
+  def unexpected(error)
+    error = RuntimeError.new(error) if error.is_a?(String)
+    report(error)
+  end
+end
+"#,
+    );
+}
+
+#[test]
+fn binds_rescue_splats_to_exception_instances() {
+    assert_no_errors(
+        r#"
+class Reporter
+  sig { params(error: Exception).void }
+  def report(error); end
+
+  sig { params(error_classes: T.class_of(Exception)).void }
+  def handle(*error_classes)
+    begin
+      raise "boom"
+    rescue *error_classes => error
+      report(error)
+    end
+  end
+end
+"#,
+    );
+}
+
+#[test]
+fn evaluates_implicit_enumerable_blocks_for_flow() {
+    assert_no_errors(
+        r#"
+module Enumerable
+  sig { returns(Elem) }
+  def sole
+    result = nil
+    found = false
+
+    each do |*element|
+      result = element.size == 1 ? element[0] : element
+      found = true
+    end
+
+    if found
+      result
+    else
+      raise "no item found"
+    end
+  end
+end
+"#,
     );
 }
 

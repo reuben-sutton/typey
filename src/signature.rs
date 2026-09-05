@@ -502,6 +502,7 @@ pub fn parse_type(raw: &str) -> Type {
     match lower.as_str() {
         "untyped" | "any" | "top" | "t.untyped" | "t.anything" => return Type::Any,
         "bot" | "bottom" | "t.noreturn" => return Type::Never,
+        "t.self_type" | "t::self_type" => return Type::named("instance"),
         "void" => return Type::Nil,
         "nil" | "nilclass" => return Type::Nil,
         "bool" | "boolean" | "t::boolean" => return Type::bool(),

@@ -509,7 +509,11 @@ impl fmt::Display for Type {
             Self::Object => write!(f, "Object"),
             Self::Named(name, args) => {
                 if args.is_empty() {
-                    write!(f, "{name}")
+                    if name == "instance" {
+                        write!(f, "T.self_type")
+                    } else {
+                        write!(f, "{name}")
+                    }
                 } else {
                     write!(f, "{name}[")?;
                     for (index, arg) in args.iter().enumerate() {
