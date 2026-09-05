@@ -1489,6 +1489,47 @@ T.reveal_type(1.clamp(0, 2))
 }
 
 #[test]
+fn preserves_remaining_literal_expression_types() {
+    let result = check(
+        r#"
+T.reveal_type(1r)
+T.reveal_type(1i)
+T.reveal_type(:"foo#{1}")
+T.reveal_type(`echo hi`)
+T.reveal_type(`echo #{1}`)
+T.reveal_type(~ /text/)
+flag = if true .. false
+  true
+else
+  false
+end
+T.reveal_type(flag)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `Rational`",
+        "Revealed type: `Complex`",
+        "Revealed type: `Symbol`",
+        "Revealed type: `String`",
+        "Revealed type: `T.nilable(Integer)`",
+        "Revealed type: `T::Boolean`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
 fn preserves_container_types_through_iteration_blocks() {
     let result = check(
         r#"

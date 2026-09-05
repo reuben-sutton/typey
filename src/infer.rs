@@ -2878,6 +2878,54 @@ impl<'src> Analyzer<'src> {
             let type_ = self.apply_inline_assertion(node, Type::named("Encoding"));
             return Eval::value(self.record(node, type_));
         }
+        if let Some(flip_flop) = node.as_flip_flop_node() {
+            if let Some(left) = flip_flop.left() {
+                self.eval_node(&left, environment);
+            }
+            if let Some(right) = flip_flop.right() {
+                self.eval_node(&right, environment);
+            }
+            let type_ = self.apply_inline_assertion(node, Type::bool());
+            return Eval::value(self.record(node, type_));
+        }
+        if node.as_match_last_line_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, Type::union([Type::Nil, Type::Integer]));
+            return Eval::value(self.record(node, type_));
+        }
+        if let Some(match_last_line) = node.as_interpolated_match_last_line_node() {
+            for part in &match_last_line.parts() {
+                self.eval_node(&part, environment);
+            }
+            let type_ = self.apply_inline_assertion(node, Type::union([Type::Nil, Type::Integer]));
+            return Eval::value(self.record(node, type_));
+        }
+        if let Some(imaginary) = node.as_imaginary_node() {
+            self.eval_node(&imaginary.numeric(), environment);
+            let type_ = self.apply_inline_assertion(node, Type::named("Complex"));
+            return Eval::value(self.record(node, type_));
+        }
+        if node.as_rational_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, Type::named("Rational"));
+            return Eval::value(self.record(node, type_));
+        }
+        if let Some(symbol) = node.as_interpolated_symbol_node() {
+            for part in &symbol.parts() {
+                self.eval_node(&part, environment);
+            }
+            let type_ = self.apply_inline_assertion(node, Type::Symbol);
+            return Eval::value(self.record(node, type_));
+        }
+        if node.as_x_string_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, Type::String);
+            return Eval::value(self.record(node, type_));
+        }
+        if let Some(xstring) = node.as_interpolated_x_string_node() {
+            for part in &xstring.parts() {
+                self.eval_node(&part, environment);
+            }
+            let type_ = self.apply_inline_assertion(node, Type::String);
+            return Eval::value(self.record(node, type_));
+        }
         if let Some(integer) = node.as_integer_node() {
             let _ = integer.value();
             let type_ = self.apply_inline_assertion(node, Type::Integer);
@@ -2887,7 +2935,14 @@ impl<'src> Analyzer<'src> {
             let type_ = self.apply_inline_assertion(node, Type::Float);
             return Eval::value(self.record(node, type_));
         }
-        if node.as_string_node().is_some() || node.as_interpolated_string_node().is_some() {
+        if node.as_string_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, Type::String);
+            return Eval::value(self.record(node, type_));
+        }
+        if let Some(string) = node.as_interpolated_string_node() {
+            for part in &string.parts() {
+                self.eval_node(&part, environment);
+            }
             let type_ = self.apply_inline_assertion(node, Type::String);
             return Eval::value(self.record(node, type_));
         }
@@ -5721,7 +5776,7 @@ impl<'src> Analyzer<'src> {
             Type::Named(class, _) if name_matches(class, "Regexp") => match name {
                 "match" => Type::union([Type::Nil, Type::named("MatchData")]),
                 "match?" | "===" => Type::bool(),
-                "=~" => Type::union([Type::Nil, Type::Integer]),
+                "=~" | "~" => Type::union([Type::Nil, Type::Integer]),
                 "source" | "to_s" => Type::String,
                 "options" => Type::Integer,
                 "encoding" => Type::named("Encoding"),
