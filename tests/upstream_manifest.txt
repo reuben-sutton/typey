@@ -1,0 +1,35 @@
+# Optional smoke coverage from the locally cloned Sorbet testdata checkout.
+# Paths are resolved from the repository working directory.
+
+sorbet-upstream/test/testdata/rbs/annotations_helpers.rb
+sorbet-upstream/test/testdata/rbs/annotations_literal_types.rb
+sorbet-upstream/test/testdata/rbs/assertions_case.rb
+sorbet-upstream/test/testdata/rbs/assertions_case_pattern.rb
+sorbet-upstream/test/testdata/rbs/assertions_if.rb
+sorbet-upstream/test/testdata/rbs/assertions_lambda.rb
+sorbet-upstream/test/testdata/rbs/signatures_params_autocorrect.rb
+sorbet-upstream/test/testdata/rbs/signatures_type_aliases_empty_file.rb
+
+sorbet-upstream/test/testdata/infer/control_flow/complex_implications_2.rb
+sorbet-upstream/test/testdata/infer/control_flow/csend_and.rb
+sorbet-upstream/test/testdata/infer/control_flow/dead_condition.rb
+sorbet-upstream/test/testdata/infer/control_flow/dynamic.rb
+sorbet-upstream/test/testdata/infer/control_flow/isa_module.rb
+sorbet-upstream/test/testdata/infer/control_flow/nil_p.rb
+sorbet-upstream/test/testdata/infer/control_flow/normalize_params.rb
+sorbet-upstream/test/testdata/infer/control_flow/truthiness_bug.rb
+
+sorbet-upstream/test/testdata/infer/blocks2.rb
+sorbet-upstream/test/testdata/infer/boolean.rb
+sorbet-upstream/test/testdata/infer/case_untyped.rb
+sorbet-upstream/test/testdata/infer/control_flow_in_ensure.rb
+sorbet-upstream/test/testdata/infer/control_flow_in_rescue.rb
+sorbet-upstream/test/testdata/infer/hashes.rb
+sorbet-upstream/test/testdata/infer/loop_with_rescue_next.rb
+sorbet-upstream/test/testdata/infer/more_after_return.rb
+sorbet-upstream/test/testdata/infer/multi_assign.rb
+sorbet-upstream/test/testdata/infer/nil_safe_navigation.rb
+sorbet-upstream/test/testdata/infer/nilable_and.rb
+sorbet-upstream/test/testdata/infer/return_in_if.rb
+sorbet-upstream/test/testdata/infer/singleton_methods.rb
+sorbet-upstream/test/testdata/infer/zsuper.rb

@@ -54,6 +54,216 @@ fn checks_sorbet_sig_calls() {
 }
 
 #[test]
+fn resolves_method_summaries_across_fixpoint_rounds() {
+    let result = check_fixture("tests/fixtures/fixpoint_flow.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("T.any(Integer, String)"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn resolves_receiver_methods_ivars_and_control_flow() {
+    let result = check_fixture("tests/fixtures/spinel_flow.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `Integer`",
+        "Revealed type: `String`",
+        "Revealed type: `T.any(Float, Integer, NilClass)`",
+        "Revealed type: `T.any(Integer, NilClass, String)`",
+        "Revealed type: `T.nilable(Integer)`",
+        "Revealed type: `T.nilable(String)`",
+        "Revealed type: `T::Array[String]`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
+fn resolves_mixins_aliases_and_super() {
+    let result = check_fixture("tests/fixtures/dispatch_flow.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `String`"))
+            .count(),
+        4,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Symbol`"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn refines_pattern_matches_and_exception_edges() {
+    let result = check_fixture("tests/fixtures/pattern_exception_flow.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `Integer`",
+        "Revealed type: `T.nilable(String)`",
+        "Revealed type: `String`",
+        "Revealed type: `Integer`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `String`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn tracks_constants_class_variables_and_globals() {
+    let result = check_fixture("tests/fixtures/state_flow.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `String`"))
+            .count(),
+        3,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        4,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn resolves_extended_and_singleton_class_methods() {
+    let result = check_fixture("tests/fixtures/singleton_flow.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Symbol`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn carries_proc_results_through_calls() {
+    let result = check_fixture("tests/fixtures/closure_flow.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Symbol`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn carries_explicit_flow_outcomes_through_loops_and_rescues() {
+    let result = check_fixture("tests/fixtures/flow_outcomes.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `String`",
+        "Revealed type: `T.nilable(String)`",
+        "Revealed type: `NilClass`",
+        "Revealed type: `Symbol`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `String`"))
+            .count(),
+        3,
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn refines_locals_with_meet_and_joins_paths() {
     let result = check_fixture("tests/fixtures/lattice_flow.rb");
     let notes = result
