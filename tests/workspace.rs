@@ -5,6 +5,7 @@ use typey::workspace::is_ruby_source;
 use typey::{check_workspace, discover_ruby_files, load_workspace, CheckerConfig, WorkspaceFile};
 
 const FIXTURE_ROOT: &str = "tests/workspace_repo";
+const IGNORE_FIXTURE_ROOT: &str = "tests/workspace_ignore_repo";
 
 #[test]
 fn discovers_and_checks_rb_and_rbi_files_as_one_workspace() {
@@ -36,6 +37,13 @@ fn discovers_and_checks_rb_and_rbi_files_as_one_workspace() {
     assert!(notes
         .iter()
         .all(|diagnostic| diagnostic.diagnostic.message.contains("`String`")));
+}
+
+#[test]
+fn discovers_files_using_sorbet_ignore_options() {
+    let paths = discover_ruby_files(Path::new(IGNORE_FIXTURE_ROOT)).expect("workspace exists");
+    assert_eq!(paths.len(), 1);
+    assert!(paths[0].ends_with("tests/workspace_ignore_repo/app/kept.rb"));
 }
 
 #[test]

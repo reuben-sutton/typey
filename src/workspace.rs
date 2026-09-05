@@ -93,6 +93,11 @@ pub fn is_ruby_source(path: &Path) -> bool {
 /// generated/build directories are skipped, including the ignored upstream
 /// checkouts used by this project for conformance work.
 pub fn discover_ruby_files(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let ignores = sorbet_ignore_patterns(root)?;
+    discover_ruby_files_with_ignores(root, &ignores)
+}
+
+fn discover_ruby_files_with_ignores(root: &Path, ignores: &[String]) -> io::Result<Vec<PathBuf>> {
     let metadata = fs::metadata(root)?;
     let mut paths = Vec::new();
     if metadata.is_file() {
@@ -100,7 +105,7 @@ pub fn discover_ruby_files(root: &Path) -> io::Result<Vec<PathBuf>> {
             paths.push(root.to_owned());
         }
     } else if metadata.is_dir() {
-        collect_ruby_files(root, &mut paths)?;
+        collect_ruby_files(root, root, ignores, &mut paths)?;
     }
     paths.sort();
     paths.dedup();
@@ -263,22 +268,95 @@ fn locate_offset(offset: usize, ranges: &[SourceRange]) -> Option<usize> {
         .or_else(|| ranges.len().checked_sub(1))
 }
 
-fn collect_ruby_files(root: &Path, paths: &mut Vec<PathBuf>) -> io::Result<()> {
+fn collect_ruby_files(
+    root: &Path,
+    base: &Path,
+    ignores: &[String],
+    paths: &mut Vec<PathBuf>,
+) -> io::Result<()> {
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
+        if is_ignored_path(base, &path, ignores) {
+            continue;
+        }
         if file_type.is_dir() {
             let skipped = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| SKIPPED_DIRECTORIES.contains(&name));
             if !skipped {
-                collect_ruby_files(&path, paths)?;
+                collect_ruby_files(&path, base, ignores, paths)?;
             }
         } else if file_type.is_file() && is_ruby_source(&path) {
             paths.push(path);
         }
     }
     Ok(())
+}
+
+fn sorbet_ignore_patterns(root: &Path) -> io::Result<Vec<String>> {
+    let config = if root.is_dir() {
+        root.join("sorbet/config")
+    } else {
+        return Ok(Vec::new());
+    };
+    if !config.is_file() {
+        return Ok(Vec::new());
+    }
+
+    let contents = fs::read_to_string(config)?;
+    let mut ignores = Vec::new();
+    let mut expecting_value = false;
+    for line in contents.lines() {
+        let option = line.trim();
+        if expecting_value {
+            if !option.is_empty() && !option.starts_with('#') {
+                ignores.push(option.to_owned());
+                expecting_value = false;
+            }
+            continue;
+        }
+        if let Some(pattern) = option.strip_prefix("--ignore=") {
+            if !pattern.is_empty() {
+                ignores.push(pattern.to_owned());
+            }
+        } else if option == "--ignore" {
+            expecting_value = true;
+        }
+    }
+    Ok(ignores)
+}
+
+fn is_ignored_path(base: &Path, path: &Path, ignores: &[String]) -> bool {
+    let Ok(relative) = path.strip_prefix(base) else {
+        return false;
+    };
+    let components = relative
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    let relative = components.join("/");
+    ignores.iter().any(|pattern| {
+        let anchored = pattern.starts_with('/');
+        let pattern = pattern.trim_matches('/');
+        if pattern.is_empty() {
+            return false;
+        }
+        let pattern_components = pattern.split('/').collect::<Vec<_>>();
+        if pattern_components.len() == 1 {
+            if anchored {
+                return components.first().copied() == Some(pattern);
+            }
+            return components.iter().any(|component| *component == pattern);
+        }
+        if anchored {
+            relative == pattern || relative.starts_with(&format!("{pattern}/"))
+        } else {
+            components
+                .windows(pattern_components.len())
+                .any(|window| window == pattern_components.as_slice())
+        }
+    })
 }
