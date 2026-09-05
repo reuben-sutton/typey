@@ -5765,6 +5765,28 @@ impl<'src> Analyzer<'src> {
             return Type::Never;
         }
 
+        if name == "class" {
+            return match receiver {
+                Type::Any => Type::Any,
+                Type::Never => Type::Never,
+                Type::True => Self::class_object_type("TrueClass"),
+                Type::False => Self::class_object_type("FalseClass"),
+                Type::Nil => Self::class_object_type("NilClass"),
+                Type::Integer => Self::class_object_type("Integer"),
+                Type::Float => Self::class_object_type("Float"),
+                Type::String => Self::class_object_type("String"),
+                Type::Symbol => Self::class_object_type("Symbol"),
+                Type::Array(_) | Type::Tuple(_) => Self::class_object_type("Array"),
+                Type::Hash(_, _) => Self::class_object_type("Hash"),
+                Type::Proc(_, _) => Self::class_object_type("Proc"),
+                Type::Object => Self::class_object_type("Object"),
+                Type::Named(class, _) => Self::class_object_type(class),
+                Type::Intersection(_) | Type::Union(_) | Type::TypeVar(_) | Type::AttachedClass => {
+                    Type::Any
+                }
+            };
+        }
+
         if matches!(
             name,
             "nil?" | "is_a?" | "kind_of?" | "instance_of?" | "==" | "!=" | "equal?" | "eql?"
@@ -5801,7 +5823,11 @@ impl<'src> Analyzer<'src> {
                 site.block,
                 environment,
             ),
-            Type::True | Type::False | Type::Nil | Type::Symbol => self.eval_common_method(name),
+            Type::True | Type::False | Type::Nil => self.eval_common_method(name),
+            Type::Symbol => match name {
+                "to_sym" | "intern" => Type::Symbol,
+                _ => self.eval_common_method(name),
+            },
             Type::Proc(params, result) if matches!(name, "call" | "[]") => {
                 for (index, (argument, expected)) in
                     site.argument_nodes.iter().zip(params).enumerate()

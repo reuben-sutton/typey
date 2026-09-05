@@ -1585,6 +1585,45 @@ T.reveal_type(1.step(3))
 }
 
 #[test]
+fn preserves_known_class_object_types() {
+    let result = check(
+        r#"
+T.reveal_type(1.class)
+T.reveal_type(1.0.class)
+T.reveal_type("text".class)
+T.reveal_type(:text.class)
+T.reveal_type([1].class)
+T.reveal_type({"answer" => 1}.class)
+T.reveal_type(Object.new.class)
+T.reveal_type(:text.to_sym)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `Class[Integer]`",
+        "Revealed type: `Class[Float]`",
+        "Revealed type: `Class[String]`",
+        "Revealed type: `Class[Symbol]`",
+        "Revealed type: `Class[Array]`",
+        "Revealed type: `Class[Hash]`",
+        "Revealed type: `Class[Object]`",
+        "Revealed type: `Symbol`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
