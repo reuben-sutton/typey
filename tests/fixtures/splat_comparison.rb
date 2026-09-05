@@ -24,6 +24,11 @@ def dynamic_keywords
   T::Hash[Symbol, T.untyped].new
 end
 
+sig { returns(T.untyped) }
+def unknown_splat
+  T.unsafe(nil)
+end
+
 # Rest parameters themselves are supported.
 accepts_rest(1, 2, 3)
 
@@ -33,3 +38,8 @@ fixed(*[1, "two"])
 # These are the dynamic splats Sorbet documents as unsupported.
 fixed(*dynamic_positional) # error: Splats are only supported where the size of the array is known statically
 fixed_keywords(**dynamic_keywords) # error: Keyword args with splats are only supported where the shape of the hash is known statically
+
+# An untyped value does not provide enough information for arity checking, but
+# it should not be mistaken for an empty argument list.
+fixed(*unknown_splat)
+fixed_keywords(**unknown_splat)

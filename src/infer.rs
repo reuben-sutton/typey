@@ -402,6 +402,8 @@ struct CallArguments<'node> {
     has_keyword_splat: bool,
     has_dynamic_positional_splat: bool,
     has_dynamic_keyword_splat: bool,
+    has_unknown_positional_splat: bool,
+    has_unknown_keyword_splat: bool,
     /// The call uses Ruby's `...` forwarding form. There is no concrete
     /// argument list at this syntax site; it is the caller's complete
     /// positional, keyword, and block argument set.
@@ -2835,6 +2837,8 @@ impl<'src> Analyzer<'src> {
                 has_keyword_splat: false,
                 has_dynamic_positional_splat: false,
                 has_dynamic_keyword_splat: false,
+                has_unknown_positional_splat: false,
+                has_unknown_keyword_splat: false,
                 forwards_arguments: true,
             }
         } else {
@@ -3277,7 +3281,9 @@ impl<'src> Analyzer<'src> {
                             } else {
                                 key = Type::Any;
                                 value = Type::Any;
-                                if !result_type.is_any() {
+                                if result_type.is_any() {
+                                    evaluated.has_unknown_keyword_splat = true;
+                                } else {
                                     evaluated.has_dynamic_keyword_splat = true;
                                 }
                             }
@@ -3322,7 +3328,9 @@ impl<'src> Analyzer<'src> {
                         evaluated.positional_types.push(type_.clone());
                         evaluated.positional_indices.push(argument_index);
                     }
-                } else if !result.type_.is_any() {
+                } else if result.type_.is_any() {
+                    evaluated.has_unknown_positional_splat = true;
+                } else {
                     evaluated.has_dynamic_positional_splat = true;
                 }
                 abrupt = abrupt.join(&result.abrupt);
@@ -3610,7 +3618,10 @@ impl<'src> Analyzer<'src> {
             } else {
                 &arguments.argument_types
             };
-            if !arguments.forwards_arguments {
+            if !arguments.forwards_arguments
+                && !arguments.has_unknown_positional_splat
+                && !arguments.has_unknown_keyword_splat
+            {
                 for (index, actual) in positional_types.iter().enumerate() {
                     changed |= state.observe_argument(index, actual);
                 }
@@ -4495,6 +4506,7 @@ impl<'src> Analyzer<'src> {
         }
         let positional_error = !arguments.forwards_arguments
             && !arguments.has_dynamic_positional_splat
+            && !arguments.has_unknown_positional_splat
             && (argument_types.len() < signature.required_params
                 || (!signature.accepts_rest && argument_types.len() > signature.params.len()));
         let provided_keywords = arguments
@@ -4546,7 +4558,11 @@ impl<'src> Analyzer<'src> {
                 ),
             );
         }
-        if keyword_mode && !arguments.forwards_arguments {
+        if keyword_mode
+            && !arguments.forwards_arguments
+            && !arguments.has_unknown_positional_splat
+            && !arguments.has_unknown_keyword_splat
+        {
             for ((argument_index, actual), expected) in arguments
                 .positional_indices
                 .iter()
@@ -4558,7 +4574,10 @@ impl<'src> Analyzer<'src> {
                     self.check_assignable(argument, actual, &expected);
                 }
             }
-        } else if !arguments.forwards_arguments {
+        } else if !arguments.forwards_arguments
+            && !arguments.has_unknown_positional_splat
+            && !arguments.has_unknown_keyword_splat
+        {
             for ((argument_index, actual), expected) in arguments
                 .argument_indices
                 .iter()
@@ -4571,7 +4590,7 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
-        if keyword_mode && !arguments.forwards_arguments {
+        if keyword_mode && !arguments.forwards_arguments && !arguments.has_unknown_keyword_splat {
             for argument in &arguments.keyword_arguments {
                 if let Some(expected) = signature.keywords.get(&argument.name) {
                     let expected = Self::substitute_instance_type(&expected.type_, receiver_type);
@@ -4579,7 +4598,11 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
-        Self::substitute_instance_type(&signature.return_type, receiver_type)
+        if arguments.has_unknown_positional_splat || arguments.has_unknown_keyword_splat {
+            Type::Any
+        } else {
+            Self::substitute_instance_type(&signature.return_type, receiver_type)
+        }
     }
 
     fn check_assignable<'node>(&mut self, node: &Node<'node>, actual: &Type, expected: &Type) {
