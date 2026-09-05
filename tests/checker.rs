@@ -572,6 +572,43 @@ T.reveal_type(Child.build)
 }
 
 #[test]
+fn infers_sorbet_method_type_parameters_at_each_call_site() {
+    let result = check(
+        r#"
+extend T::Sig
+
+sig { type_parameters(:U).params(value: T.type_parameter(:U)).returns(T.type_parameter(:U)) }
+def identity(value)
+  value
+end
+
+T.reveal_type(identity(1))
+T.reveal_type(identity("value"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Integer`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn parses_rbs_continuations_by_default() {
     let source = "#: (Integer)\n#| -> String\ndef stringify(value)\n  value.to_s\nend\n";
     let annotations = typey::signature::collect(source);

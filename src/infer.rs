@@ -137,6 +137,15 @@ fn merge_method_signatures(signatures: &[MethodSig]) -> MethodSig {
         accepts_keyword_rest: signatures
             .iter()
             .any(|signature| signature.accepts_keyword_rest),
+        type_parameters: signatures
+            .iter()
+            .flat_map(|signature| signature.type_parameters.iter().cloned())
+            .fold(Vec::new(), |mut names, name| {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+                names
+            }),
         is_void: signatures.iter().all(|signature| signature.is_void),
     }
 }
@@ -685,6 +694,7 @@ impl MethodState {
                 })
                 .collect(),
             accepts_keyword_rest: self.accepts_keyword_rest,
+            type_parameters: Vec::new(),
             is_void: false,
         }
     }
@@ -714,6 +724,7 @@ impl MethodState {
                 })
                 .collect(),
             accepts_keyword_rest: self.accepts_keyword_rest,
+            type_parameters: Vec::new(),
             is_void: self.is_void,
         }
     }
@@ -1247,6 +1258,215 @@ impl<'src> Analyzer<'src> {
             ),
             other => other.clone(),
         }
+    }
+
+    fn contains_type_parameter(type_: &Type, names: &BTreeSet<String>) -> bool {
+        match type_ {
+            Type::TypeVar(name) => names.contains(name),
+            Type::Named(_, arguments) => arguments
+                .iter()
+                .any(|argument| Self::contains_type_parameter(argument, names)),
+            Type::Array(element) => Self::contains_type_parameter(element, names),
+            Type::Hash(key, value) => {
+                Self::contains_type_parameter(key, names)
+                    || Self::contains_type_parameter(value, names)
+            }
+            Type::Tuple(elements) => elements
+                .iter()
+                .any(|element| Self::contains_type_parameter(element, names)),
+            Type::Proc(parameters, result) => {
+                parameters
+                    .iter()
+                    .any(|parameter| Self::contains_type_parameter(parameter, names))
+                    || Self::contains_type_parameter(result, names)
+            }
+            Type::Union(members) | Type::Intersection(members) => members
+                .iter()
+                .any(|member| Self::contains_type_parameter(member, names)),
+            _ => false,
+        }
+    }
+
+    fn infer_type_parameter_bindings(
+        &self,
+        signature: &MethodSig,
+        arguments: &CallArguments<'_>,
+    ) -> BTreeMap<String, Type> {
+        let names = signature
+            .type_parameters
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut bindings = BTreeMap::new();
+        if names.is_empty() {
+            return bindings;
+        }
+
+        let positional_types = if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
+            &arguments.positional_types
+        } else {
+            &arguments.argument_types
+        };
+        for (actual, expected) in positional_types.iter().zip(&signature.params) {
+            self.collect_type_parameter_binding(expected, actual, &names, &mut bindings);
+        }
+        if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
+            for argument in &arguments.keyword_arguments {
+                if let Some(expected) = signature.keywords.get(&argument.name) {
+                    self.collect_type_parameter_binding(
+                        &expected.type_,
+                        &argument.type_,
+                        &names,
+                        &mut bindings,
+                    );
+                }
+            }
+        }
+        bindings
+    }
+
+    fn collect_type_parameter_binding(
+        &self,
+        expected: &Type,
+        actual: &Type,
+        names: &BTreeSet<String>,
+        bindings: &mut BTreeMap<String, Type>,
+    ) {
+        match expected {
+            Type::TypeVar(name) if names.contains(name) => {
+                bindings
+                    .entry(name.clone())
+                    .and_modify(|current| *current = current.join(actual))
+                    .or_insert_with(|| actual.clone());
+            }
+            Type::Union(members) => {
+                let fixed_match = members.iter().any(|member| {
+                    !Self::contains_type_parameter(member, names)
+                        && self.is_assignable(actual, member)
+                });
+                if !fixed_match {
+                    for member in members {
+                        if Self::contains_type_parameter(member, names) {
+                            self.collect_type_parameter_binding(member, actual, names, bindings);
+                        }
+                    }
+                }
+            }
+            Type::Intersection(members) => {
+                for member in members {
+                    self.collect_type_parameter_binding(member, actual, names, bindings);
+                }
+            }
+            Type::Array(expected) => {
+                if let Type::Array(actual) = actual {
+                    self.collect_type_parameter_binding(expected, actual, names, bindings);
+                }
+            }
+            Type::Hash(expected_key, expected_value) => {
+                if let Type::Hash(actual_key, actual_value) = actual {
+                    self.collect_type_parameter_binding(expected_key, actual_key, names, bindings);
+                    self.collect_type_parameter_binding(
+                        expected_value,
+                        actual_value,
+                        names,
+                        bindings,
+                    );
+                }
+            }
+            Type::Tuple(expected_elements) => {
+                if let Type::Tuple(actual_elements) = actual {
+                    for (expected, actual) in expected_elements.iter().zip(actual_elements) {
+                        self.collect_type_parameter_binding(expected, actual, names, bindings);
+                    }
+                }
+            }
+            Type::Proc(expected_parameters, expected_result) => {
+                if let Type::Proc(actual_parameters, actual_result) = actual {
+                    for (expected, actual) in expected_parameters.iter().zip(actual_parameters) {
+                        self.collect_type_parameter_binding(expected, actual, names, bindings);
+                    }
+                    self.collect_type_parameter_binding(
+                        expected_result,
+                        actual_result,
+                        names,
+                        bindings,
+                    );
+                }
+            }
+            Type::Named(expected_name, expected_arguments) => {
+                if let Type::Named(actual_name, actual_arguments) = actual {
+                    if name_matches(expected_name, actual_name)
+                        || name_matches(actual_name, expected_name)
+                    {
+                        for (expected, actual) in expected_arguments.iter().zip(actual_arguments) {
+                            self.collect_type_parameter_binding(expected, actual, names, bindings);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn substitute_type_parameters(
+        type_: &Type,
+        bindings: &BTreeMap<String, Type>,
+        names: &BTreeSet<String>,
+    ) -> Type {
+        match type_ {
+            Type::TypeVar(name) if names.contains(name) => {
+                bindings.get(name).cloned().unwrap_or(Type::Any)
+            }
+            Type::Named(name, arguments) => Type::Named(
+                name.clone(),
+                arguments
+                    .iter()
+                    .map(|argument| Self::substitute_type_parameters(argument, bindings, names))
+                    .collect(),
+            ),
+            Type::Array(element) => Type::Array(Box::new(Self::substitute_type_parameters(
+                element, bindings, names,
+            ))),
+            Type::Hash(key, value) => Type::Hash(
+                Box::new(Self::substitute_type_parameters(key, bindings, names)),
+                Box::new(Self::substitute_type_parameters(value, bindings, names)),
+            ),
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| Self::substitute_type_parameters(element, bindings, names))
+                    .collect(),
+            ),
+            Type::Proc(parameters, result) => Type::Proc(
+                parameters
+                    .iter()
+                    .map(|parameter| Self::substitute_type_parameters(parameter, bindings, names))
+                    .collect(),
+                Box::new(Self::substitute_type_parameters(result, bindings, names)),
+            ),
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|member| Self::substitute_type_parameters(member, bindings, names)),
+            ),
+            Type::Intersection(members) => Type::intersection(
+                members
+                    .iter()
+                    .map(|member| Self::substitute_type_parameters(member, bindings, names)),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    fn substitute_signature_type(
+        type_: &Type,
+        receiver_type: Option<&Type>,
+        bindings: &BTreeMap<String, Type>,
+        type_parameters: &[String],
+    ) -> Type {
+        let names = type_parameters.iter().cloned().collect::<BTreeSet<_>>();
+        let type_ = Self::substitute_instance_type(type_, receiver_type);
+        Self::substitute_type_parameters(&type_, bindings, &names)
     }
 
     fn looks_like_class_name(name: &str) -> bool {
@@ -4748,6 +4968,7 @@ impl<'src> Analyzer<'src> {
         arguments: &CallArguments<'node>,
         receiver_type: Option<&Type>,
     ) -> Type {
+        let type_parameter_bindings = self.infer_type_parameter_bindings(signature, arguments);
         let keyword_mode = !signature.keywords.is_empty() || signature.accepts_keyword_rest;
         let argument_types = if keyword_mode {
             &arguments.positional_types
@@ -4832,7 +5053,12 @@ impl<'src> Analyzer<'src> {
                 .zip(&signature.params)
             {
                 if let Some(argument) = arguments.argument_nodes.get(*argument_index) {
-                    let expected = Self::substitute_instance_type(expected, receiver_type);
+                    let expected = Self::substitute_signature_type(
+                        expected,
+                        receiver_type,
+                        &type_parameter_bindings,
+                        &signature.type_parameters,
+                    );
                     self.check_assignable(argument, actual, &expected);
                 }
             }
@@ -4847,7 +5073,12 @@ impl<'src> Analyzer<'src> {
                 .zip(&signature.params)
             {
                 if let Some(argument) = arguments.argument_nodes.get(*argument_index) {
-                    let expected = Self::substitute_instance_type(expected, receiver_type);
+                    let expected = Self::substitute_signature_type(
+                        expected,
+                        receiver_type,
+                        &type_parameter_bindings,
+                        &signature.type_parameters,
+                    );
                     self.check_assignable(argument, actual, &expected);
                 }
             }
@@ -4855,7 +5086,12 @@ impl<'src> Analyzer<'src> {
         if keyword_mode && !arguments.forwards_arguments && !arguments.has_unknown_keyword_splat {
             for argument in &arguments.keyword_arguments {
                 if let Some(expected) = signature.keywords.get(&argument.name) {
-                    let expected = Self::substitute_instance_type(&expected.type_, receiver_type);
+                    let expected = Self::substitute_signature_type(
+                        &expected.type_,
+                        receiver_type,
+                        &type_parameter_bindings,
+                        &signature.type_parameters,
+                    );
                     self.check_assignable(&argument.node, &argument.type_, &expected);
                 }
             }
@@ -4863,7 +5099,12 @@ impl<'src> Analyzer<'src> {
         if arguments.has_unknown_positional_splat || arguments.has_unknown_keyword_splat {
             Type::Any
         } else {
-            Self::substitute_instance_type(&signature.return_type, receiver_type)
+            Self::substitute_signature_type(
+                &signature.return_type,
+                receiver_type,
+                &type_parameter_bindings,
+                &signature.type_parameters,
+            )
         }
     }
 

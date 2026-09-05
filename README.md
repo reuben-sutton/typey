@@ -15,7 +15,8 @@ The first vertical slice supports:
 - flow-sensitive local refinement for truthiness, `nil?`, and `is_a?`;
 - a small, explicit Ruby core-method model;
 - Sorbet `sig` blocks and `T.let`, `T.cast`, `T.must`, `T.unsafe`,
-  `T.assert_type!`, `T.reveal_type`, and `T.absurd`;
+  `T.assert_type!`, `T.reveal_type`, `T.absurd`, `T.attached_class`, and
+  method-level `T.type_parameter` substitution;
 - inline RBS comments, always enabled, including `#:` method signatures,
   `#|` continuations, and trailing assertions.
 
@@ -34,7 +35,8 @@ lexical constants, class variables, globals, singleton classes, extension
 modules, and basic `Proc` calls. Remaining gaps are richer destructuring and
 exception edges, overloads and generic signatures, a complete Ruby
 core/standard-library model, and the broader Spinel feature set (full
-closure/yield propagation, refinements, and precise dynamic dispatch).
+closure/yield propagation, refinements, generic class members, and precise
+dynamic dispatch).
 
 Run it on stdin, one file, or an entire repository:
 

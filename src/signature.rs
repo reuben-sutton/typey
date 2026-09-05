@@ -20,6 +20,10 @@ pub struct MethodSig {
     pub accepts_rest: bool,
     pub keywords: BTreeMap<String, KeywordParam>,
     pub accepts_keyword_rest: bool,
+    /// Sorbet method-level type parameters declared by `type_parameters`.
+    /// The names are used to solve `T.type_parameter(:Name)` occurrences at
+    /// each call site.
+    pub type_parameters: Vec<String>,
     /// `void` is an effect/contract: calls produce Nil, but the final Ruby
     /// expression in the implementation is not checked as a return value.
     pub is_void: bool,
@@ -36,6 +40,7 @@ impl MethodSig {
             keywords: BTreeMap::new(),
             param_names: Vec::new(),
             params,
+            type_parameters: Vec::new(),
             return_type,
         }
     }
@@ -335,6 +340,14 @@ fn only_trivia(source: &[u8]) -> bool {
 
 #[must_use]
 pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
+    let type_parameters = extract_call(text, "type_parameters")
+        .map(|body| {
+            split_top_level(&body, ',')
+                .into_iter()
+                .filter_map(|parameter| parse_type_parameter_name(&parameter))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let mut param_names = Vec::new();
     let params = extract_call(text, "params").map_or_else(Vec::new, |body| {
         split_top_level(&body, ',')
@@ -355,9 +368,14 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
         extract_call(text, "returns").map_or(Type::Any, |body| parse_type(&body))
     };
 
-    if text.contains("params") || text.contains("returns") || text.contains(".void") {
+    if text.contains("params")
+        || text.contains("returns")
+        || text.contains(".void")
+        || !type_parameters.is_empty()
+    {
         let mut signature = MethodSig::new(params, return_type);
         signature.param_names = param_names;
+        signature.type_parameters = type_parameters;
         signature.is_void = is_void;
         Some(signature)
     } else {
@@ -455,8 +473,14 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
         accepts_rest,
         keywords,
         accepts_keyword_rest,
+        type_parameters: Vec::new(),
         is_void,
     })
+}
+
+fn parse_type_parameter_name(raw: &str) -> Option<String> {
+    let name = raw.trim().trim_start_matches(':').trim_matches(['\'', '"']);
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 #[must_use]
@@ -552,6 +576,11 @@ pub fn parse_type(raw: &str) -> Type {
                             .map(|part| parse_type(&part)),
                     )
                 }
+                "T.type_parameter" => {
+                    return Type::TypeVar(
+                        parse_type_parameter_name(body).unwrap_or_else(|| normalized.to_owned()),
+                    )
+                }
                 "singleton" | "T.class_of" => {
                     return Type::Named("Class".to_owned(), vec![parse_type(body)])
                 }
@@ -599,9 +628,6 @@ pub fn parse_type(raw: &str) -> Type {
         }
     }
 
-    if normalized.starts_with("T.type_parameter") {
-        return Type::TypeVar(normalized.to_owned());
-    }
     if normalized == "T::Boolean" {
         return Type::bool();
     }
