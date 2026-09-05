@@ -5784,8 +5784,20 @@ impl<'src> Analyzer<'src> {
             }
             Type::Hash(key, value) => self.eval_hash_method(key, value, name, site, environment),
             Type::String => self.eval_string_method(name, site.argument_types),
-            Type::Integer => self.eval_numeric_method(Type::Integer, name, site.argument_types),
-            Type::Float => self.eval_numeric_method(Type::Float, name, site.argument_types),
+            Type::Integer => self.eval_numeric_method(
+                Type::Integer,
+                name,
+                site.argument_types,
+                site.block,
+                environment,
+            ),
+            Type::Float => self.eval_numeric_method(
+                Type::Float,
+                name,
+                site.argument_types,
+                site.block,
+                environment,
+            ),
             Type::True | Type::False | Type::Nil | Type::Symbol => self.eval_common_method(name),
             Type::Proc(params, result) if matches!(name, "call" | "[]") => {
                 for (index, (argument, expected)) in
@@ -6295,8 +6307,22 @@ impl<'src> Analyzer<'src> {
         }
     }
 
-    fn eval_numeric_method(&mut self, receiver: Type, name: &str, argument_types: &[Type]) -> Type {
+    fn eval_numeric_method(
+        &mut self,
+        receiver: Type,
+        name: &str,
+        argument_types: &[Type],
+        block: Option<&Node<'_>>,
+        environment: &mut Environment,
+    ) -> Type {
         match name {
+            "times" | "upto" | "downto" | "step" => {
+                let Some(block) = block else {
+                    return Type::named("Enumerator");
+                };
+                let _ = self.eval_block_node(block, std::slice::from_ref(&receiver), environment);
+                receiver
+            }
             "+" | "-" | "*" | "%" => {
                 if receiver == Type::Float || argument_types.contains(&Type::Float) {
                     Type::Float

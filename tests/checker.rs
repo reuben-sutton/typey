@@ -1505,6 +1505,10 @@ T.reveal_type(1.next)
 T.reveal_type(1.gcd(2))
 T.reveal_type(1.digits)
 T.reveal_type(1.clamp(0, 2))
+T.reveal_type(1.times { |value| value.to_s })
+T.reveal_type(1.upto(3) { |value| value.to_s })
+T.reveal_type(1.downto(0))
+T.reveal_type(1.step(3))
 "#,
         CheckerConfig::default(),
     );
@@ -1521,6 +1525,7 @@ T.reveal_type(1.clamp(0, 2))
         "Revealed type: `Float`",
         "Revealed type: `Integer`",
         "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `Enumerator`",
     ] {
         assert!(
             notes.iter().any(|message| message.contains(expected)),
