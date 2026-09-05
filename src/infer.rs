@@ -2440,9 +2440,12 @@ impl<'src> Analyzer<'src> {
             let mut element = Type::Never;
             for child in &array.elements() {
                 let child_type = self.eval_node(&child, environment).type_;
-                if child.as_splat_node().is_some() {
+                let child_type = if child.as_splat_node().is_some() {
                     fixed_length = false;
-                }
+                    self.array_element_type(&child_type)
+                } else {
+                    child_type
+                };
                 element_types.push(child_type.clone());
                 element = element.join(&child_type);
             }
@@ -2472,6 +2475,20 @@ impl<'src> Analyzer<'src> {
                     let value_type = self.eval_node(&assoc.value(), environment).type_;
                     key = key.join(&key_type);
                     value = value.join(&value_type);
+                } else if let Some(splat) = child.as_assoc_splat_node() {
+                    if let Some(expression) = splat.value() {
+                        match self.eval_node(&expression, environment).type_ {
+                            Type::Hash(splat_key, splat_value) => {
+                                key = key.join(&splat_key);
+                                value = value.join(&splat_value);
+                            }
+                            Type::Any => {
+                                key = Type::Any;
+                                value = Type::Any;
+                            }
+                            _ => {}
+                        }
+                    }
                 } else {
                     self.eval_node(&child, environment);
                 }
@@ -2489,6 +2506,20 @@ impl<'src> Analyzer<'src> {
                 if let Some(assoc) = child.as_assoc_node() {
                     key = key.join(&self.eval_node(&assoc.key(), environment).type_);
                     value = value.join(&self.eval_node(&assoc.value(), environment).type_);
+                } else if let Some(splat) = child.as_assoc_splat_node() {
+                    if let Some(expression) = splat.value() {
+                        match self.eval_node(&expression, environment).type_ {
+                            Type::Hash(splat_key, splat_value) => {
+                                key = key.join(&splat_key);
+                                value = value.join(&splat_value);
+                            }
+                            Type::Any => {
+                                key = Type::Any;
+                                value = Type::Any;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             let key = if key.is_never() { Type::Any } else { key };

@@ -1317,6 +1317,44 @@ T.reveal_type(hash.fetch("answer") { |key| key.length })
 }
 
 #[test]
+fn preserves_types_through_literal_splats() {
+    let result = check(
+        r#"
+values = [1, 2]
+hash = {"answer" => 1}
+
+T.reveal_type([0, *values])
+T.reveal_type({"other" => 2, **hash})
+T.reveal_type({**hash})
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T::Array[Integer]`"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T::Hash[String, Integer]`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn preserves_built_in_class_object_and_global_call_types() {
     let result = check(
         r#"
