@@ -9,7 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::directives::{is_typed_ignore, typed_mode, TypedMode};
-use crate::infer::{check_with_rbi_ranges, CheckerConfig};
+use crate::infer::{check_with_rbi_ranges_and_parse_diagnostics, CheckerConfig};
 use crate::types::Type;
 use std::fs;
 use std::io;
@@ -183,14 +183,20 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
             combined.len()
         );
     }
-    let result = check_with_rbi_ranges(&combined, config, &rbi_ranges);
+    let (result, parse_diagnostics) =
+        check_with_rbi_ranges_and_parse_diagnostics(&combined, config, &rbi_ranges);
     let diagnostics = result
         .diagnostics
         .iter()
         .filter(|diagnostic| {
-            locate_offset(diagnostic.start, &ranges)
-                .and_then(|index| files.get(index))
-                .is_none_or(|file| typed_mode(&file.source) != Some(TypedMode::False))
+            let Some(index) = locate_offset(diagnostic.start, &ranges) else {
+                return true;
+            };
+            let Some(file) = files.get(index) else {
+                return true;
+            };
+            typed_mode(&file.source) != Some(TypedMode::False)
+                || parse_diagnostics.contains(diagnostic)
         })
         .filter_map(|diagnostic| map_diagnostic(diagnostic, &files, &ranges))
         .collect();

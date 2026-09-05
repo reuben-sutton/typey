@@ -2598,6 +2598,28 @@ end
 }
 
 #[test]
+fn typed_false_suppresses_type_errors_but_keeps_syntax_errors() {
+    let semantic = check(
+        "# typed: false\n\nT.let(\"wrong\", Integer)\n",
+        CheckerConfig::default(),
+    );
+    assert!(
+        semantic.diagnostics.is_empty(),
+        "{:?}",
+        semantic.diagnostics
+    );
+
+    let syntax = check(
+        "# typed: false\n\ndef broken(\n  this is not valid Ruby\n",
+        CheckerConfig::default(),
+    );
+    assert!(
+        !syntax.diagnostics.is_empty(),
+        "syntax error was suppressed"
+    );
+}
+
+#[test]
 fn accepts_sorbet_rbs_assertion_spacing_and_comment_tails() {
     let source = "value = nil #: as !nil # trailing comment\nother = 1#:as String\n";
     let annotations = typey::signature::collect(source);

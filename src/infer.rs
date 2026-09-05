@@ -1243,9 +1243,12 @@ impl MethodRegistrar<'_> {
 /// Check a source buffer with direct ruby-prism parsing.
 #[must_use]
 pub fn check(source: &str, config: CheckerConfig) -> CheckResult {
-    let mut result = check_with_rbi_ranges(source, config, &[]);
+    let (mut result, parse_diagnostics) =
+        check_with_rbi_ranges_and_parse_diagnostics(source, config, &[]);
     if typed_mode(source) == Some(TypedMode::False) {
-        result.diagnostics.clear();
+        result
+            .diagnostics
+            .retain(|diagnostic| parse_diagnostics.contains(diagnostic));
     }
     result
 }
@@ -1255,8 +1258,16 @@ pub(crate) fn check_with_rbi_ranges(
     config: CheckerConfig,
     rbi_ranges: &[(usize, usize)],
 ) -> CheckResult {
+    check_with_rbi_ranges_and_parse_diagnostics(source, config, rbi_ranges).0
+}
+
+pub(crate) fn check_with_rbi_ranges_and_parse_diagnostics(
+    source: &str,
+    config: CheckerConfig,
+    rbi_ranges: &[(usize, usize)],
+) -> (CheckResult, Vec<Diagnostic>) {
     if is_typed_ignore(source) {
-        return CheckResult::default();
+        return (CheckResult::default(), Vec::new());
     }
 
     let bytes = source.as_bytes();
@@ -1314,10 +1325,11 @@ pub(crate) fn check_with_rbi_ranges(
         debug_nodes: 0,
         defer_inline_assertions: false,
         expected_return_type: None,
-        diagnostics,
+        diagnostics: diagnostics.clone(),
         types: Vec::new(),
     };
-    analyzer.run(&root)
+    let result = analyzer.run(&root);
+    (result, diagnostics)
 }
 
 struct Analyzer<'src> {
