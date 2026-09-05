@@ -6264,7 +6264,7 @@ impl<'src> Analyzer<'src> {
                 self.eval_array_method(&element, name, site, environment)
             }
             Type::Hash(key, value) => self.eval_hash_method(key, value, name, site, environment),
-            Type::String => self.eval_string_method(name, site.argument_types),
+            Type::String => self.eval_string_method(name, site, environment),
             Type::Integer => self.eval_numeric_method(
                 Type::Integer,
                 name,
@@ -6647,7 +6647,13 @@ impl<'src> Analyzer<'src> {
                 Type::union([Type::Nil, Type::Array(Box::new(element.clone()))])
             }
             "length" | "size" | "count" => Type::Integer,
-            "empty?" | "any?" | "all?" | "none?" | "include?" => Type::bool(),
+            "empty?" | "include?" => Type::bool(),
+            "any?" | "all?" | "none?" => {
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::bool()
+            }
             "join" => Type::String,
             "concat" => {
                 let element = site
@@ -6849,7 +6855,12 @@ impl<'src> Analyzer<'src> {
         result
     }
 
-    fn eval_string_method(&self, name: &str, _argument_types: &[Type]) -> Type {
+    fn eval_string_method<'a, 'node>(
+        &mut self,
+        name: &str,
+        site: &CallSite<'a, 'node>,
+        environment: &mut Environment,
+    ) -> Type {
         match name {
             "length" | "size" | "bytesize" | "count" => Type::Integer,
             "empty?" | "start_with?" | "end_with?" | "include?" => Type::bool(),
@@ -6867,9 +6878,15 @@ impl<'src> Analyzer<'src> {
             "index" | "rindex" => Type::union([Type::Nil, Type::Integer]),
             "encode" | "reverse" | "reverse!" | "strip" | "lstrip" | "rstrip" | "upcase"
             | "downcase" | "capitalize" | "swapcase" | "chomp" | "chop" | "succ" | "next"
-            | "gsub" | "sub" | "delete" | "tr" | "tr_s" | "squeeze" | "scrub" | "center"
-            | "ljust" | "rjust" | "prepend" | "concat" | "replace" | "force_encoding" | "to_s"
-            | "dup" | "clone" | "+" | "*" => Type::String,
+            | "delete" | "tr" | "tr_s" | "squeeze" | "scrub" | "center" | "ljust" | "rjust"
+            | "prepend" | "concat" | "replace" | "force_encoding" | "to_s" | "dup" | "clone"
+            | "+" | "*" => Type::String,
+            "gsub" | "sub" => {
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, &[Type::String], environment);
+                }
+                Type::String
+            }
             "chr" => Type::String,
             "ord" => Type::Integer,
             _ => Type::Any,

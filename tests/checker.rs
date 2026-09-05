@@ -3017,6 +3017,30 @@ end
 }
 
 #[test]
+fn evaluates_array_predicate_blocks() {
+    let source = r#"
+[1].any? { |value| value.to_s }
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_start = source.find("value.to_s").expect("predicate send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + 10
+    }));
+}
+
+#[test]
+fn evaluates_string_transform_blocks() {
+    let source = r#"
+"x".gsub(/x/) { |match| match.upcase }
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_start = source.find("match.upcase").expect("transform send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + 12
+    }));
+}
+
+#[test]
 fn traverses_blocks_on_unknown_receivers() {
     let source = r#"
 value = T.unsafe([])
