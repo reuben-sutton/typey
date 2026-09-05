@@ -432,6 +432,22 @@ impl OutcomeTypes {
             self.retry_type.clone(),
         ])
     }
+
+    fn flow(&self) -> Flow {
+        let mut flow = Flow::empty();
+        for (kind, type_) in [
+            (FlowKind::Return, &self.return_type),
+            (FlowKind::Raise, &self.raise_type),
+            (FlowKind::Break, &self.break_type),
+            (FlowKind::Next, &self.next_type),
+            (FlowKind::Retry, &self.retry_type),
+        ] {
+            if !type_.is_never() {
+                flow = flow.union(Flow::abrupt(kind));
+            }
+        }
+        flow
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2108,6 +2124,26 @@ impl<'src> Analyzer<'src> {
             .push(Diagnostic::note(self.source, message, start, end));
     }
 
+    fn eval_compound_assignment<'node>(
+        &mut self,
+        receiver: Type,
+        operator: &str,
+        value_node: &Node<'node>,
+        environment: &mut Environment,
+    ) -> Eval {
+        let value_result = self.eval_node(value_node, environment);
+        let Some(value_type) = value_result.normal_type.clone() else {
+            return value_result;
+        };
+        let site = CallSite {
+            argument_nodes: std::slice::from_ref(value_node),
+            argument_types: std::slice::from_ref(&value_type),
+            block: None,
+        };
+        let result_type = self.eval_method_call(&receiver, operator, &site, environment);
+        Eval::from_parts(Some(result_type), value_result.abrupt, value_result.flow)
+    }
+
     fn eval_node<'node>(&mut self, node: &Node<'node>, environment: &mut Environment) -> Eval {
         if self.config.debug {
             self.debug_nodes += 1;
@@ -2335,6 +2371,62 @@ impl<'src> Analyzer<'src> {
             let type_ = self.apply_inline_assertion(node, actual);
             environment.bind(prism::constant_name(write.name()), type_.clone());
             return Eval::value(self.record(node, type_));
+        }
+        if let Some(write) = node.as_local_variable_operator_write_node() {
+            let name = prism::constant_name(write.name());
+            let value_node = write.value();
+            let operator = prism::constant_name(write.binary_operator());
+            let result = self.eval_compound_assignment(
+                environment.get(&name),
+                &operator,
+                &value_node,
+                environment,
+            );
+            let (normal_type, abrupt, flow) = (result.normal_type, result.abrupt, result.flow);
+            let normal_type = normal_type.map(|type_| {
+                let type_ = self.apply_inline_assertion(node, type_);
+                environment.bind(name.clone(), type_.clone());
+                type_
+            });
+            let mut result = Eval::from_parts(normal_type, abrupt, flow);
+            result.type_ = self.record(node, result.type_.clone());
+            return result;
+        }
+        if let Some(write) = node.as_local_variable_and_write_node() {
+            let name = prism::constant_name(write.name());
+            let current = environment.get(&name);
+            let mut right_environment = environment.clone();
+            let value_node = write.value();
+            let right = if current.truthy_part().is_never() {
+                Eval::value(Type::Never)
+            } else {
+                self.eval_node(&value_node, &mut right_environment)
+            };
+            if !current.truthy_part().is_never() {
+                *environment = environment.join(&right_environment);
+            }
+            let normal_type = Type::union([
+                current.falsy_part(),
+                right.normal_type.clone().unwrap_or(Type::Never),
+            ]);
+            let normal_type = (!normal_type.is_never()).then(|| {
+                let type_ = self.apply_inline_assertion(node, normal_type);
+                environment.bind(name, type_.clone());
+                type_
+            });
+            let abrupt = if current.truthy_part().is_never() {
+                OutcomeTypes::default()
+            } else {
+                right.abrupt
+            };
+            let flow = if normal_type.is_some() {
+                Flow::normal().union(abrupt.flow())
+            } else {
+                abrupt.flow()
+            };
+            let mut result = Eval::from_parts(normal_type, abrupt, flow);
+            result.type_ = self.record(node, result.type_.clone());
+            return result;
         }
         if let Some(write) = node.as_local_variable_or_write_node() {
             let name = prism::constant_name(write.name());

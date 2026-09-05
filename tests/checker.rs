@@ -1397,6 +1397,45 @@ T.reveal_type(hash.to_a)
 }
 
 #[test]
+fn tracks_local_compound_assignments() {
+    let result = check(
+        r#"
+value = 1
+value += 2.0
+T.reveal_type(value)
+
+flag = true
+flag &&= "done"
+T.reveal_type(flag)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Float`"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `String`"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn preserves_built_in_class_object_and_global_call_types() {
     let result = check(
         r#"
