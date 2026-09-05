@@ -2826,6 +2826,15 @@ impl<'src> Analyzer<'src> {
             let type_ = self.apply_inline_assertion(node, actual);
             return Eval::value(self.record(node, type_));
         }
+        if node.as_it_local_variable_read_node().is_some() {
+            let type_ = self.apply_inline_assertion(node, environment.get("it"));
+            return Eval::value(self.record(node, type_));
+        }
+        if let Some(numbered) = node.as_numbered_reference_read_node() {
+            let type_ = self
+                .apply_inline_assertion(node, environment.get(&format!("_{}", numbered.number())));
+            return Eval::value(self.record(node, type_));
+        }
         if let Some(constant) = node.as_constant_read_node() {
             let name = prism::constant_name(constant.name());
             let actual = self.constant_type(environment, &name);
@@ -6259,6 +6268,22 @@ impl<'src> Analyzer<'src> {
                     Some(&MethodSig::new(expected.to_vec(), Type::Any)),
                     &mut environment,
                 );
+            } else if parameters.as_it_parameters_node().is_some()
+                || parameters.as_numbered_parameters_node().is_some()
+            {
+                for (index, type_) in expected.iter().enumerate() {
+                    environment.bind(format!("_{}", index + 1), type_.clone());
+                }
+                if let Some(type_) = expected.first() {
+                    environment.bind("it", type_.clone());
+                }
+            }
+        } else {
+            for (index, type_) in expected.iter().enumerate() {
+                environment.bind(format!("_{}", index + 1), type_.clone());
+            }
+            if let Some(type_) = expected.first() {
+                environment.bind("it", type_.clone());
             }
         }
         let result = if let Some(body) = block.body() {

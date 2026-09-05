@@ -1530,6 +1530,29 @@ T.reveal_type(flag)
 }
 
 #[test]
+fn infers_implicit_block_parameters() {
+    let result = check(
+        r#"
+T.reveal_type([1].map { it + 1 })
+T.reveal_type([1].map { _1 + 1 })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let arrays = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic
+                    .message
+                    .contains("Revealed type: `T::Array[Integer]`")
+        })
+        .count();
+    assert_eq!(arrays, 2, "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_container_types_through_iteration_blocks() {
     let result = check(
         r#"
