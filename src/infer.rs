@@ -751,7 +751,8 @@ pub(crate) fn check_with_rbi_ranges(
         eprintln!("[typey] Prism parsing {} bytes", bytes.len());
     }
     let parsed = prism::parse(bytes);
-    let annotations = signature::collect(source);
+    let root = parsed.node();
+    let annotations = signature::collect_for_ast(source, &root);
     let diagnostics = parsed
         .errors()
         .map(|error| {
@@ -764,7 +765,7 @@ pub(crate) fn check_with_rbi_ranges(
         eprintln!(
             "[typey] Prism parse complete: {} syntax diagnostics, {} method annotations, {} inline assertions",
             diagnostics.len(),
-            annotations.methods.len(),
+            annotations.method_annotations.len(),
             annotations.assertions.len()
         );
     }
@@ -797,7 +798,6 @@ pub(crate) fn check_with_rbi_ranges(
         diagnostics,
         types: Vec::new(),
     };
-    let root = parsed.node();
     analyzer.run(&root)
 }
 
@@ -971,17 +971,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn register_methods<'node>(&mut self, root: &Node<'node>) {
-        self.methods = self
-            .annotations
-            .methods
-            .iter()
-            .map(|(name, signature)| {
-                (
-                    MethodKey::top_level(name.clone()),
-                    MethodState::explicit(signature),
-                )
-            })
-            .collect();
+        self.methods.clear();
         let mut registrar = MethodRegistrar {
             source: self.source,
             methods: &mut self.methods,
@@ -994,13 +984,37 @@ impl<'src> Analyzer<'src> {
         };
         registrar.visit(root);
 
-        // The source annotation collector intentionally stays syntax-oriented
-        // and keys signatures by method name. Apply those signatures to class
-        // methods too when no more specific class metadata exists.
-        for (key, state) in &mut self.methods {
-            if !state.explicit {
-                if let Some(signature) = self.annotations.methods.get(&key.name) {
-                    *state = MethodState::explicit(signature);
+        // Resolve annotation offsets through the same definition table used by
+        // body evaluation. This makes signatures owner-aware and prevents a
+        // method called `remove` (or `initialize`) in one file from changing a
+        // same-named method elsewhere in a workspace.
+        let mut source_signatures = BTreeMap::<MethodKey, MethodSig>::new();
+        let mut rbi_signatures = BTreeMap::<MethodKey, MethodSig>::new();
+        for (offset, signature) in &self.annotations.method_annotations {
+            let Some(key) = self.definitions.get(offset) else {
+                continue;
+            };
+            if self
+                .rbi_ranges
+                .iter()
+                .any(|(start, end)| *offset >= *start && *offset < *end)
+            {
+                rbi_signatures
+                    .entry(key.clone())
+                    .or_insert_with(|| signature.clone());
+            } else {
+                source_signatures
+                    .entry(key.clone())
+                    .or_insert_with(|| signature.clone());
+            }
+        }
+        for (key, signature) in source_signatures
+            .into_iter()
+            .chain(rbi_signatures.into_iter())
+        {
+            if let Some(state) = self.methods.get_mut(&key) {
+                if !state.explicit {
+                    *state = MethodState::explicit(&signature);
                 }
             }
         }

@@ -1,4 +1,5 @@
 use crate::types::Type;
+use ruby_prism::{CallNode, DefNode, Node, Visit};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,7 +40,12 @@ pub struct InlineAssertion {
 
 #[derive(Clone, Debug, Default)]
 pub struct AnnotationTable {
+    /// Legacy name-keyed annotations used by the standalone parser helper.
+    /// The analyzer uses `method_annotations`, which is anchored to Prism
+    /// definition offsets and cannot leak between same-named methods.
     pub methods: BTreeMap<String, MethodSig>,
+    /// Method signatures attached to actual Prism `def` nodes.
+    pub method_annotations: BTreeMap<usize, MethodSig>,
     pub assertions: BTreeMap<usize, InlineAssertion>,
 }
 
@@ -160,6 +166,134 @@ pub fn collect(source: &str) -> AnnotationTable {
     }
 
     table
+}
+
+/// Collect annotations using the already-parsed Prism tree.
+///
+/// The original line scanner is intentionally retained by [`collect`] as a
+/// small public parsing utility. Whole-workspace analysis needs stronger
+/// identity, though: Ruby code in a heredoc can contain text that looks like a
+/// `sig` or `def`, and two unrelated owners commonly define the same method
+/// name. This collector only pairs annotations with real Prism definitions.
+#[must_use]
+pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
+    let mut table = collect(source);
+    table.methods.clear();
+    table.method_annotations.clear();
+
+    let mut nodes = AnnotationNodes::default();
+    nodes.visit(root);
+    nodes.definitions.sort_unstable();
+    nodes
+        .signatures
+        .sort_unstable_by_key(|(start, end)| (*end, *start));
+
+    let lines = line_spans(source);
+    let mut definitions_by_line = BTreeMap::<usize, Vec<usize>>::new();
+    let mut line_index = 0;
+    for definition in &nodes.definitions {
+        while line_index + 1 < lines.len() && lines[line_index + 1].0 <= *definition {
+            line_index += 1;
+        }
+        definitions_by_line
+            .entry(line_index)
+            .or_default()
+            .push(*definition);
+    }
+
+    let mut pending_rbs: Option<String> = None;
+    for (line_number, (_, line)) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if let Some(definition) = definitions_by_line
+            .get(&line_number)
+            .and_then(|definitions| definitions.first())
+        {
+            if let Some(text) = pending_rbs.take() {
+                if let Some(signature) = parse_rbs_signature(&text) {
+                    table.method_annotations.insert(*definition, signature);
+                }
+            }
+        }
+
+        if let Some(comment) = trimmed.strip_prefix("#:") {
+            let comment = comment.trim_start();
+            pending_rbs = Some(if comment.is_empty() {
+                String::new()
+            } else {
+                format!("{comment}\n")
+            });
+        } else if let Some(comment) = trimmed.strip_prefix("#|") {
+            if let Some(text) = pending_rbs.as_mut() {
+                text.push_str(comment.trim_start());
+                text.push('\n');
+            }
+        } else if trimmed.is_empty() || trimmed.starts_with('#') {
+            // Ordinary comments and blank lines may separate an RBS
+            // signature from its definition.
+        } else {
+            // A signature-looking comment in a string/heredoc is not allowed
+            // to survive the next real statement and attach to its `def`.
+            pending_rbs = None;
+        }
+    }
+
+    // Sorbet signatures are real calls in Prism. Pair a call with the next
+    // definition only when the intervening source is trivia, which keeps
+    // nested method bodies and fixture strings out of the annotation table.
+    for definition in &nodes.definitions {
+        let Some((start, end)) = nodes
+            .signatures
+            .iter()
+            .rev()
+            .find(|(_, end)| {
+                *end <= *definition && only_trivia(&source.as_bytes()[*end..*definition])
+            })
+            .copied()
+        else {
+            continue;
+        };
+        if let Some(signature) = parse_sorbet_signature(&source[start..end]) {
+            table.method_annotations.insert(*definition, signature);
+        }
+    }
+
+    table
+}
+
+#[derive(Default)]
+struct AnnotationNodes {
+    definitions: Vec<usize>,
+    signatures: Vec<(usize, usize)>,
+}
+
+impl<'pr> Visit<'pr> for AnnotationNodes {
+    fn visit_def_node(&mut self, node: &DefNode<'pr>) {
+        self.definitions.push(crate::prism::span(&node.as_node()).0);
+        ruby_prism::visit_def_node(self, node);
+    }
+
+    fn visit_call_node(&mut self, node: &CallNode<'pr>) {
+        if node.receiver().is_none() && node.name().as_slice() == b"sig" {
+            self.signatures.push(crate::prism::span(&node.as_node()));
+        }
+        ruby_prism::visit_call_node(self, node);
+    }
+}
+
+fn only_trivia(source: &[u8]) -> bool {
+    let mut index = 0;
+    while index < source.len() {
+        if source[index].is_ascii_whitespace() {
+            index += 1;
+        } else if source[index] == b'#' {
+            while index < source.len() && source[index] != b'\n' {
+                index += 1;
+            }
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 #[must_use]

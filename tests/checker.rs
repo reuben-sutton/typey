@@ -386,3 +386,18 @@ fn parses_multiline_sorbet_sig_blocks() {
     assert_eq!(annotations.methods["stringify"].params, vec![Type::Integer]);
     assert_eq!(annotations.methods["stringify"].return_type, Type::String);
 }
+
+#[test]
+fn ast_annotation_collection_ignores_fixture_text() {
+    let source = "class Example\n  sig { params(value: Integer).returns(Integer) }\n  def convert(value)\n    value\n  end\n\n  fixture = <<~RUBY\n    sig { params(value: String).returns(String) }\n    def convert(value)\n      value\n    end\n  RUBY\nend\n";
+    let parsed = typey::prism::parse(source.as_bytes());
+    let annotations = typey::signature::collect_for_ast(source, &parsed.node());
+    assert_eq!(annotations.method_annotations.len(), 1);
+    let signature = annotations
+        .method_annotations
+        .values()
+        .next()
+        .expect("real definition has a signature");
+    assert_eq!(signature.params, vec![Type::Integer]);
+    assert_eq!(signature.return_type, Type::Integer);
+}
