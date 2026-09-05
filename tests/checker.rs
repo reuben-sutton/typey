@@ -1607,6 +1607,54 @@ T.reveal_type(apply { |value| value.to_s })
 }
 
 #[test]
+fn joins_all_arguments_into_rest_parameters() {
+    let result = check(
+        r#"
+def first(*values)
+  T.reveal_type(values)
+  values[0]
+end
+
+def tail(head, *values)
+  T.reveal_type(values)
+  values[0]
+end
+
+T.reveal_type(first(1, "x"))
+T.reveal_type(tail(0, 1, "x"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| {
+                message.contains("Revealed type: `T::Array[T.any(Integer, String)]`")
+            })
+            .count(),
+        2,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| {
+                message.contains("Revealed type: `T.any(Integer, NilClass, String)`")
+            })
+            .count(),
+        2,
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn preserves_container_types_through_iteration_blocks() {
     let result = check(
         r#"

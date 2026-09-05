@@ -601,6 +601,7 @@ impl Eval {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MethodState {
     params: Vec<Option<Type>>,
+    rest_index: Option<usize>,
     keywords: BTreeMap<String, Option<Type>>,
     yield_params: Vec<Option<Type>>,
     block_return_type: Option<Type>,
@@ -620,6 +621,7 @@ impl MethodState {
         let signature = merge_method_signatures(signatures);
         Self {
             params: signature.params.iter().cloned().map(Some).collect(),
+            rest_index: None,
             keywords: signature
                 .keywords
                 .iter()
@@ -648,6 +650,7 @@ impl MethodState {
         let mut keywords = BTreeMap::new();
         let mut required_keywords = BTreeSet::new();
         let mut required_params = 0;
+        let mut rest_index = None;
 
         if let Some(parameters) = parameters {
             for _ in &parameters.requireds() {
@@ -662,6 +665,7 @@ impl MethodState {
                     .keyword_rest()
                     .is_some_and(|node| node.as_forwarding_parameter_node().is_some());
             if accepts_rest {
+                rest_index = Some(params.len());
                 params.push(None);
             }
             for _ in &parameters.posts() {
@@ -679,6 +683,7 @@ impl MethodState {
             }
             return Self {
                 params,
+                rest_index,
                 keywords,
                 yield_params: Vec::new(),
                 block_return_type: None,
@@ -699,6 +704,7 @@ impl MethodState {
 
         Self {
             params,
+            rest_index,
             keywords,
             yield_params: Vec::new(),
             block_return_type: None,
@@ -790,6 +796,40 @@ impl MethodState {
             *slot = Some(next);
             true
         }
+    }
+
+    fn observe_arguments(&mut self, actuals: &[Type]) -> bool {
+        if self.explicit {
+            return false;
+        }
+        let Some(rest_index) = self.rest_index else {
+            return actuals
+                .iter()
+                .enumerate()
+                .fold(false, |changed, (index, actual)| {
+                    self.observe_argument(index, actual) || changed
+                });
+        };
+
+        let post_count = self.params.len().saturating_sub(rest_index + 1);
+        let has_all_posts = actuals.len() >= rest_index + post_count;
+        let post_start = if has_all_posts {
+            actuals.len().saturating_sub(post_count)
+        } else {
+            actuals.len()
+        };
+        let mut changed = false;
+        for (index, actual) in actuals.iter().enumerate() {
+            let slot_index = if index < rest_index {
+                index
+            } else if has_all_posts && index >= post_start {
+                rest_index + 1 + index - post_start
+            } else {
+                rest_index
+            };
+            changed |= self.observe_argument(slot_index, actual);
+        }
+        changed
     }
 
     fn observe_keyword(&mut self, name: &str, actual: &Type) -> bool {
@@ -5018,9 +5058,7 @@ impl<'src> Analyzer<'src> {
                 && !arguments.has_unknown_positional_splat
                 && !arguments.has_unknown_keyword_splat
             {
-                for (index, actual) in positional_types.iter().enumerate() {
-                    changed |= state.observe_argument(index, actual);
-                }
+                changed |= state.observe_arguments(positional_types);
                 if state.accepts_keyword_rest || !state.keywords.is_empty() {
                     for argument in &arguments.keyword_arguments {
                         changed |= state.observe_keyword(&argument.name, &argument.type_);
