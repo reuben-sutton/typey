@@ -1364,6 +1364,49 @@ T.reveal_type(__ENCODING__)
 }
 
 #[test]
+fn preserves_more_array_and_hash_collection_types() {
+    let result = check(
+        r#"
+nested = [["a"], ["b"]]
+values = [1, 2, 3]
+hash = {"answer" => 1}
+
+T.reveal_type(nested.flatten)
+T.reveal_type(values.uniq)
+T.reveal_type(values.each_index { |index| index.to_s })
+T.reveal_type(values.find { |value| value.even? })
+T.reveal_type(values.find_index { |value| value.even? })
+T.reveal_type(values.group_by { |value| value.to_s })
+T.reveal_type(values.partition { |value| value.even? })
+T.reveal_type(values.take_while { |value| value.even? })
+T.reveal_type(values.drop_while { |value| value.even? })
+T.reveal_type(hash.invert)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `T::Array[String]`",
+        "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `T.nilable(Integer)`",
+        "Revealed type: `T::Hash[String, T::Array[Integer]]`",
+        "Revealed type: `T::Array[T::Array[Integer]]`",
+        "Revealed type: `T::Hash[Integer, String]`",
+    ] {
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
+    }
+}
+
+#[test]
 fn preserves_container_types_through_iteration_blocks() {
     let result = check(
         r#"

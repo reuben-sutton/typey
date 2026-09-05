@@ -5791,8 +5791,67 @@ impl<'src> Analyzer<'src> {
                 });
                 Type::Array(Box::new(block_type.truthy_part()))
             }
+            "flatten" => Type::Array(Box::new(self.flattened_array_element_type(element))),
             "each" | "select" | "filter" | "reject" | "sort" | "reverse" | "rotate" | "shuffle" => {
                 if site.block.is_none() && matches!(name, "each" | "select" | "filter" | "reject") {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::Array(Box::new(element.clone()))
+            }
+            "uniq" => Type::Array(Box::new(element.clone())),
+            "each_index" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, &[Type::Integer], environment);
+                }
+                Type::Array(Box::new(element.clone()))
+            }
+            "find" | "detect" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::union([Type::Nil, element.clone()])
+            }
+            "find_index" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::union([Type::Nil, Type::Integer])
+            }
+            "group_by" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                let key = site.block.map_or(Type::Any, |block| {
+                    self.eval_block_node(block, std::slice::from_ref(element), environment)
+                });
+                Type::Hash(
+                    Box::new(key),
+                    Box::new(Type::Array(Box::new(element.clone()))),
+                )
+            }
+            "partition" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
+                }
+                Type::Array(Box::new(Type::Array(Box::new(element.clone()))))
+            }
+            "take_while" | "drop_while" => {
+                if site.block.is_none() {
                     return Type::named("Enumerator");
                 }
                 if let Some(block) = site.block {
@@ -5954,6 +6013,7 @@ impl<'src> Analyzer<'src> {
             }
             "dup" | "clone" | "to_h" => Type::Hash(Box::new(key.clone()), Box::new(value.clone())),
             "compact" => Type::Hash(Box::new(key.clone()), Box::new(value.without(&Type::Nil))),
+            "invert" => Type::Hash(Box::new(value.clone()), Box::new(key.clone())),
             "select" | "filter" | "reject" => {
                 if site.block.is_none() {
                     return Type::named("Enumerator");
@@ -6877,6 +6937,33 @@ impl<'src> Analyzer<'src> {
                 }
             }
             _ => Type::Any,
+        }
+    }
+
+    fn flattened_array_element_type(&self, type_: &Type) -> Type {
+        match type_ {
+            Type::Array(element) => self.flattened_array_element_type(element),
+            Type::Tuple(elements) => {
+                let element = elements.iter().fold(Type::Never, |current, element| {
+                    current.join(&self.flattened_array_element_type(element))
+                });
+                if element.is_never() {
+                    Type::Any
+                } else {
+                    element
+                }
+            }
+            Type::Union(members) => {
+                let element = members.iter().fold(Type::Never, |current, member| {
+                    current.join(&self.flattened_array_element_type(member))
+                });
+                if element.is_never() {
+                    Type::Any
+                } else {
+                    element
+                }
+            }
+            other => other.clone(),
         }
     }
 }
