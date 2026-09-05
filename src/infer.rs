@@ -1,5 +1,5 @@
 use crate::diagnostic::Diagnostic;
-use crate::directives::is_typed_ignore;
+use crate::directives::{is_typed_ignore, typed_mode, TypedMode};
 use crate::prism;
 use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
 use crate::types::{Type, TypeLattice};
@@ -1200,7 +1200,11 @@ impl MethodRegistrar<'_> {
 /// Check a source buffer with direct ruby-prism parsing.
 #[must_use]
 pub fn check(source: &str, config: CheckerConfig) -> CheckResult {
-    check_with_rbi_ranges(source, config, &[])
+    let mut result = check_with_rbi_ranges(source, config, &[]);
+    if typed_mode(source) == Some(TypedMode::False) {
+        result.diagnostics.clear();
+    }
+    result
 }
 
 pub(crate) fn check_with_rbi_ranges(

@@ -8,7 +8,7 @@
 //! original files before they are returned.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::directives::is_typed_ignore;
+use crate::directives::{is_typed_ignore, typed_mode, TypedMode};
 use crate::infer::{check_with_rbi_ranges, CheckerConfig};
 use crate::types::Type;
 use std::fs;
@@ -187,6 +187,11 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
     let diagnostics = result
         .diagnostics
         .iter()
+        .filter(|diagnostic| {
+            locate_offset(diagnostic.start, &ranges)
+                .and_then(|index| files.get(index))
+                .is_none_or(|file| typed_mode(&file.source) != Some(TypedMode::False))
+        })
         .filter_map(|diagnostic| map_diagnostic(diagnostic, &files, &ranges))
         .collect();
     let types = result

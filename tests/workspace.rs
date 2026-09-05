@@ -127,6 +127,32 @@ fn workspace_skips_typed_ignore_files_before_combining_source() {
 }
 
 #[test]
+fn typed_false_files_keep_declarations_but_suppress_local_diagnostics() {
+    let files = vec![
+        WorkspaceFile::new(
+            "false.rb",
+            "# typed: false\nclass Api\n  extend T::Sig\n\n  sig { params(value: Integer).void }\n  def self.accept(value); end\nend\n\nApi.accept(\"wrong\")\n",
+        ),
+        WorkspaceFile::new(
+            "caller.rb",
+            "# typed: true\nApi.accept(\"wrong\")\n",
+        ),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.diagnostic.severity == typey::diagnostic::Severity::Error)
+            .count(),
+        1,
+        "unexpected workspace diagnostics: {:?}",
+        result.diagnostics
+    );
+    assert_eq!(result.diagnostics[0].path, Path::new("caller.rb"));
+}
+
+#[test]
 fn reports_diagnostics_against_their_original_workspace_file() {
     let files = vec![
         WorkspaceFile::new(
