@@ -71,3 +71,28 @@ impl fmt::Display for Diagnostic {
         write!(f, "{}:{} - {}", self.line, self.column, self.message)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Diagnostic, Severity};
+
+    #[test]
+    fn clamps_ranges_and_renders_source_locations() {
+        let source = b"one\ntwo\n";
+        let error = Diagnostic::error(source, "bad", 4, 100);
+        assert_eq!(error.severity, Severity::Error);
+        assert_eq!(error.start, 4);
+        assert_eq!(error.end, source.len());
+        assert_eq!(error.line, 2);
+        assert_eq!(error.column, 1);
+        assert_eq!(error.render("example.rb"), "example.rb:2:1 - bad");
+        assert_eq!(error.to_string(), "2:1 - bad");
+
+        let note = Diagnostic::note(source, "note", 100, 0);
+        assert_eq!(note.severity, Severity::Note);
+        assert_eq!(note.start, source.len());
+        assert_eq!(note.end, source.len());
+        assert_eq!(note.line, 3);
+        assert_eq!(note.column, 1);
+    }
+}

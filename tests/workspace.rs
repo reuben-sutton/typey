@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use typey::workspace::is_ruby_source;
 use typey::{check_workspace, discover_ruby_files, load_workspace, CheckerConfig, WorkspaceFile};
 
 const FIXTURE_ROOT: &str = "tests/workspace_repo";
@@ -115,4 +116,51 @@ fn workspace_skips_typed_ignore_files_before_combining_source() {
         "unexpected workspace diagnostics: {:?}",
         result.diagnostics
     );
+}
+
+#[test]
+fn reports_diagnostics_against_their_original_workspace_file() {
+    let files = vec![
+        WorkspaceFile::new(
+            "decls.rbi",
+            "class Api\n  extend T::Sig\n\n  sig { params(value: Integer).void }\n  def self.accept(value); end\nend\n",
+        ),
+        WorkspaceFile::new("caller.rb", "Api.accept(\"wrong\")\n"),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    let diagnostic = result
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.diagnostic.severity == typey::diagnostic::Severity::Error)
+        .expect("call-site error");
+    assert_eq!(diagnostic.path, Path::new("caller.rb"));
+    assert!(diagnostic
+        .diagnostic
+        .message
+        .contains("Expected `Integer`, but found `String`"));
+    assert!(diagnostic.render().starts_with("caller.rb:1:"));
+}
+
+#[test]
+fn handles_empty_and_single_file_workspace_inputs() {
+    let ignored = check_workspace(
+        &[WorkspaceFile::new(
+            "ignored.rb",
+            "# typed: ignore\nnot valid Ruby\n",
+        )],
+        CheckerConfig::default(),
+    );
+    assert!(ignored.diagnostics.is_empty());
+    assert!(ignored.types.is_empty());
+
+    assert!(is_ruby_source(Path::new("example.rb")));
+    assert!(is_ruby_source(Path::new("example.rbi")));
+    assert!(!is_ruby_source(Path::new("example.RB")));
+    assert_eq!(
+        discover_ruby_files(Path::new("tests/workspace_repo/app/consumer.rb")).unwrap(),
+        vec![Path::new("tests/workspace_repo/app/consumer.rb").to_path_buf()]
+    );
+    assert!(discover_ruby_files(Path::new("Cargo.toml"))
+        .unwrap()
+        .is_empty());
 }
