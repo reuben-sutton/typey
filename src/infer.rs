@@ -602,6 +602,8 @@ impl Eval {
 struct MethodState {
     params: Vec<Option<Type>>,
     keywords: BTreeMap<String, Option<Type>>,
+    yield_params: Vec<Option<Type>>,
+    block_return_type: Option<Type>,
     required_keywords: BTreeSet<String>,
     return_type: Option<Type>,
     return_terminates: bool,
@@ -623,6 +625,8 @@ impl MethodState {
                 .iter()
                 .map(|(name, parameter)| (name.clone(), Some(parameter.type_.clone())))
                 .collect(),
+            yield_params: Vec::new(),
+            block_return_type: None,
             required_keywords: signature
                 .keywords
                 .iter()
@@ -676,6 +680,8 @@ impl MethodState {
             return Self {
                 params,
                 keywords,
+                yield_params: Vec::new(),
+                block_return_type: None,
                 required_keywords,
                 return_type: None,
                 return_terminates: false,
@@ -694,6 +700,8 @@ impl MethodState {
         Self {
             params,
             keywords,
+            yield_params: Vec::new(),
+            block_return_type: None,
             required_keywords,
             return_type: None,
             return_terminates: false,
@@ -798,6 +806,46 @@ impl MethodState {
             false
         } else {
             *slot = Some(next);
+            true
+        }
+    }
+
+    fn block_parameters(&self) -> Vec<Type> {
+        self.yield_params
+            .iter()
+            .map(|type_| type_.clone().unwrap_or(Type::Any))
+            .collect()
+    }
+
+    fn observe_yield_arguments(&mut self, actual: &[Type]) -> bool {
+        let mut changed = false;
+        for (index, actual) in actual.iter().enumerate() {
+            if index >= self.yield_params.len() {
+                self.yield_params.push(Some(actual.clone()));
+                changed = true;
+                continue;
+            }
+            let slot = &mut self.yield_params[index];
+            let next = slot
+                .as_ref()
+                .map_or_else(|| actual.clone(), |current| current.join(actual));
+            if slot.as_ref() != Some(&next) {
+                *slot = Some(next);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn observe_block_return(&mut self, actual: &Type) -> bool {
+        let next = self
+            .block_return_type
+            .as_ref()
+            .map_or_else(|| actual.clone(), |current| current.join(actual));
+        if self.block_return_type.as_ref() == Some(&next) {
+            false
+        } else {
+            self.block_return_type = Some(next);
             true
         }
     }
@@ -3006,6 +3054,37 @@ impl<'src> Analyzer<'src> {
             let type_ = self.apply_inline_assertion(node, type_);
             return Eval::continued(self.record(node, type_));
         }
+        if let Some(yield_node) = node.as_yield_node() {
+            let argument_nodes = yield_node
+                .arguments()
+                .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
+                .unwrap_or_default();
+            let evaluated = self.evaluate_call_arguments(argument_nodes, environment);
+            let arguments = evaluated.arguments;
+            let argument_types = arguments.argument_types.clone();
+            let method_key = environment.method_key.clone();
+            if let Some(key) = method_key.as_ref() {
+                if let Some(state) = self.methods.get_mut(key) {
+                    if state.observe_yield_arguments(&argument_types) {
+                        self.changed_methods.insert(key.clone());
+                    }
+                }
+            }
+            let block_return_type = method_key
+                .as_ref()
+                .and_then(|key| self.methods.get(key))
+                .and_then(|state| state.block_return_type.clone())
+                .unwrap_or(Type::Any);
+            let normal_type = evaluated.all_normal.then_some(block_return_type);
+            let flow = evaluated.abrupt_flow.union(
+                normal_type
+                    .as_ref()
+                    .map_or(Flow::empty(), |_| Flow::normal()),
+            );
+            let mut result = Eval::from_parts(normal_type, evaluated.abrupt, flow);
+            result.type_ = self.record(node, result.type_.clone());
+            return result;
+        }
         if node.as_retry_node().is_some() {
             let type_ = self.apply_inline_assertion(node, Type::Never);
             return Eval::retried(self.record(node, type_));
@@ -4623,6 +4702,7 @@ impl<'src> Analyzer<'src> {
             let key = self.implicit_method_key(&name, environment);
             self.record_method_dependency(&key, environment);
             if let Some(signature) = self.observe_call(&key, &arguments) {
+                self.observe_block_call(&key, block.as_ref(), environment);
                 self.invoke_signature(
                     node,
                     &name,
@@ -4681,21 +4761,7 @@ impl<'src> Analyzer<'src> {
             ) {
                 self.record_method_dependency(&key, environment);
                 if let Some(signature) = self.observe_call(&key, &arguments) {
-                    if name == "each" {
-                        if let Some(block) = block.as_ref() {
-                            let element = match &dispatch_receiver_type {
-                                Type::Array(element) => element.as_ref().clone(),
-                                Type::Tuple(elements) => elements
-                                    .iter()
-                                    .fold(Type::Never, |current, element| current.join(element)),
-                                Type::Named(_, arguments) => {
-                                    arguments.first().cloned().unwrap_or(Type::Any)
-                                }
-                                _ => Type::Any,
-                            };
-                            let _ = self.eval_block_node(block, &[element], environment);
-                        }
-                    }
+                    self.observe_block_call(&key, block.as_ref(), environment);
                     self.invoke_signature(
                         node,
                         &name,
@@ -4845,6 +4911,32 @@ impl<'src> Analyzer<'src> {
             self.changed_methods.insert(key);
         }
         Some(signature)
+    }
+
+    fn observe_block_call<'node>(
+        &mut self,
+        key: &MethodKey,
+        block: Option<&Node<'node>>,
+        environment: &mut Environment,
+    ) {
+        let Some(block) = block else {
+            return;
+        };
+        let Some(key) = self.resolve_method_key(key) else {
+            return;
+        };
+        let expected = self
+            .methods
+            .get(&key)
+            .map_or_else(Vec::new, MethodState::block_parameters);
+        let block_type = self.eval_block_node(block, &expected, environment);
+        if self
+            .methods
+            .get_mut(&key)
+            .is_some_and(|state| state.observe_block_return(&block_type))
+        {
+            self.changed_methods.insert(key);
+        }
     }
 
     fn select_overload(

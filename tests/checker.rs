@@ -1196,6 +1196,29 @@ T.reveal_type(mapped)
 }
 
 #[test]
+fn propagates_yield_types_through_blocks() {
+    let result = check(
+        r#"
+def wrapper
+  yield 1
+end
+
+T.reveal_type(wrapper { |value| value.to_s })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic.message.contains("Revealed type: `String`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_concrete_types_through_collection_and_primitive_methods() {
     let result = check(
         r#"
