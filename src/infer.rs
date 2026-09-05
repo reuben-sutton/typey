@@ -8,6 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 const MAX_FIXPOINT_ROUNDS: usize = 32;
 const DEBUG_NODE_INTERVAL: usize = 1_000;
 
+fn ivar_refinement_key(name: &str) -> String {
+    format!("\u{1}ivar:{name}")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct MethodKey {
     owner: Option<String>,
@@ -1084,14 +1088,17 @@ impl<'src> Analyzer<'src> {
     }
 
     fn class_object_owner(type_: &Type) -> Option<String> {
-        Self::class_object_instance_type(type_).and_then(|instance| Self::named_type_name(&instance))
+        Self::class_object_instance_type(type_)
+            .and_then(|instance| Self::named_type_name(&instance))
     }
 
     fn class_object_value_type(type_: &Type) -> Option<Type> {
         let instance = Self::class_object_instance_type(type_)?;
         let builtin = match &instance {
             Type::Named(name, arguments) if arguments.is_empty() => {
-                let tail = name.rsplit_once("::").map_or(name.as_str(), |(_, tail)| tail);
+                let tail = name
+                    .rsplit_once("::")
+                    .map_or(name.as_str(), |(_, tail)| tail);
                 match tail {
                     "Integer" => Some(Type::Integer),
                     "Float" => Some(Type::Float),
@@ -1107,6 +1114,63 @@ impl<'src> Analyzer<'src> {
             _ => None,
         };
         Some(builtin.unwrap_or(instance))
+    }
+
+    fn receiver_instance_type(type_: &Type) -> Type {
+        if let Some(instance) = Self::class_object_instance_type(type_) {
+            return instance;
+        }
+        if let Type::Union(members) = type_ {
+            return Type::union(members.iter().map(Self::receiver_instance_type));
+        }
+        type_.clone()
+    }
+
+    fn substitute_instance_type(type_: &Type, receiver_type: Option<&Type>) -> Type {
+        match type_ {
+            Type::Named(name, arguments) if name == "instance" && arguments.is_empty() => {
+                receiver_type.map_or_else(|| type_.clone(), Self::receiver_instance_type)
+            }
+            Type::Named(name, arguments) => Type::Named(
+                name.clone(),
+                arguments
+                    .iter()
+                    .map(|argument| Self::substitute_instance_type(argument, receiver_type))
+                    .collect(),
+            ),
+            Type::Array(element) => Type::Array(Box::new(Self::substitute_instance_type(
+                element,
+                receiver_type,
+            ))),
+            Type::Hash(key, value) => Type::Hash(
+                Box::new(Self::substitute_instance_type(key, receiver_type)),
+                Box::new(Self::substitute_instance_type(value, receiver_type)),
+            ),
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| Self::substitute_instance_type(element, receiver_type))
+                    .collect(),
+            ),
+            Type::Proc(parameters, result) => Type::Proc(
+                parameters
+                    .iter()
+                    .map(|parameter| Self::substitute_instance_type(parameter, receiver_type))
+                    .collect(),
+                Box::new(Self::substitute_instance_type(result, receiver_type)),
+            ),
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|member| Self::substitute_instance_type(member, receiver_type)),
+            ),
+            Type::Intersection(members) => Type::intersection(
+                members
+                    .iter()
+                    .map(|member| Self::substitute_instance_type(member, receiver_type)),
+            ),
+            other => other.clone(),
+        }
     }
 
     fn looks_like_class_name(name: &str) -> bool {
@@ -1299,10 +1363,7 @@ impl<'src> Analyzer<'src> {
                 source_signatures.entry(key.clone()).or_insert(signature);
             }
         }
-        for (key, signature) in source_signatures
-            .into_iter()
-            .chain(rbi_signatures)
-        {
+        for (key, signature) in source_signatures.into_iter().chain(rbi_signatures) {
             if let Some(state) = self.methods.get_mut(&key) {
                 if !state.explicit {
                     *state = MethodState::explicit(&signature);
@@ -1524,7 +1585,9 @@ impl<'src> Analyzer<'src> {
             let value_node = write.value();
             let actual = self.eval_node(&value_node, environment).type_;
             let type_ = self.apply_inline_assertion(node, actual);
-            self.observe_ivar(environment, prism::constant_name(write.name()), &type_);
+            let name = prism::constant_name(write.name());
+            self.observe_ivar(environment, name.clone(), &type_);
+            environment.bind(ivar_refinement_key(&name), type_.clone());
             return Eval::value(self.record(node, type_));
         }
         if let Some(write) = node.as_instance_variable_or_write_node() {
@@ -1536,12 +1599,13 @@ impl<'src> Analyzer<'src> {
             self.defer_inline_assertions = previous;
             let actual = current.truthy_part().join(&right);
             let declared = self.apply_inline_assertion(node, actual);
-            self.observe_ivar(environment, name, &declared);
             let type_ = if right.without(&Type::Nil) == right {
                 declared.without(&Type::Nil)
             } else {
-                declared
+                declared.clone()
             };
+            self.observe_ivar(environment, name.clone(), &declared);
+            environment.bind(ivar_refinement_key(&name), type_.clone());
             return Eval::value(self.record(node, type_));
         }
         if let Some(read) = node.as_instance_variable_read_node() {
@@ -2028,8 +2092,7 @@ impl<'src> Analyzer<'src> {
             let mut condition_type = Type::Never;
             for value in &when_node.conditions() {
                 let value_type = self.eval_node(&value, &mut when_environment).type_;
-                let value_type = Self::class_object_value_type(&value_type)
-                    .unwrap_or(value_type);
+                let value_type = Self::class_object_value_type(&value_type).unwrap_or(value_type);
                 condition_type = condition_type.join(&value_type);
             }
             if let Some(predicate) = predicate.as_ref() {
@@ -2571,16 +2634,13 @@ impl<'src> Analyzer<'src> {
             .unwrap_or_else(|| MethodState::inferred(definition.parameters()));
         let body_signature = state.body_signature();
         let mut method_environment = Environment {
-            self_type: key
-                .owner
-                .as_ref()
-                .map_or(Type::Object, |owner| {
-                    if key.singleton {
-                        Self::class_object_type(owner)
-                    } else {
-                        Type::named(owner.clone())
-                    }
-                }),
+            self_type: key.owner.as_ref().map_or(Type::Object, |owner| {
+                if key.singleton {
+                    Self::class_object_type(owner)
+                } else {
+                    Type::named(owner.clone())
+                }
+            }),
             method_key: Some(key.clone()),
             ..Environment::default()
         };
@@ -2597,7 +2657,11 @@ impl<'src> Analyzer<'src> {
         };
         let inferred_return = body_result.method_return_type();
         if state.explicit && !state.is_void && !self.is_rbi_definition(node) {
-            let expected = state.call_signature();
+            let mut expected = state.call_signature();
+            expected.return_type = Self::substitute_instance_type(
+                &expected.return_type,
+                Some(&method_environment.self_type),
+            );
             if !inferred_return.is_never()
                 && !self.is_assignable(&inferred_return, &expected.return_type)
             {
@@ -2682,7 +2746,13 @@ impl<'src> Analyzer<'src> {
         let Some(signature) = self.observe_call(&target, &arguments) else {
             return Type::Any;
         };
-        self.invoke_signature(node, &target.name, &signature, &arguments)
+        self.invoke_signature(
+            node,
+            &target.name,
+            &signature,
+            &arguments,
+            Some(&environment.self_type),
+        )
     }
 
     fn super_method_key(&self, current: &MethodKey) -> Option<MethodKey> {
@@ -2931,11 +3001,29 @@ impl<'src> Analyzer<'src> {
     /// This is intentionally a small, explicit refinement hook: adding a new
     /// predicate should not require changing the rest of inference.
     fn narrow_from_predicate<'node>(
-        &self,
+        &mut self,
         node: &Node<'node>,
         environment: &mut Environment,
         truthy: bool,
     ) {
+        if let Some(and) = node.as_and_node() {
+            if truthy {
+                let left = and.left();
+                self.narrow_from_predicate(&left, environment, true);
+                let right = and.right();
+                self.narrow_from_predicate(&right, environment, true);
+            }
+            return;
+        }
+        if let Some(or) = node.as_or_node() {
+            if !truthy {
+                let left = or.left();
+                self.narrow_from_predicate(&left, environment, false);
+                let right = or.right();
+                self.narrow_from_predicate(&right, environment, false);
+            }
+            return;
+        }
         if let Some(local) = node.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
             let current = environment.get(&name);
@@ -2947,17 +3035,34 @@ impl<'src> Analyzer<'src> {
             environment.bind(name, current.meet(&narrowed));
             return;
         }
+        if let Some(instance_variable) = node.as_instance_variable_read_node() {
+            let name = prism::constant_name(instance_variable.name());
+            let current = self.ivar_type(environment, &name);
+            let narrowed = if truthy {
+                current.truthy_part()
+            } else {
+                current.falsy_part()
+            };
+            environment.bind(ivar_refinement_key(&name), current.meet(&narrowed));
+            return;
+        }
         if let Some(call) = node.as_call_node() {
             let name = prism::constant_name(call.name());
             let receiver = call.receiver();
+            let arguments = call
+                .arguments()
+                .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
+                .unwrap_or_default();
+            if name == "!" {
+                if let Some(receiver) = receiver {
+                    self.narrow_from_predicate(&receiver, environment, !truthy);
+                }
+                return;
+            }
             if let Some(receiver) = receiver {
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
                     let current = environment.get(&local_name);
-                    let arguments = call
-                        .arguments()
-                        .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
-                        .unwrap_or_default();
                     let narrowed = match name.as_str() {
                         "nil?" => {
                             if truthy {
@@ -2978,6 +3083,29 @@ impl<'src> Analyzer<'src> {
                         _ => return,
                     };
                     environment.bind(local_name, narrowed);
+                } else if let Some(instance_variable) = receiver.as_instance_variable_read_node() {
+                    let instance_variable_name = prism::constant_name(instance_variable.name());
+                    let current = self.ivar_type(environment, &instance_variable_name);
+                    let narrowed = match name.as_str() {
+                        "nil?" => {
+                            if truthy {
+                                current.meet(&Type::Nil)
+                            } else {
+                                current.without(&Type::Nil)
+                            }
+                        }
+                        "is_a?" | "kind_of?" | "instance_of?" if !arguments.is_empty() => {
+                            let expected =
+                                signature::parse_type(&prism::text(self.source, &arguments[0]));
+                            if truthy {
+                                current.meet(&expected)
+                            } else {
+                                current.without(&expected)
+                            }
+                        }
+                        _ => return,
+                    };
+                    environment.bind(ivar_refinement_key(&instance_variable_name), narrowed);
                 }
             }
         }
@@ -3142,7 +3270,13 @@ impl<'src> Analyzer<'src> {
             let key = self.implicit_method_key(&name, environment);
             self.record_method_dependency(&key, environment);
             if let Some(signature) = self.observe_call(&key, &arguments) {
-                self.invoke_signature(node, &name, &signature, &arguments)
+                self.invoke_signature(
+                    node,
+                    &name,
+                    &signature,
+                    &arguments,
+                    Some(&environment.self_type),
+                )
             } else if key.singleton {
                 if let Some(owner) = key.owner.clone() {
                     if name == "new" {
@@ -3187,7 +3321,7 @@ impl<'src> Analyzer<'src> {
             {
                 self.record_method_dependency(&key, environment);
                 if let Some(signature) = self.observe_call(&key, &arguments) {
-                    self.invoke_signature(node, &name, &signature, &arguments)
+                    self.invoke_signature(node, &name, &signature, &arguments, Some(&receiver_type))
                 } else {
                     self.eval_method_call(&receiver_type, &name, &site, environment)
                 }
@@ -3420,7 +3554,14 @@ impl<'src> Analyzer<'src> {
         };
         self.record_method_dependency(&key, environment);
         if let Some(signature) = self.observe_call(&key, arguments) {
-            let _ = self.invoke_signature(node, "initialize", &signature, arguments);
+            let receiver_type = Type::named(owner.to_owned());
+            let _ = self.invoke_signature(
+                node,
+                "initialize",
+                &signature,
+                arguments,
+                Some(&receiver_type),
+            );
         }
     }
 
@@ -3539,6 +3680,10 @@ impl<'src> Analyzer<'src> {
             return Type::Any;
         };
         self.record_shared_read(SharedKey::Ivar(key.clone()), environment);
+        let refinement = ivar_refinement_key(name);
+        if environment.contains(&refinement) {
+            return environment.get(&refinement);
+        }
         self.ivars.get(&key).cloned().unwrap_or(Type::Any)
     }
 
@@ -4131,6 +4276,7 @@ impl<'src> Analyzer<'src> {
         name: &str,
         signature: &MethodSig,
         arguments: &CallArguments<'node>,
+        receiver_type: Option<&Type>,
     ) -> Type {
         let keyword_mode = !signature.keywords.is_empty() || signature.accepts_keyword_rest;
         let argument_types = if keyword_mode {
@@ -4195,7 +4341,8 @@ impl<'src> Analyzer<'src> {
                 .zip(&signature.params)
             {
                 if let Some(argument) = arguments.argument_nodes.get(*argument_index) {
-                    self.check_assignable(argument, actual, expected);
+                    let expected = Self::substitute_instance_type(expected, receiver_type);
+                    self.check_assignable(argument, actual, &expected);
                 }
             }
         } else {
@@ -4205,17 +4352,19 @@ impl<'src> Analyzer<'src> {
                 .zip(argument_types)
                 .zip(&signature.params)
             {
-                self.check_assignable(argument, actual, expected);
+                let expected = Self::substitute_instance_type(expected, receiver_type);
+                self.check_assignable(argument, actual, &expected);
             }
         }
         if keyword_mode {
             for argument in &arguments.keyword_arguments {
                 if let Some(expected) = signature.keywords.get(&argument.name) {
-                    self.check_assignable(&argument.node, &argument.type_, &expected.type_);
+                    let expected = Self::substitute_instance_type(&expected.type_, receiver_type);
+                    self.check_assignable(&argument.node, &argument.type_, &expected);
                 }
             }
         }
-        signature.return_type.clone()
+        Self::substitute_instance_type(&signature.return_type, receiver_type)
     }
 
     fn check_assignable<'node>(&mut self, node: &Node<'node>, actual: &Type, expected: &Type) {
@@ -4260,7 +4409,7 @@ impl<'src> Analyzer<'src> {
                     }
                 }
                 let resolved = if name == "instance" && arguments.is_empty() {
-                    owner.map_or_else(|| name.clone(), ToOwned::to_owned)
+                    name.clone()
                 } else {
                     self.resolve_name(name, owner)
                 };
@@ -4406,15 +4555,11 @@ impl<'src> Analyzer<'src> {
         if actual == expected {
             return true;
         }
-        if self
-            .nominal_name_candidates(actual)
-            .iter()
-            .any(|actual| {
-                self.nominal_name_candidates(expected)
-                    .iter()
-                    .any(|expected| actual == expected)
-            })
-        {
+        if self.nominal_name_candidates(actual).iter().any(|actual| {
+            self.nominal_name_candidates(expected)
+                .iter()
+                .any(|expected| actual == expected)
+        }) {
             return true;
         }
         let actual = self.resolve_global_name(actual);
@@ -4524,7 +4669,10 @@ impl<'src> Analyzer<'src> {
                 .iter()
                 .all(|actual| self.is_assignable(actual, expected)),
             (_, Type::Named(name, arguments))
-                if arguments.is_empty() && name_matches(name, "BasicObject") => true,
+                if arguments.is_empty() && name_matches(name, "BasicObject") =>
+            {
+                true
+            }
             (Type::Array(actual), Type::Named(name, arguments))
                 if arguments.len() == 1 && name_matches(name, "Enumerable") =>
             {
@@ -4594,7 +4742,9 @@ impl<'src> Analyzer<'src> {
         }
         if actual_candidates.iter().any(|actual| {
             actual == "StandardError"
-                && expected_candidates.iter().any(|expected| expected == "Exception")
+                && expected_candidates
+                    .iter()
+                    .any(|expected| expected == "Exception")
         }) {
             return true;
         }
