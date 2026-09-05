@@ -5160,16 +5160,17 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Array(Box::new(element.clone()))
             }
-            "each" | "select" | "filter" | "filter_map" | "reject" | "sort" | "reverse"
-            | "rotate" | "shuffle" => {
+            "filter_map" => {
+                let block_type = site.block.map_or(Type::Any, |block| {
+                    self.eval_block_node(block, std::slice::from_ref(element), environment)
+                });
+                Type::Array(Box::new(block_type.without(&Type::Nil)))
+            }
+            "each" | "select" | "filter" | "reject" | "sort" | "reverse" | "rotate" | "shuffle" => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
                 }
-                if name == "filter_map" {
-                    Type::Array(Box::new(Type::Any))
-                } else {
-                    Type::Array(Box::new(element.clone()))
-                }
+                Type::Array(Box::new(element.clone()))
             }
             "first" | "last" | "at" => {
                 if site.argument_types.len() > 1 {

@@ -1200,12 +1200,15 @@ fn preserves_concrete_types_through_collection_and_primitive_methods() {
     let result = check(
         r#"
 values = [1, 2, 3]
+maybe_values = [nil, "text"]
 hash = {"answer" => 1}
 
 T.reveal_type(values.size)
 T.reveal_type(values[0])
 T.reveal_type(values["slice"])
 T.reveal_type(values.compact)
+T.reveal_type(maybe_values.compact)
+T.reveal_type(values.filter_map { |value| value.even? ? value.to_s : nil })
 T.reveal_type(values.join(","))
 T.reveal_type(values.to_a)
 T.reveal_type(hash.keys)
@@ -1253,6 +1256,61 @@ T.reveal_type(T.unsafe(nil).to_a)
             .filter(|message| message.contains("Revealed type: `Integer`"))
             .count(),
         3,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T::Array[String]`"))
+            .count(),
+        4,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn preserves_container_types_through_iteration_blocks() {
+    let result = check(
+        r#"
+values = [1, 2, 3]
+hash = {"answer" => 1}
+
+T.reveal_type(values.each_with_index { |value, index| value + index })
+T.reveal_type(values.select { |value| value.even? })
+T.reveal_type(hash.each { |key, value| value.to_s })
+T.reveal_type(hash.each_key { |key| key.to_sym })
+T.reveal_type(hash.each_value { |value| value.to_s })
+T.reveal_type(hash.fetch("answer") { |key| key.length })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T::Array[Integer]`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T::Hash[String, Integer]`"))
+            .count(),
+        3,
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Integer`")),
         "{notes:?}"
     );
 }
