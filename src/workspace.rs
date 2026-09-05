@@ -108,11 +108,17 @@ pub fn discover_ruby_files(root: &Path) -> io::Result<Vec<PathBuf>> {
 
 /// Read all discovered Ruby and RBI files below `root`.
 pub fn load_workspace(root: &Path) -> io::Result<Vec<WorkspaceFile>> {
-    discover_ruby_files(root)?
-        .into_iter()
+    let paths = discover_ruby_files(root)?;
+    load_workspace_paths(&paths)
+}
+
+/// Read an explicit, caller-provided workspace path order.
+pub fn load_workspace_paths(paths: &[PathBuf]) -> io::Result<Vec<WorkspaceFile>> {
+    paths
+        .iter()
         .map(|path| {
-            let source = fs::read_to_string(&path)?;
-            Ok(WorkspaceFile::new(path, source))
+            let source = fs::read_to_string(path)?;
+            Ok(WorkspaceFile::new(path.clone(), source))
         })
         .collect()
 }
@@ -127,6 +133,19 @@ pub fn load_workspace(root: &Path) -> io::Result<Vec<WorkspaceFile>> {
 pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> WorkspaceCheckResult {
     if files.is_empty() {
         return WorkspaceCheckResult::default();
+    }
+
+    if config.debug {
+        let rbi_count = files.iter().filter(|file| is_rbi_path(&file.path)).count();
+        let bytes = files.iter().map(|file| file.source.len()).sum::<usize>();
+        eprintln!(
+            "[typey] workspace analysis: {} files ({} .rb, {} .rbi, {} bytes)",
+            files.len(),
+            files.len() - rbi_count,
+            rbi_count,
+            bytes
+        );
+        eprintln!("[typey] assembling workspace source");
     }
 
     let mut combined = String::new();
@@ -147,6 +166,12 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
         combined.push_str("\n# typey workspace boundary\nnil\n\n");
     }
 
+    if config.debug {
+        eprintln!(
+            "[typey] workspace source assembled: {} bytes",
+            combined.len()
+        );
+    }
     let result = check_with_rbi_ranges(&combined, config, &rbi_ranges);
     let diagnostics = result
         .diagnostics

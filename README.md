@@ -41,6 +41,7 @@ Run it on stdin, one file, or an entire repository:
 ```text
 cargo run -- path/to/file.rb
 cargo run -- path/to/repository
+cargo run -- --debug path/to/repository
 ```
 
 Directory mode recursively discovers `.rb` and `.rbi` files, registers their
@@ -50,6 +51,8 @@ diagnostics retain their source file paths. `.git`, `target`, `node_modules`,
 and the ignored local `sorbet-upstream`/`spinel-upstream` checkouts are skipped.
 Files are analyzed in deterministic lexical path order; library callers can
 provide an explicit order with `check_workspace`.
+Use `--debug` to print discovery, Prism, registration, fixpoint, and periodic
+node-progress messages to stderr while keeping diagnostics on stdout.
 
 The checked-in fixtures under `tests/fixtures` use Sorbet's `# error:` and
 `# note:` expectations. Run the reusable fixture harness with:

@@ -79,3 +79,23 @@ fn direct_rbi_cli_accepts_declaration_stubs() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+#[test]
+fn debug_cli_reports_progress_on_stderr() {
+    let output = Command::new(env!("CARGO_BIN_EXE_typey"))
+        .args(["--debug", FIXTURE_ROOT])
+        .output()
+        .expect("typey binary runs");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("discovering .rb/.rbi files"), "{stderr}");
+    assert!(
+        stderr.contains("registered 3 methods and 1 classes"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("final reporting pass"), "{stderr}");
+    assert!(
+        output.stdout.is_ascii(),
+        "stdout should contain diagnostics only"
+    );
+}

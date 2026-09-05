@@ -6,6 +6,7 @@ use ruby_prism::{CallNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Vi
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_FIXPOINT_ROUNDS: usize = 32;
+const DEBUG_NODE_INTERVAL: usize = 10_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct MethodKey {
@@ -58,12 +59,15 @@ pub enum Strictness {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CheckerConfig {
     pub strictness: Strictness,
+    /// Emit phase and progress information to stderr while checking.
+    pub debug: bool,
 }
 
 impl Default for CheckerConfig {
     fn default() -> Self {
         Self {
             strictness: Strictness::Ignore,
+            debug: false,
         }
     }
 }
@@ -735,6 +739,9 @@ pub(crate) fn check_with_rbi_ranges(
     rbi_ranges: &[(usize, usize)],
 ) -> CheckResult {
     let bytes = source.as_bytes();
+    if config.debug {
+        eprintln!("[typey] Prism parsing {} bytes", bytes.len());
+    }
     let parsed = prism::parse(bytes);
     let annotations = signature::collect(source);
     let diagnostics = parsed
@@ -745,6 +752,14 @@ pub(crate) fn check_with_rbi_ranges(
             Diagnostic::error(bytes, error.message(), start, end)
         })
         .collect::<Vec<_>>();
+    if config.debug {
+        eprintln!(
+            "[typey] Prism parse complete: {} syntax diagnostics, {} method annotations, {} inline assertions",
+            diagnostics.len(),
+            annotations.methods.len(),
+            annotations.assertions.len()
+        );
+    }
     let analyzer = Analyzer {
         source: bytes,
         annotations,
@@ -760,6 +775,9 @@ pub(crate) fn check_with_rbi_ranges(
         report: true,
         seed_calls: false,
         rbi_ranges: rbi_ranges.to_vec(),
+        debug_phase: "idle",
+        debug_round: 0,
+        debug_nodes: 0,
         diagnostics,
         types: Vec::new(),
     };
@@ -782,21 +800,34 @@ struct Analyzer<'src> {
     report: bool,
     seed_calls: bool,
     rbi_ranges: Vec<(usize, usize)>,
+    debug_phase: &'static str,
+    debug_round: usize,
+    debug_nodes: usize,
     diagnostics: Vec<Diagnostic>,
     types: Vec<InferredType>,
 }
 
 impl<'src> Analyzer<'src> {
     fn run<'node>(mut self, root: &Node<'node>) -> CheckResult {
+        if self.config.debug {
+            eprintln!("[typey] registering declarations");
+        }
         self.register_methods(root);
         let parse_diagnostics = std::mem::take(&mut self.diagnostics);
+        if self.config.debug {
+            eprintln!(
+                "[typey] registered {} methods and {} classes",
+                self.methods.len(),
+                self.classes.len()
+            );
+        }
 
         // First solve summaries without emitting diagnostics or retaining
         // transient node types. This is the same shape as Spinel's analysis:
         // all definitions are registered, then the tables are refined until
         // one complete pass makes no change.
         self.report = false;
-        for _ in 0..MAX_FIXPOINT_ROUNDS {
+        for round in 0..MAX_FIXPOINT_ROUNDS {
             let previous_methods = self.methods.clone();
             let previous_ivars = self.ivars.clone();
             let previous_constants = self.constants.clone();
@@ -812,20 +843,50 @@ impl<'src> Analyzer<'src> {
             // available to that definition in the same round, just like
             // Spinel's call-site widening pass.
             self.seed_calls = true;
+            self.debug_phase = "seed";
+            self.debug_round = round + 1;
             self.types.clear();
+            self.debug_nodes = 0;
+            if self.config.debug {
+                eprintln!(
+                    "[typey] fixpoint round {}/{}: seeding call sites",
+                    round + 1,
+                    MAX_FIXPOINT_ROUNDS
+                );
+            }
             let mut environment = Environment::default();
             self.eval_node(root, &mut environment);
             self.seed_calls = false;
 
+            self.debug_phase = "inference";
             self.types.clear();
+            self.debug_nodes = 0;
+            if self.config.debug {
+                eprintln!(
+                    "[typey] fixpoint round {}/{}: evaluating method bodies",
+                    round + 1,
+                    MAX_FIXPOINT_ROUNDS
+                );
+            }
             let mut environment = Environment::default();
             self.eval_node(root, &mut environment);
-            if self.methods == previous_methods
+            let stable = self.methods == previous_methods
                 && self.ivars == previous_ivars
                 && self.constants == previous_constants
                 && self.class_vars == previous_class_vars
-                && self.globals == previous_globals
-            {
+                && self.globals == previous_globals;
+            if self.config.debug {
+                eprintln!(
+                    "[typey] fixpoint round {}/{} complete: {} methods, {} ivars, {} constants{}",
+                    round + 1,
+                    MAX_FIXPOINT_ROUNDS,
+                    self.methods.len(),
+                    self.ivars.len(),
+                    self.constants.len(),
+                    if stable { " (stable)" } else { "" }
+                );
+            }
+            if stable {
                 break;
             }
         }
@@ -836,6 +897,12 @@ impl<'src> Analyzer<'src> {
         self.diagnostics = parse_diagnostics;
         self.types.clear();
         self.seed_calls = false;
+        self.debug_phase = "final";
+        self.debug_round = 0;
+        self.debug_nodes = 0;
+        if self.config.debug {
+            eprintln!("[typey] final reporting pass");
+        }
         let mut environment = Environment::default();
         self.eval_node(root, &mut environment);
 
@@ -848,6 +915,13 @@ impl<'src> Analyzer<'src> {
                 .cmp(&right.start)
                 .then_with(|| left.message.cmp(&right.message))
         });
+        if self.config.debug {
+            eprintln!(
+                "[typey] complete: {} diagnostics, {} recorded types",
+                self.diagnostics.len(),
+                self.types.len()
+            );
+        }
         CheckResult {
             diagnostics: self.diagnostics,
             types: self.types,
@@ -919,6 +993,27 @@ impl<'src> Analyzer<'src> {
     }
 
     fn eval_node<'node>(&mut self, node: &Node<'node>, environment: &mut Environment) -> Eval {
+        if self.config.debug {
+            self.debug_nodes += 1;
+            if self.debug_nodes.is_multiple_of(DEBUG_NODE_INTERVAL) {
+                let (start, _) = prism::span(node);
+                if self.debug_round == 0 {
+                    eprintln!(
+                        "[typey] {} pass: visited {} nodes (source offset {})",
+                        self.debug_phase, self.debug_nodes, start
+                    );
+                } else {
+                    eprintln!(
+                        "[typey] fixpoint round {}/{} {} pass: visited {} nodes (source offset {})",
+                        self.debug_round,
+                        MAX_FIXPOINT_ROUNDS,
+                        self.debug_phase,
+                        self.debug_nodes,
+                        start
+                    );
+                }
+            }
+        }
         if let Some(program) = node.as_program_node() {
             let result = self.eval_statements(&program.statements(), environment);
             return Eval {
