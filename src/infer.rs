@@ -40,10 +40,7 @@ struct ParameterShape {
 }
 
 impl ParameterShape {
-    fn from_parameters<'node>(
-        source: &[u8],
-        parameters: Option<ParametersNode<'node>>,
-    ) -> Self {
+    fn from_parameters<'node>(source: &[u8], parameters: Option<ParametersNode<'node>>) -> Self {
         let Some(parameters) = parameters else {
             return Self::default();
         };
@@ -1282,7 +1279,6 @@ impl MethodRegistrar<'_> {
             ));
         }
     }
-
 }
 
 impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
@@ -5508,7 +5504,10 @@ impl<'src> Analyzer<'src> {
         for child in &body {
             if flow.is_terminated() {
                 if report_unreachable {
-                    self.error(&child, "This expression appears after an unconditional return");
+                    self.error(
+                        &child,
+                        "This expression appears after an unconditional return",
+                    );
                 }
                 // Sorbet still typechecks dead syntax for diagnostics and
                 // reveals. Preserve the enclosing terminated flow while
@@ -6984,15 +6983,8 @@ impl<'src> Analyzer<'src> {
         let direct_type_constructor = receiver_is_t
             && match name.as_str() {
                 "class_of" => arguments.len() == 1,
-                "any"
-                | "all"
-                | "nilable"
-                | "noreturn"
-                | "untyped"
-                | "self_type"
-                | "proc"
-                | "type_parameter"
-                | "attached_class" => true,
+                "any" | "all" | "nilable" | "noreturn" | "untyped" | "self_type" | "proc"
+                | "type_parameter" | "attached_class" => true,
                 _ => false,
             };
         let generic_type_constructor = name == "[]"
@@ -7106,9 +7098,7 @@ impl<'src> Analyzer<'src> {
         {
             self.error(
                 node,
-                format!(
-                    "Used `&.` operator on `{receiver_type}`, which can never be nil"
-                ),
+                format!("Used `&.` operator on `{receiver_type}`, which can never be nil"),
             );
         }
         let block = call.block();
@@ -7145,6 +7135,16 @@ impl<'src> Analyzer<'src> {
             let (parameters, return_type) = call.block().as_ref().map_or_else(
                 || (Vec::new(), Type::Any),
                 |block| {
+                    if block.as_block_argument_node().is_some() {
+                        let type_ = self
+                            .passed_block_expression_type(block, environment)
+                            .and_then(|type_| Self::passed_block_signature(&type_))
+                            .unwrap_or_else(|| Type::Proc(Vec::new(), Box::new(Type::Any)));
+                        if let Type::Proc(parameters, return_type) = type_ {
+                            return (parameters, *return_type);
+                        }
+                        return (Vec::new(), Type::Any);
+                    }
                     let signature = Self::inferred_block_signature(block);
                     let return_type = self.eval_block_node(block, &signature.params, environment);
                     (signature.params, return_type)
@@ -7990,7 +7990,24 @@ impl<'src> Analyzer<'src> {
                 Type::Proc(_, result) => Some(*result),
                 _ => None,
             });
-        let block_type = self.eval_block_node(block, &expected, environment);
+        let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
+            let Some(expression_type) = self.passed_block_expression_type(block, environment)
+            else {
+                // `&nil` is Ruby's spelling for omitting a block.
+                return None;
+            };
+            if let Some(signature) = Self::passed_block_signature(&expression_type) {
+                let return_type = match &signature {
+                    Type::Proc(_, result) => (**result).clone(),
+                    _ => Type::Any,
+                };
+                (return_type, Some(signature))
+            } else {
+                (Type::Any, None)
+            }
+        } else {
+            (self.eval_block_node(block, &expected, environment), None)
+        };
         self.expected_return_type = previous_expected_return;
         let mut checked_bindings =
             self.infer_type_parameter_bindings(signature, arguments, Some(&block_type));
@@ -8007,7 +8024,23 @@ impl<'src> Analyzer<'src> {
                 &signature.type_parameters,
             )
         });
-        if let Some(block_signature) = checked_block_signature
+        if let Some(actual_block_signature) = passed_block_signature {
+            if let Some(expected_block_signature) = checked_block_signature
+                .as_ref()
+                .and_then(optional_proc_type)
+            {
+                if !self.is_assignable(&actual_block_signature, &expected_block_signature) {
+                    self.error(
+                        block,
+                        format!(
+                            "Expected `{}` but found `{}` for block argument",
+                            Self::block_type_description(&expected_block_signature),
+                            Self::block_type_description(&actual_block_signature),
+                        ),
+                    );
+                }
+            }
+        } else if let Some(block_signature) = checked_block_signature
             .as_ref()
             .and_then(optional_proc_type)
         {
@@ -10304,6 +10337,48 @@ impl<'src> Analyzer<'src> {
         (Self::block_value_type(&result), block_environment)
     }
 
+    fn passed_block_expression_type<'node>(
+        &mut self,
+        node: &Node<'node>,
+        outer: &mut Environment,
+    ) -> Option<Type> {
+        let block = node.as_block_argument_node()?;
+        let expression = block.expression()?;
+        let type_ = self.eval_node(&expression, outer).type_;
+        (!type_.is_nil()).then_some(type_)
+    }
+
+    fn passed_block_signature(type_: &Type) -> Option<Type> {
+        match type_ {
+            // `bind_parameters` uses an empty `Proc` with an untyped result
+            // for an unannotated or `Proc`-typed block parameter.  That is an
+            // unknown-arity proc, not a known zero-argument proc.
+            Type::Proc(parameters, result) if parameters.is_empty() && result.is_any() => None,
+            Type::Proc(_, _) => Some(type_.clone()),
+            Type::Union(_) => optional_proc_type(type_),
+            _ => None,
+        }
+    }
+
+    fn block_type_description(type_: &Type) -> String {
+        let Type::Proc(parameters, result) = type_ else {
+            return type_.to_string();
+        };
+        let mut description = String::from("T.proc");
+        if !parameters.is_empty() {
+            description.push_str(".params(");
+            for (index, parameter) in parameters.iter().enumerate() {
+                if index > 0 {
+                    description.push_str(", ");
+                }
+                description.push_str(&format!("arg{index}: {parameter}"));
+            }
+            description.push(')');
+        }
+        description.push_str(&format!(".returns({result})"));
+        description
+    }
+
     fn eval_collection_block<'node>(
         &mut self,
         node: &Node<'node>,
@@ -10380,7 +10455,27 @@ impl<'src> Analyzer<'src> {
                     self.eval_method_call(element, &name, &site, outer)
                 }
             } else {
-                self.eval_block_node(node, std::slice::from_ref(element), outer)
+                let Some(expression_type) = self.passed_block_expression_type(node, outer) else {
+                    return Type::Any;
+                };
+                let Some(signature) = Self::passed_block_signature(&expression_type) else {
+                    return Type::Any;
+                };
+                let Type::Proc(_, result) = &signature else {
+                    return Type::Any;
+                };
+                let expected = Type::Proc(vec![element.clone()], Box::new(Type::Anything));
+                if !self.is_assignable(&signature, &expected) {
+                    self.error(
+                        node,
+                        format!(
+                            "Expected `{}` but found `{}` for block argument",
+                            Self::block_type_description(&expected),
+                            Self::block_type_description(&signature),
+                        ),
+                    );
+                }
+                (**result).clone()
             }
         } else {
             self.eval_block_node(node, std::slice::from_ref(element), outer)
