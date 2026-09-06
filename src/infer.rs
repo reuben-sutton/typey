@@ -3,7 +3,7 @@ use crate::directives::{is_typed_ignore, typed_mode, TypedMode};
 use crate::prism;
 use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
 use crate::types::{Type, TypeLattice};
-use ruby_prism::{CallNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit};
+use ruby_prism::{CallNode, ClassNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit};
 use std::collections::{BTreeMap, BTreeSet};
 
 const DEBUG_NODE_INTERVAL: usize = 1_000;
@@ -1037,6 +1037,7 @@ struct MethodRegistrar<'a> {
     aliases: &'a mut BTreeMap<MethodKey, MethodKey>,
     accessors: &'a mut BTreeMap<MethodKey, AccessorKind>,
     attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
+    class_type_parameters: &'a BTreeMap<usize, Vec<String>>,
     type_aliases: &'a mut BTreeMap<String, Type>,
     constants: &'a mut BTreeMap<String, Type>,
     class_stack: Vec<String>,
@@ -1091,12 +1092,24 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         self.method_depth -= 1;
     }
 
-    fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'pr>) {
+    fn visit_class_node(&mut self, node: &ClassNode<'pr>) {
         let name = self.scope_name(&node.constant_path());
         let superclass = node
             .superclass()
             .map(|superclass| self.scope_reference(&superclass));
         let info = self.classes.entry(name.clone()).or_default();
+        if let Some(parameters) = self
+            .class_type_parameters
+            .get(&prism::span(&node.as_node()).0)
+        {
+            for parameter in parameters {
+                if !info.type_members.contains_key(parameter) {
+                    let index = info.type_members.len();
+                    info.type_members
+                        .insert(parameter.clone(), GenericMember { index, fixed: None });
+                }
+            }
+        }
         if info.superclass.is_none() {
             info.superclass = superclass;
         }
@@ -2572,6 +2585,7 @@ impl<'src> Analyzer<'src> {
             aliases: &mut self.aliases,
             accessors: &mut self.accessors,
             attribute_annotations: &self.annotations.attribute_annotations,
+            class_type_parameters: &self.annotations.class_type_parameters,
             type_aliases: &mut self.type_aliases,
             constants: &mut self.constants,
             class_stack: Vec::new(),

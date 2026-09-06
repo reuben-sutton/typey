@@ -117,11 +117,14 @@ fn dispatches_declared_methods_through_polymorphic_receivers() {
 #[test]
 fn specializes_namespaced_generic_members_at_dispatch() {
     let result = check_fixture("tests/fixtures/namespaced_generic_member_dispatch.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `String`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]

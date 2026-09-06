@@ -11,6 +11,5 @@ module Spoom
 end
 
 poset = Spoom::Poset.new #: Spoom::Poset[String]
-T.reveal_type(poset)
 value = poset["value"]
-T.reveal_type(value)
+T.reveal_type(value) # note: String

@@ -1,5 +1,5 @@
 use crate::types::Type;
-use ruby_prism::{CallNode, DefNode, Node, Visit};
+use ruby_prism::{CallNode, ClassNode, DefNode, Node, Visit};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,6 +104,8 @@ pub struct AnnotationTable {
     /// Signatures attached to generated attribute methods such as
     /// `#: () -> String` followed by `attr_reader :name`.
     pub attribute_annotations: BTreeMap<usize, Vec<MethodSig>>,
+    /// RBS class-level type parameters attached to real class declarations.
+    pub class_type_parameters: BTreeMap<usize, Vec<String>>,
     pub assertions: BTreeMap<usize, InlineAssertion>,
 }
 
@@ -247,6 +249,7 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
     let mut nodes = AnnotationNodes::default();
     nodes.visit(root);
     nodes.definitions.sort_unstable();
+    nodes.class_definitions.sort_unstable();
     nodes.attribute_calls.sort_unstable();
     nodes
         .signatures
@@ -264,6 +267,17 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
             .or_default()
             .push(*definition);
     }
+    let mut class_definitions_by_line = BTreeMap::<usize, Vec<usize>>::new();
+    let mut line_index = 0;
+    for class_definition in &nodes.class_definitions {
+        while line_index + 1 < lines.len() && lines[line_index + 1].0 <= *class_definition {
+            line_index += 1;
+        }
+        class_definitions_by_line
+            .entry(line_index)
+            .or_default()
+            .push(*class_definition);
+    }
     let mut attributes_by_line = BTreeMap::<usize, Vec<usize>>::new();
     let mut line_index = 0;
     for attribute in &nodes.attribute_calls {
@@ -279,6 +293,18 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
     let mut pending_rbs: Option<String> = None;
     for (line_number, (_, line)) in lines.iter().enumerate() {
         let trimmed = line.trim();
+        if let Some(class_definition) = class_definitions_by_line
+            .get(&line_number)
+            .and_then(|definitions| definitions.first())
+        {
+            if let Some(text) = pending_rbs.take() {
+                if let Some(parameters) = parse_rbs_type_parameters(&text) {
+                    table
+                        .class_type_parameters
+                        .insert(*class_definition, parameters);
+                }
+            }
+        }
         if let Some(definition) = definitions_by_line
             .get(&line_number)
             .and_then(|definitions| definitions.first())
@@ -384,11 +410,18 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
 #[derive(Default)]
 struct AnnotationNodes {
     definitions: Vec<usize>,
+    class_definitions: Vec<usize>,
     attribute_calls: Vec<usize>,
     signatures: Vec<(usize, usize)>,
 }
 
 impl<'pr> Visit<'pr> for AnnotationNodes {
+    fn visit_class_node(&mut self, node: &ClassNode<'pr>) {
+        self.class_definitions
+            .push(crate::prism::span(&node.as_node()).0);
+        ruby_prism::visit_class_node(self, node);
+    }
+
     fn visit_def_node(&mut self, node: &DefNode<'pr>) {
         self.definitions.push(crate::prism::span(&node.as_node()).0);
         ruby_prism::visit_def_node(self, node);
@@ -615,13 +648,27 @@ fn parse_rbs_type_parameter_name(raw: &str) -> Option<String> {
         .strip_prefix("in ")
         .or_else(|| raw.strip_prefix("out "))
         .unwrap_or(raw);
-    let raw = raw
-        .split_once('<')
-        .map_or(raw, |(name, _)| name)
-        .split_once('=')
-        .map_or(raw, |(name, _)| name)
-        .trim();
+    let raw = raw.split_once('<').map_or(raw, |(name, _)| name);
+    let raw = raw.split_once('=').map_or(raw, |(name, _)| name).trim();
     parse_type_parameter_name(raw)
+}
+
+/// Parse a class-level RBS declaration such as `[Elem < Object, out Key]`.
+#[must_use]
+pub fn parse_rbs_type_parameters(text: &str) -> Option<Vec<String>> {
+    let text = strip_comment_tail(text.trim());
+    if !text.starts_with('[') {
+        return None;
+    }
+    let close = matching_delimiter(text, 0, '[', ']')?;
+    if !text[close + 1..].trim().is_empty() {
+        return None;
+    }
+    let parameters = split_top_level(&text[1..close], ',')
+        .into_iter()
+        .filter_map(|parameter| parse_rbs_type_parameter_name(&parameter))
+        .collect::<Vec<_>>();
+    (!parameters.is_empty()).then_some(parameters)
 }
 
 #[must_use]
