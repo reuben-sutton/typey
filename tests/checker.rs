@@ -305,6 +305,16 @@ fn destructures_typed_tuple_elements_in_collection_blocks() {
 }
 
 #[test]
+fn preserves_typed_ivar_elements_through_empty_resets() {
+    let result = check_fixture("tests/fixtures/typed_ivar_empty_reset.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T::Array[String]`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
