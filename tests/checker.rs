@@ -2862,6 +2862,27 @@ T.reveal_type(:text.to_sym)
 }
 
 #[test]
+fn models_class_object_name() {
+    let result = check(
+        r#"
+class Base
+end
+
+T.reveal_type(Base.name)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(String)`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn infers_const_get_class_objects_from_literal_names() {
     let result = check(
         r#"

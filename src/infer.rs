@@ -9943,6 +9943,7 @@ impl<'src> Analyzer<'src> {
             }
             match name {
                 "===" => return Type::bool(),
+                "name" => return Type::union([Type::Nil, Type::String]),
                 "const_source_location" => {
                     return Type::union([
                         Type::Nil,
