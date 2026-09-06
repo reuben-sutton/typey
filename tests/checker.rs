@@ -82,6 +82,14 @@ fn checks_splat_call_shapes() {
 }
 
 #[test]
+fn prefers_direct_class_methods_over_extended_module_methods() {
+    let result = check_fixture("tests/fixtures/direct_class_method_precedes_extension.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `String`")));
+}
+
+#[test]
 fn resolves_method_summaries_across_fixpoint_rounds() {
     let result = check_fixture("tests/fixtures/fixpoint_flow.rb");
     let notes = result

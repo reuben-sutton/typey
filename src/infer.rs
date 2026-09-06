@@ -6091,12 +6091,8 @@ impl<'src> Analyzer<'src> {
             return;
         }
         let info = self.classes.get(owner);
-        if let Some(info) = info {
-            if singleton {
-                for module in info.extends.iter().rev() {
-                    self.append_method_candidates(module, name, false, visited, candidates);
-                }
-            } else {
+        if !singleton {
+            if let Some(info) = info {
                 for module in info.prepends.iter().rev() {
                     self.append_method_candidates(module, name, false, visited, candidates);
                 }
@@ -6108,6 +6104,11 @@ impl<'src> Analyzer<'src> {
             singleton,
         });
         if let Some(info) = info {
+            if singleton {
+                for module in info.extends.iter().rev() {
+                    self.append_method_candidates(module, name, false, visited, candidates);
+                }
+            }
             if !singleton {
                 for module in info.includes.iter().rev() {
                     self.append_method_candidates(module, name, false, visited, candidates);
