@@ -1009,6 +1009,49 @@ T.reveal_type(T.unsafe(1))
 }
 
 #[test]
+fn models_core_global_and_file_calls() {
+    let result = check(
+        r#"
+T.reveal_type(1.id)
+T.reveal_type(File.read("path"))
+T.reveal_type(File.write("path", "contents"))
+T.reveal_type(require("library"))
+T.reveal_type(require_relative("library"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T::Boolean`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn reports_signature_and_call_type_errors_precisely() {
     let result = check(
         r#"

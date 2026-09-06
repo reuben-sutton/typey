@@ -6297,6 +6297,7 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         match name {
             "puts" | "print" | "p" | "pp" | "warn" => Type::Nil,
+            "require" | "require_relative" | "load" => Type::bool(),
             "raise" | "fail" | "abort" | "exit" | "exit!" => Type::Never,
             "Integer" => Type::Integer,
             "Float" => Type::Float,
@@ -6319,7 +6320,10 @@ impl<'src> Analyzer<'src> {
             "lambda" | "proc" => Type::Proc(Vec::new(), Box::new(Type::Any)),
             "rand" => Type::Float,
             "sleep" => Type::Integer,
-            "include" | "prepend" | "extend" | "alias_method" => Type::Nil,
+            "include" | "prepend" | "extend" | "alias_method" | "attr_reader" | "attr_writer"
+            | "attr_accessor" | "private" | "protected" | "public" | "module_function"
+            | "refine" => Type::Nil,
+            "id" | "object_id" | "hash" => Type::Integer,
             _ => {
                 let _ = (node, argument_nodes, environment);
                 Type::Any
@@ -6376,6 +6380,10 @@ impl<'src> Analyzer<'src> {
             "nil?" | "is_a?" | "kind_of?" | "instance_of?" | "==" | "!=" | "equal?" | "eql?"
         ) {
             return Type::bool();
+        }
+
+        if matches!(name, "id" | "object_id" | "hash") {
+            return Type::Integer;
         }
 
         match receiver {
@@ -6485,6 +6493,46 @@ impl<'src> Analyzer<'src> {
                     }
                     Type::Named(class, _) => Type::Named(class, arguments),
                     _ => Type::Any,
+                }
+            }
+            Type::Named(_, _)
+                if Self::class_object_instance_type(receiver)
+                    .and_then(|instance| Self::named_type_name(&instance))
+                    .is_some_and(|class| name_matches(&class, "File")) =>
+            {
+                match name {
+                    "read" | "binread" | "readlines" => {
+                        if name == "readlines" {
+                            Type::Array(Box::new(Type::String))
+                        } else {
+                            Type::String
+                        }
+                    }
+                    "write" | "binwrite" => Type::Integer,
+                    "expand_path" | "absolute_path" | "join" | "basename" | "dirname"
+                    | "extname" | "realpath" | "realdirpath" => Type::String,
+                    "exist?" | "file?" | "directory?" | "readable?" | "writable?"
+                    | "executable?" | "zero?" => Type::bool(),
+                    "open" => {
+                        if let Some(block) = site.block {
+                            self.eval_block_node(block, &[Type::named("File")], environment)
+                        } else {
+                            Type::named("File")
+                        }
+                    }
+                    _ => self.eval_common_method(name),
+                }
+            }
+            Type::Named(_, _)
+                if Self::class_object_instance_type(receiver)
+                    .and_then(|instance| Self::named_type_name(&instance))
+                    .is_some_and(|class| name_matches(&class, "Dir")) =>
+            {
+                match name {
+                    "glob" | "entries" | "children" => Type::Array(Box::new(Type::String)),
+                    "pwd" | "home" => Type::String,
+                    "exist?" | "empty?" => Type::bool(),
+                    _ => self.eval_common_method(name),
                 }
             }
             Type::Named(class, arguments) if name == "new" => {
@@ -7135,6 +7183,8 @@ impl<'src> Analyzer<'src> {
     fn eval_common_method(&self, name: &str) -> Type {
         match name {
             "to_s" => Type::String,
+            "id" | "object_id" | "hash" => Type::Integer,
+            "respond_to?" | "frozen?" => Type::bool(),
             "nil?" | "to_a" => {
                 if name == "to_a" {
                     Type::Array(Box::new(Type::Any))
