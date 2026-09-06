@@ -401,6 +401,16 @@ fn models_set_predicates() {
 }
 
 #[test]
+fn models_string_bang_methods() {
+    let result = check_fixture("tests/fixtures/string_bang_methods.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(String)`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
