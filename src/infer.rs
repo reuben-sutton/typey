@@ -8680,12 +8680,15 @@ impl<'src> Analyzer<'src> {
                     .collect(),
                 Box::new(self.resolve_shadowed_builtin_types(result, owner)),
             ),
-            Type::Named(name, arguments) => Type::Named(
-                name.clone(),
-                arguments
-                    .iter()
-                    .map(|argument| self.resolve_shadowed_builtin_types(argument, owner))
-                    .collect(),
+            Type::Named(name, arguments) => self.resolve_type_names(
+                &Type::Named(
+                    name.clone(),
+                    arguments
+                        .iter()
+                        .map(|argument| self.resolve_shadowed_builtin_types(argument, owner))
+                        .collect(),
+                ),
+                owner,
             ),
             Type::Union(members) => Type::union(
                 members
