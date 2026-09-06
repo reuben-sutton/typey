@@ -5348,13 +5348,16 @@ impl<'src> Analyzer<'src> {
         let mut abrupt = OutcomeTypes::default();
         let body = statements.body();
         for child in &body {
+            if flow.is_terminated() {
+                self.error(&child, "This expression appears after an unconditional return");
+                continue;
+            }
             let result = self.eval_node(&child, environment);
             abrupt = abrupt.join(&result.abrupt);
             flow = flow.without(FlowKind::Normal).union(result.flow);
             normal_type = result.normal_type;
             if result.flow.is_terminated() {
                 normal_type = None;
-                break;
             }
         }
         Eval::from_parts(normal_type, abrupt, flow)
