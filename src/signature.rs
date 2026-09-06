@@ -907,8 +907,18 @@ pub fn parse_type(raw: &str) -> Type {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let return_type =
-            extract_call(normalized, "returns").map_or(Type::Any, |body| parse_type(&body));
+        let return_type = if normalized.ends_with(".void") {
+            Type::Nil
+        } else {
+            extract_call(normalized, "returns").map_or(Type::Any, |body| parse_type(&body))
+        };
+        if let Some(receiver) = extract_call(normalized, "bind") {
+            return Type::BoundProc {
+                receiver: Box::new(parse_type(&receiver)),
+                parameters: params,
+                result: Box::new(return_type),
+            };
+        }
         return Type::Proc(params, Box::new(return_type));
     }
 

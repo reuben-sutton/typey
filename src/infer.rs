@@ -187,16 +187,33 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
 
 fn optional_proc_type(type_: &Type) -> Option<Type> {
     match type_ {
-        Type::Proc(_, _) => Some(type_.clone()),
+        Type::Proc(_, _) | Type::BoundProc { .. } => Some(type_.clone()),
         Type::Union(members)
-            if members
-                .iter()
-                .all(|member| member.is_nil() || matches!(member, Type::Proc(_, _))) =>
+            if members.iter().all(|member| {
+                member.is_nil() || matches!(member, Type::Proc(_, _) | Type::BoundProc { .. })
+            }) =>
         {
-            members
-                .iter()
-                .find_map(|member| matches!(member, Type::Proc(_, _)).then(|| member.clone()))
+            members.iter().find_map(|member| {
+                matches!(member, Type::Proc(_, _) | Type::BoundProc { .. }).then(|| member.clone())
+            })
         }
+        _ => None,
+    }
+}
+
+fn proc_parts(type_: &Type) -> Option<(&[Type], &Type)> {
+    match type_ {
+        Type::Proc(parameters, result) => Some((parameters, result)),
+        Type::BoundProc {
+            parameters, result, ..
+        } => Some((parameters, result)),
+        _ => None,
+    }
+}
+
+fn proc_receiver(type_: &Type) -> Option<&Type> {
+    match type_ {
+        Type::BoundProc { receiver, .. } => Some(receiver),
         _ => None,
     }
 }
@@ -901,12 +918,13 @@ impl MethodState {
         let (yield_params, block_return_type) = signature
             .block
             .as_ref()
-            .and_then(|block| match block {
-                Type::Proc(parameters, return_type) => Some((
-                    parameters.iter().cloned().map(Some).collect(),
-                    Some((**return_type).clone()),
-                )),
-                _ => None,
+            .and_then(|block| {
+                proc_parts(block).map(|(parameters, return_type)| {
+                    (
+                        parameters.iter().cloned().map(Some).collect(),
+                        Some(return_type.clone()),
+                    )
+                })
             })
             .unwrap_or_default();
         Self {
@@ -1175,8 +1193,10 @@ impl MethodState {
     }
 
     fn block_parameters(&self) -> Vec<Type> {
-        if let Some(Type::Proc(parameters, _)) = &self.block {
-            return parameters.clone();
+        if let Some(block) = &self.block {
+            if let Some((parameters, _)) = proc_parts(block) {
+                return parameters.to_vec();
+            }
         }
         self.yield_params
             .iter()
@@ -1187,10 +1207,7 @@ impl MethodState {
     fn block_result_type(&self) -> Type {
         self.block
             .as_ref()
-            .and_then(|block| match block {
-                Type::Proc(_, result) => Some((**result).clone()),
-                _ => None,
-            })
+            .and_then(|block| proc_parts(block).map(|(_, result)| result.clone()))
             .or_else(|| self.block_return_type.clone())
             .unwrap_or(Type::Any)
     }
@@ -2251,6 +2268,28 @@ impl<'src> Analyzer<'src> {
                     attached_class,
                 )),
             ),
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => Type::BoundProc {
+                receiver: Box::new(Self::substitute_instance_type(
+                    receiver,
+                    receiver_type,
+                    attached_class,
+                )),
+                parameters: parameters
+                    .iter()
+                    .map(|parameter| {
+                        Self::substitute_instance_type(parameter, receiver_type, attached_class)
+                    })
+                    .collect(),
+                result: Box::new(Self::substitute_instance_type(
+                    result,
+                    receiver_type,
+                    attached_class,
+                )),
+            },
             Type::Union(members) => Type::union(members.iter().map(|member| {
                 Self::substitute_instance_type(member, receiver_type, attached_class)
             })),
@@ -2279,6 +2318,17 @@ impl<'src> Analyzer<'src> {
                 parameters
                     .iter()
                     .any(|parameter| Self::contains_type_parameter(parameter, names))
+                    || Self::contains_type_parameter(result, names)
+            }
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => {
+                Self::contains_type_parameter(receiver, names)
+                    || parameters
+                        .iter()
+                        .any(|parameter| Self::contains_type_parameter(parameter, names))
                     || Self::contains_type_parameter(result, names)
             }
             Type::Union(members) | Type::Intersection(members) => members
@@ -2341,8 +2391,8 @@ impl<'src> Analyzer<'src> {
             }
         }
         if let Some(block) = signature.block.as_ref().and_then(optional_proc_type) {
-            if let (Type::Proc(_, expected_return), Some(actual_return)) =
-                (&block, block_return_type)
+            if let (Some((_, expected_return)), Some(actual_return)) =
+                (proc_parts(&block), block_return_type)
             {
                 self.collect_type_parameter_binding(
                     expected_return,
@@ -2421,8 +2471,13 @@ impl<'src> Analyzer<'src> {
                 }
                 _ => {}
             },
-            Type::Proc(expected_parameters, expected_result) => {
-                if let Type::Proc(actual_parameters, actual_result) = actual {
+            Type::Proc(expected_parameters, expected_result)
+            | Type::BoundProc {
+                parameters: expected_parameters,
+                result: expected_result,
+                ..
+            } => {
+                if let Some((actual_parameters, actual_result)) = proc_parts(actual) {
                     for (expected, actual) in expected_parameters.iter().zip(actual_parameters) {
                         self.collect_type_parameter_binding(expected, actual, names, bindings);
                     }
@@ -2507,6 +2562,18 @@ impl<'src> Analyzer<'src> {
                     .collect(),
                 Box::new(Self::substitute_type_parameters(result, bindings, names)),
             ),
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => Type::BoundProc {
+                receiver: Box::new(Self::substitute_type_parameters(receiver, bindings, names)),
+                parameters: parameters
+                    .iter()
+                    .map(|parameter| Self::substitute_type_parameters(parameter, bindings, names))
+                    .collect(),
+                result: Box::new(Self::substitute_type_parameters(result, bindings, names)),
+            },
             Type::Union(members) => Type::union(
                 members
                     .iter()
@@ -2603,6 +2670,17 @@ impl<'src> Analyzer<'src> {
                     .any(|parameter| self.contains_open_generic_member(parameter, receiver_type))
                     || self.contains_open_generic_member(result, receiver_type)
             }
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => {
+                self.contains_open_generic_member(receiver, receiver_type)
+                    || parameters.iter().any(|parameter| {
+                        self.contains_open_generic_member(parameter, receiver_type)
+                    })
+                    || self.contains_open_generic_member(result, receiver_type)
+            }
             Type::Union(members) | Type::Intersection(members) => members
                 .iter()
                 .any(|member| self.contains_open_generic_member(member, receiver_type)),
@@ -2682,8 +2760,13 @@ impl<'src> Analyzer<'src> {
                     }
                 }
             }
-            Type::Proc(expected_parameters, expected_result) => {
-                if let Type::Proc(actual_parameters, actual_result) = actual {
+            Type::Proc(expected_parameters, expected_result)
+            | Type::BoundProc {
+                parameters: expected_parameters,
+                result: expected_result,
+                ..
+            } => {
+                if let Some((actual_parameters, actual_result)) = proc_parts(actual) {
                     for (expected, actual) in expected_parameters.iter().zip(actual_parameters) {
                         self.collect_generic_member_binding(
                             expected,
@@ -2797,6 +2880,24 @@ impl<'src> Analyzer<'src> {
                     .collect(),
                 Box::new(self.substitute_generic_members(result, receiver_type, bindings)),
             ),
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => Type::BoundProc {
+                receiver: Box::new(self.substitute_generic_members(
+                    receiver,
+                    receiver_type,
+                    bindings,
+                )),
+                parameters: parameters
+                    .iter()
+                    .map(|parameter| {
+                        self.substitute_generic_members(parameter, receiver_type, bindings)
+                    })
+                    .collect(),
+                result: Box::new(self.substitute_generic_members(result, receiver_type, bindings)),
+            },
             Type::Union(members) => Type::union(
                 members
                     .iter()
@@ -2820,6 +2921,44 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         let names = type_parameters.iter().cloned().collect::<BTreeSet<_>>();
         let attached_class = self.attached_class_type(receiver_type);
+        if let Type::BoundProc {
+            receiver,
+            parameters,
+            result,
+        } = type_
+        {
+            let bound_receiver = if matches!(receiver.as_ref(), Type::Named(name, args) if name == "instance" && args.is_empty())
+                && receiver_type
+                    .and_then(Self::class_object_instance_type)
+                    .is_some()
+            {
+                receiver_type
+                    .cloned()
+                    .unwrap_or_else(|| (**receiver).clone())
+            } else {
+                self.substitute_signature_type(receiver, receiver_type, bindings, type_parameters)
+            };
+            return Type::BoundProc {
+                receiver: Box::new(bound_receiver),
+                parameters: parameters
+                    .iter()
+                    .map(|parameter| {
+                        self.substitute_signature_type(
+                            parameter,
+                            receiver_type,
+                            bindings,
+                            type_parameters,
+                        )
+                    })
+                    .collect(),
+                result: Box::new(self.substitute_signature_type(
+                    result,
+                    receiver_type,
+                    bindings,
+                    type_parameters,
+                )),
+            };
+        }
         let type_ = Self::substitute_instance_type(type_, receiver_type, &attached_class);
         let type_ = self.substitute_generic_members(&type_, receiver_type, bindings);
         Self::substitute_type_parameters(&type_, bindings, &names)
@@ -3234,8 +3373,10 @@ impl<'src> Analyzer<'src> {
                     }
                 }
             }
-            for signature in &signatures {
-                self.validate_attached_class_signature(*offset, &key, signature);
+            if is_source_annotation {
+                for signature in &signatures {
+                    self.validate_attached_class_signature(*offset, &key, signature);
+                }
             }
             let target = if self
                 .builtin_rbi_ranges
@@ -3283,6 +3424,15 @@ impl<'src> Analyzer<'src> {
             }
             Type::Proc(parameters, result) => {
                 parameters.iter().any(Self::contains_attached_class_type)
+                    || Self::contains_attached_class_type(result)
+            }
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => {
+                Self::contains_attached_class_type(receiver)
+                    || parameters.iter().any(Self::contains_attached_class_type)
                     || Self::contains_attached_class_type(result)
             }
             _ => false,
@@ -4549,10 +4699,7 @@ impl<'src> Analyzer<'src> {
                 .as_ref()
                 .and_then(|key| self.methods.get(key))
                 .and_then(|state| state.block.as_ref())
-                .and_then(|block| match block {
-                    Type::Proc(parameters, _) => Some(parameters.clone()),
-                    _ => None,
-                });
+                .and_then(|block| proc_parts(block).map(|(parameters, _)| parameters.to_vec()));
             if let Some(expected) = expected_block_parameters {
                 for (index, actual) in argument_types.iter().enumerate() {
                     if let Some(expected) = expected.get(index) {
@@ -7348,11 +7495,9 @@ impl<'src> Analyzer<'src> {
                 if let Some(owner) = key.owner.clone() {
                     if name == "new" {
                         self.infer_initializer_call(node, &owner, &arguments, environment);
-                        if environment
-                            .method_key
-                            .as_ref()
-                            .is_some_and(|method| method.singleton)
-                        {
+                        if environment.method_key.as_ref().is_some_and(|method| {
+                            method.singleton && method.name != "<bound-block>"
+                        }) {
                             Type::AttachedClassOf(owner)
                         } else {
                             Type::named(owner)
@@ -7368,6 +7513,20 @@ impl<'src> Analyzer<'src> {
                         );
                         if type_.contains_any() {
                             untyped_origin = Some(UntypedOrigin::FallbackCall);
+                        }
+                        if type_.is_any()
+                            && environment
+                                .method_key
+                                .as_ref()
+                                .is_some_and(|method| method.name == "<bound-block>")
+                        {
+                            self.error(
+                                node,
+                                format!(
+                                    "Method `{name}` does not exist on `{}`",
+                                    Self::sorbet_type_description(&environment.self_type)
+                                ),
+                            );
                         }
                         type_
                     }
@@ -7386,18 +7545,42 @@ impl<'src> Analyzer<'src> {
                     type_
                 }
             } else {
-                let type_ = self.eval_global_call(
-                    node,
-                    &name,
-                    &arguments.argument_nodes,
-                    argument_types,
-                    block.as_ref(),
-                    environment,
-                );
-                if type_.contains_any() {
-                    untyped_origin = Some(UntypedOrigin::FallbackCall);
+                if name == "new"
+                    && environment
+                        .method_key
+                        .as_ref()
+                        .is_some_and(|method| method.name == "<bound-block>")
+                {
+                    self.error(node, "Method `new` does not exist");
+                    Type::Any
+                } else {
+                    let type_ = self.eval_global_call(
+                        node,
+                        &name,
+                        &arguments.argument_nodes,
+                        argument_types,
+                        block.as_ref(),
+                        environment,
+                    );
+                    if type_.contains_any() {
+                        untyped_origin = Some(UntypedOrigin::FallbackCall);
+                    }
+                    if type_.is_any()
+                        && environment
+                            .method_key
+                            .as_ref()
+                            .is_some_and(|method| method.name == "<bound-block>")
+                    {
+                        self.error(
+                            node,
+                            format!(
+                                "Method `{name}` does not exist on `{}`",
+                                Self::sorbet_type_description(&environment.self_type)
+                            ),
+                        );
+                    }
+                    type_
                 }
-                type_
             }
         } else {
             let site = CallSite {
@@ -8125,10 +8308,7 @@ impl<'src> Analyzer<'src> {
         let expected = block_signature
             .as_ref()
             .and_then(optional_proc_type)
-            .and_then(|block| match block {
-                Type::Proc(parameters, _) => Some(parameters),
-                _ => None,
-            })
+            .and_then(|block| proc_parts(&block).map(|(parameters, _)| parameters.to_vec()))
             .unwrap_or_else(|| {
                 self.methods
                     .get(&key)
@@ -8138,10 +8318,11 @@ impl<'src> Analyzer<'src> {
         self.expected_return_type = block_signature
             .as_ref()
             .and_then(optional_proc_type)
-            .and_then(|block| match block {
-                Type::Proc(_, result) => Some(*result),
-                _ => None,
-            });
+            .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()));
+        let bound_receiver = block_signature
+            .as_ref()
+            .and_then(optional_proc_type)
+            .and_then(|block| proc_receiver(&block).cloned());
         let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
             if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
             {
@@ -8163,10 +8344,8 @@ impl<'src> Analyzer<'src> {
                         return None;
                     };
                     if let Some(signature) = Self::passed_block_signature(&expression_type) {
-                        let return_type = match &signature {
-                            Type::Proc(_, result) => (**result).clone(),
-                            _ => Type::Any,
-                        };
+                        let return_type =
+                            proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
                         (return_type, Some(signature))
                     } else {
                         (Type::Any, None)
@@ -8179,17 +8358,20 @@ impl<'src> Analyzer<'src> {
                     return None;
                 };
                 if let Some(signature) = Self::passed_block_signature(&expression_type) {
-                    let return_type = match &signature {
-                        Type::Proc(_, result) => (**result).clone(),
-                        _ => Type::Any,
-                    };
+                    let return_type =
+                        proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
                     (return_type, Some(signature))
                 } else {
                     (Type::Any, None)
                 }
             }
         } else {
-            (self.eval_block_node(block, &expected, environment), None)
+            let block_type = if let Some(receiver) = bound_receiver.as_ref() {
+                self.eval_bound_block_node(block, &expected, receiver, environment)
+            } else {
+                self.eval_block_node(block, &expected, environment)
+            };
+            (block_type, None)
         };
         self.expected_return_type = previous_expected_return;
         let mut checked_bindings =
@@ -8227,7 +8409,7 @@ impl<'src> Analyzer<'src> {
             .as_ref()
             .and_then(optional_proc_type)
         {
-            if let Type::Proc(_, expected_return) = block_signature {
+            if let Some((_, expected_return)) = proc_parts(&block_signature) {
                 if !expected_return.is_any()
                     && !expected_return.is_nil()
                     && !self.is_assignable(&block_type, &expected_return)
@@ -8261,7 +8443,7 @@ impl<'src> Analyzer<'src> {
             return Type::Any;
         };
         let name = String::from_utf8_lossy(symbol.unescaped()).into_owned();
-        let Type::Proc(parameters, _) = expected else {
+        let Some((parameters, _)) = proc_parts(expected) else {
             return Type::Any;
         };
         let Some(receiver) = parameters.first() else {
@@ -8648,15 +8830,14 @@ impl<'src> Analyzer<'src> {
 
     fn implicit_method_key(&self, name: &str, environment: &Environment) -> MethodKey {
         if let Some(current) = &environment.method_key {
-            let owner = if current.singleton {
-                current.owner.clone()
-            } else {
+            let class_object_owner = Self::class_object_owner(&environment.self_type);
+            let owner = class_object_owner.clone().or_else(|| {
                 Self::named_type_name(&environment.self_type).or_else(|| current.owner.clone())
-            };
+            });
             MethodKey {
                 owner,
                 name: name.to_owned(),
-                singleton: current.singleton,
+                singleton: class_object_owner.is_some() || current.singleton,
             }
         } else {
             MethodKey::top_level(name)
@@ -8696,7 +8877,8 @@ impl<'src> Analyzer<'src> {
                 | Type::Union(_)
                 | Type::TypeVar(_)
                 | Type::AttachedClass
-                | Type::AttachedClassOf(_) => return None,
+                | Type::AttachedClassOf(_)
+                | Type::BoundProc { .. } => return None,
             };
             (owner.to_owned(), false)
         };
@@ -9136,7 +9318,23 @@ impl<'src> Analyzer<'src> {
             "reveal_type" => {
                 if let Some(type_) = argument_types.first() {
                     if let Some(argument) = argument_nodes.first() {
-                        self.note(argument, format!("Revealed type: `{type_}`"));
+                        let description = if environment
+                            .method_key
+                            .as_ref()
+                            .is_some_and(|method| method.name == "<bound-block>")
+                        {
+                            match type_ {
+                                Type::Named(name, arguments)
+                                    if name_matches(name, "Class") && arguments.len() == 1 =>
+                                {
+                                    format!("T.class_of({})", arguments[0])
+                                }
+                                _ => type_.to_string(),
+                            }
+                        } else {
+                            type_.to_string()
+                        };
+                        self.note(argument, format!("Revealed type: `{description}`"));
                     }
                     type_.clone()
                 } else {
@@ -9146,9 +9344,24 @@ impl<'src> Analyzer<'src> {
             }
             "let" | "cast" | "assert_type!" | "bind" => {
                 let actual = argument_types.first().cloned().unwrap_or(Type::Any);
-                let expected = argument_nodes
+                let mut expected = argument_nodes
                     .get(1)
                     .map_or(Type::Any, |argument| self.type_from_node(argument));
+                if name == "let"
+                    && environment
+                        .method_key
+                        .as_ref()
+                        .is_some_and(|method| method.name == "<bound-block>")
+                    && argument_nodes.get(1).is_some_and(|argument| {
+                        prism::text(self.source, argument).contains("T.attached_class")
+                    })
+                {
+                    let message =
+                        "`T.attached_class` may only be used in singleton methods on classes or instance methods on `has_attached_class!` modules";
+                    let annotation = argument_nodes.get(1).unwrap_or(node);
+                    self.error(annotation, message);
+                    expected = Type::Any;
+                }
                 if name == "let" || name == "assert_type!" {
                     self.check_assignable(
                         argument_nodes.first().unwrap_or(node),
@@ -9209,7 +9422,7 @@ impl<'src> Analyzer<'src> {
                         Type::AttachedClassOf(owner.to_owned())
                     })
                 } else {
-                    Type::AttachedClass
+                    Type::Any
                 }
             }
             "absurd" => {
@@ -9502,7 +9715,7 @@ impl<'src> Analyzer<'src> {
                 Type::Symbol => Self::class_object_type("Symbol"),
                 Type::Array(_) | Type::Tuple(_) => Self::class_object_type("Array"),
                 Type::Hash(_, _) => Self::class_object_type("Hash"),
-                Type::Proc(_, _) => Self::class_object_type("Proc"),
+                Type::Proc(_, _) | Type::BoundProc { .. } => Self::class_object_type("Proc"),
                 Type::Object => Self::class_object_type("Object"),
                 Type::Named(class, _) => Self::class_object_type(class),
                 Type::Intersection(_)
@@ -9642,7 +9855,10 @@ impl<'src> Analyzer<'src> {
                 "[]" | "fetch" => Type::union([Type::Nil, Type::String]),
                 _ => self.eval_common_method(name),
             },
-            Type::Proc(params, result) if matches!(name, "call" | "[]") => {
+            callable @ (Type::Proc(_, _) | Type::BoundProc { .. })
+                if matches!(name, "call" | "[]") =>
+            {
+                let (params, result) = proc_parts(callable).expect("callable variant");
                 for (index, (argument, expected)) in
                     site.argument_nodes.iter().zip(params).enumerate()
                 {
@@ -9650,7 +9866,7 @@ impl<'src> Analyzer<'src> {
                         self.check_assignable(argument, actual, expected);
                     }
                 }
-                result.as_ref().clone()
+                result.clone()
             }
             Type::Named(class, arguments) if name == "new" && name_matches(class, "Class") => {
                 let instance = Self::class_object_instance_type(receiver).unwrap_or(Type::Any);
@@ -9886,7 +10102,11 @@ impl<'src> Analyzer<'src> {
                 }
                 self.eval_common_method(name)
             }
-            Type::Never | Type::Proc(_, _) | Type::Intersection(_) | Type::Union(_) => Type::Any,
+            Type::Never
+            | Type::Proc(_, _)
+            | Type::BoundProc { .. }
+            | Type::Intersection(_)
+            | Type::Union(_) => Type::Any,
         }
     }
 
@@ -9949,10 +10169,7 @@ impl<'src> Analyzer<'src> {
                                 ),
                             );
                         }
-                        match signature {
-                            Type::Proc(_, result) => *result,
-                            _ => Type::Any,
-                        }
+                        proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone())
                     } else {
                         Type::Any
                     }
@@ -10702,6 +10919,34 @@ impl<'src> Analyzer<'src> {
         (Self::block_value_type(&result), block_environment)
     }
 
+    fn eval_bound_block_node<'node>(
+        &mut self,
+        node: &Node<'node>,
+        expected: &[Type],
+        receiver: &Type,
+        outer: &mut Environment,
+    ) -> Type {
+        let Some(block) = node.as_block_node() else {
+            return Type::Any;
+        };
+        let captured = outer.clone();
+        let mut bound_outer = outer.clone();
+        bound_outer.self_type = receiver.clone();
+        let class_object_owner = Self::class_object_owner(receiver);
+        bound_outer.method_key = Some(MethodKey {
+            owner: class_object_owner
+                .clone()
+                .or_else(|| Self::named_type_name(receiver))
+                .or_else(|| outer.method_key.as_ref().and_then(|key| key.owner.clone())),
+            name: "<bound-block>".to_owned(),
+            singleton: class_object_owner.is_some(),
+        });
+        let (result, block_environment) =
+            self.eval_block_with_environment(&block, expected, &bound_outer);
+        self.propagate_block_locals(outer, &captured, &block_environment);
+        Self::block_value_type(&result)
+    }
+
     fn passed_block_expression_type<'node>(
         &mut self,
         node: &Node<'node>,
@@ -10719,14 +10964,14 @@ impl<'src> Analyzer<'src> {
             // for an unannotated or `Proc`-typed block parameter.  That is an
             // unknown-arity proc, not a known zero-argument proc.
             Type::Proc(parameters, result) if parameters.is_empty() && result.is_any() => None,
-            Type::Proc(_, _) => Some(type_.clone()),
+            Type::Proc(_, _) | Type::BoundProc { .. } => Some(type_.clone()),
             Type::Union(_) => optional_proc_type(type_),
             _ => None,
         }
     }
 
     fn block_type_description(type_: &Type) -> String {
-        let Type::Proc(parameters, result) = type_ else {
+        let Some((parameters, result)) = proc_parts(type_) else {
             return type_.to_string();
         };
         let mut description = String::from("T.proc");
@@ -10742,6 +10987,15 @@ impl<'src> Analyzer<'src> {
         }
         description.push_str(&format!(".returns({result})"));
         description
+    }
+
+    fn sorbet_type_description(type_: &Type) -> String {
+        match type_ {
+            Type::Named(name, arguments) if name_matches(name, "Class") && arguments.len() == 1 => {
+                format!("T.class_of({})", arguments[0])
+            }
+            _ => type_.to_string(),
+        }
     }
 
     fn argument_type_description(&self, node: &Node<'_>, type_: &Type) -> String {
@@ -10838,7 +11092,7 @@ impl<'src> Analyzer<'src> {
                     }
                     return Type::Any;
                 };
-                let Type::Proc(_, result) = &signature else {
+                let Some((_, result)) = proc_parts(&signature) else {
                     return Type::Any;
                 };
                 let expected = Type::Proc(vec![element.clone()], Box::new(Type::Anything));
@@ -10852,7 +11106,7 @@ impl<'src> Analyzer<'src> {
                         ),
                     );
                 }
-                (**result).clone()
+                result.clone()
             }
         } else {
             self.eval_block_node(node, std::slice::from_ref(element), outer)
@@ -11431,6 +11685,28 @@ impl<'src> Analyzer<'src> {
                     .collect(),
                 Box::new(self.resolve_type_names_with_locals(result, owner, local_type_parameters)),
             ),
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => Type::BoundProc {
+                receiver: Box::new(self.resolve_type_names_with_locals(
+                    receiver,
+                    owner,
+                    local_type_parameters,
+                )),
+                parameters: parameters
+                    .iter()
+                    .map(|parameter| {
+                        self.resolve_type_names_with_locals(parameter, owner, local_type_parameters)
+                    })
+                    .collect(),
+                result: Box::new(self.resolve_type_names_with_locals(
+                    result,
+                    owner,
+                    local_type_parameters,
+                )),
+            },
             Type::Union(members) => Type::union(members.iter().map(|member| {
                 self.resolve_type_names_with_locals(member, owner, local_type_parameters)
             })),
@@ -11722,6 +11998,30 @@ impl<'src> Analyzer<'src> {
                         .all(|(actual, expected)| self.is_assignable(expected, actual))
                     && self.is_assignable(actual_return, expected_return)
             }
+            (
+                actual @ (Type::Proc(_, _) | Type::BoundProc { .. }),
+                expected @ (Type::Proc(_, _) | Type::BoundProc { .. }),
+            ) => {
+                let Some((actual_params, actual_return)) = proc_parts(actual) else {
+                    return false;
+                };
+                let Some((expected_params, expected_return)) = proc_parts(expected) else {
+                    return false;
+                };
+                let receiver_compatible = match (proc_receiver(actual), proc_receiver(expected)) {
+                    (Some(actual), Some(expected)) => self.is_assignable(actual, expected),
+                    (Some(_), None) => true,
+                    (None, Some(_)) => false,
+                    (None, None) => true,
+                };
+                receiver_compatible
+                    && actual_params.len() == expected_params.len()
+                    && actual_params
+                        .iter()
+                        .zip(expected_params)
+                        .all(|(actual, expected)| self.is_assignable(expected, actual))
+                    && self.is_assignable(actual_return, expected_return)
+            }
             (Type::Named(actual_name, actual_args), Type::Named(expected_name, expected_args))
                 if actual_args.len() == 1
                     && expected_args.is_empty()
@@ -11953,6 +12253,18 @@ impl<'src> Analyzer<'src> {
                     .collect(),
                 Box::new(self.resolve_shadowed_builtin_types(result, owner)),
             ),
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => Type::BoundProc {
+                receiver: Box::new(self.resolve_shadowed_builtin_types(receiver, owner)),
+                parameters: parameters
+                    .iter()
+                    .map(|parameter| self.resolve_shadowed_builtin_types(parameter, owner))
+                    .collect(),
+                result: Box::new(self.resolve_shadowed_builtin_types(result, owner)),
+            },
             Type::Named(name, arguments) => self.resolve_type_names(
                 &Type::Named(
                     name.clone(),

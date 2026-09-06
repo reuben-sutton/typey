@@ -33,6 +33,14 @@ pub enum Type {
     /// A callable type.  This is intentionally compact until block typing is
     /// expanded to model keyword and rest parameters.
     Proc(Vec<Type>, Box<Type>),
+    /// A callable whose `self` is bound by Sorbet's `T.proc.bind(...)`
+    /// annotation. The yielded arguments and return value have the same
+    /// shape as `Proc`, but evaluating the block uses `receiver` as `self`.
+    BoundProc {
+        receiver: Box<Type>,
+        parameters: Vec<Type>,
+        result: Box<Type>,
+    },
     /// A finite union (least upper bound) of alternatives.
     Union(Vec<Type>),
     /// RBS/Sorbet intersection types. The constructor canonicalizes redundant
@@ -151,6 +159,26 @@ impl Type {
                     Box::new(left_return.join(right_return)),
                 ))
             }
+            (
+                Self::BoundProc {
+                    receiver: left_receiver,
+                    parameters: left_params,
+                    result: left_result,
+                },
+                Self::BoundProc {
+                    receiver: right_receiver,
+                    parameters: right_params,
+                    result: right_result,
+                },
+            ) if left_params.len() == right_params.len() => Some(Self::BoundProc {
+                receiver: Box::new(left_receiver.join(right_receiver)),
+                parameters: left_params
+                    .iter()
+                    .zip(right_params)
+                    .map(|(left, right)| left.join(right))
+                    .collect(),
+                result: Box::new(left_result.join(right_result)),
+            }),
             (Self::Tuple(left), Self::Tuple(right)) if left.len() == right.len() => {
                 Some(Self::Tuple(
                     left.iter()
@@ -320,6 +348,15 @@ impl Type {
             Self::Proc(parameters, result) => {
                 parameters.iter().any(Self::contains_any) || result.contains_any()
             }
+            Self::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => {
+                receiver.contains_any()
+                    || parameters.iter().any(Self::contains_any)
+                    || result.contains_any()
+            }
             Self::Union(members) | Self::Intersection(members) => {
                 members.iter().any(Self::contains_any)
             }
@@ -436,7 +473,8 @@ impl Type {
             | (Self::Hash(_, _), Self::Object)
             | (Self::Tuple(_), Self::Object)
             | (Self::Named(_, _), Self::Object)
-            | (Self::Proc(_, _), Self::Object) => true,
+            | (Self::Proc(_, _), Self::Object)
+            | (Self::BoundProc { .. }, Self::Object) => true,
             (Self::Integer, Self::Named(name, args)) | (Self::Float, Self::Named(name, args))
                 if name == "Numeric" && args.is_empty() =>
             {
@@ -461,6 +499,41 @@ impl Type {
             }
             (
                 Self::Proc(actual_params, actual_return),
+                Self::Proc(expected_params, expected_return),
+            ) => {
+                actual_params.len() == expected_params.len()
+                    && actual_params
+                        .iter()
+                        .zip(expected_params)
+                        .all(|(actual, expected)| expected.is_subtype_of(actual))
+                    && actual_return.is_subtype_of(expected_return)
+            }
+            (
+                Self::BoundProc {
+                    receiver: actual_receiver,
+                    parameters: actual_params,
+                    result: actual_return,
+                },
+                Self::BoundProc {
+                    receiver: expected_receiver,
+                    parameters: expected_params,
+                    result: expected_return,
+                },
+            ) => {
+                actual_receiver.is_subtype_of(expected_receiver)
+                    && actual_params.len() == expected_params.len()
+                    && actual_params
+                        .iter()
+                        .zip(expected_params)
+                        .all(|(actual, expected)| expected.is_subtype_of(actual))
+                    && actual_return.is_subtype_of(expected_return)
+            }
+            (
+                Self::BoundProc {
+                    parameters: actual_params,
+                    result: actual_return,
+                    ..
+                },
                 Self::Proc(expected_params, expected_return),
             ) => {
                 actual_params.len() == expected_params.len()
@@ -607,6 +680,28 @@ impl fmt::Display for Type {
                     write!(f, ")")?;
                 }
                 write!(f, ".returns({result})")
+            }
+            Self::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => {
+                write!(f, "T.proc.bind({receiver})")?;
+                if !parameters.is_empty() {
+                    write!(f, ".params(")?;
+                    for (index, param) in parameters.iter().enumerate() {
+                        if index > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{param}")?;
+                    }
+                    write!(f, ")")?;
+                }
+                if result.is_nil() {
+                    write!(f, ".void")
+                } else {
+                    write!(f, ".returns({result})")
+                }
             }
             Self::Intersection(members) => {
                 write!(f, "T.all(")?;
