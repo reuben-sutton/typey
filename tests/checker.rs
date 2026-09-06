@@ -393,6 +393,14 @@ fn models_array_to_set() {
 }
 
 #[test]
+fn models_set_predicates() {
+    let result = check_fixture("tests/fixtures/set_predicate.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("Revealed type: `T::Boolean`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
