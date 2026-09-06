@@ -6062,6 +6062,13 @@ impl<'src> Analyzer<'src> {
                 &dispatch_receiver_type,
                 environment,
             );
+            self.refine_local_hash_write(
+                receiver_node.as_ref(),
+                &name,
+                argument_types,
+                &dispatch_receiver_type,
+                environment,
+            );
             if name == "new"
                 && receiver_node
                     .as_ref()
@@ -6141,6 +6148,47 @@ impl<'src> Analyzer<'src> {
             environment.bind(
                 prism::constant_name(local.name()),
                 Type::Array(Box::new(refined_element)),
+            );
+        }
+    }
+
+    fn refine_local_hash_write(
+        &self,
+        receiver_node: Option<&Node<'_>>,
+        name: &str,
+        argument_types: &[Type],
+        receiver_type: &Type,
+        environment: &mut Environment,
+    ) {
+        if name != "[]=" {
+            return;
+        }
+        let Some(local) = receiver_node.and_then(Node::as_local_variable_read_node) else {
+            return;
+        };
+        let Type::Hash(key, value) = receiver_type else {
+            return;
+        };
+        let Some(actual_key) = argument_types.first() else {
+            return;
+        };
+        let Some(actual_value) = argument_types.last() else {
+            return;
+        };
+        let refined_key = if key.is_any() && !actual_key.is_any() {
+            actual_key.clone()
+        } else {
+            key.join(actual_key)
+        };
+        let refined_value = if value.is_any() && !actual_value.is_any() {
+            actual_value.clone()
+        } else {
+            value.join(actual_value)
+        };
+        if refined_key != key.as_ref().clone() || refined_value != value.as_ref().clone() {
+            environment.bind(
+                prism::constant_name(local.name()),
+                Type::Hash(Box::new(refined_key), Box::new(refined_value)),
             );
         }
     }
