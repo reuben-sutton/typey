@@ -2069,6 +2069,27 @@ T.reveal_type(Validator.all.flat_map { |validator| validator.call("value") })
 }
 
 #[test]
+fn flattens_union_of_values_and_arrays_through_flat_map() {
+    let result = check(
+        r#"
+values = [1, 2, 3]
+T.reveal_type(values.flat_map { |value| value.even? ? value.to_s : [value.to_s] })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn does_not_invent_block_arity_for_inferred_methods() {
     let result = check(
         r#"

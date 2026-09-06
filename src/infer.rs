@@ -12295,12 +12295,18 @@ impl<'src> Analyzer<'src> {
         if arguments.has_unknown_positional_splat || arguments.has_unknown_keyword_splat {
             Type::Any
         } else {
-            self.substitute_signature_type(
+            let return_type = self.substitute_signature_type(
                 &signature.return_type,
                 receiver_type,
                 &type_parameter_bindings,
                 &signature.type_parameters,
-            )
+            );
+            if name == "flat_map" {
+                if let Some(block_return_type) = block_return_type {
+                    return Type::Array(Box::new(self.flat_map_element_type(block_return_type)));
+                }
+            }
+            return_type
         }
     }
 
