@@ -2692,6 +2692,25 @@ T.reveal_type({"a" => 1}.to_yaml)
 }
 
 #[test]
+fn preserves_receiver_type_through_tap() {
+    let result = check(
+        r#"
+T.reveal_type("value".tap { |value| value.length })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
