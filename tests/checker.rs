@@ -2480,6 +2480,27 @@ T.reveal_type(:text.to_sym)
 }
 
 #[test]
+fn infers_const_get_class_objects_from_literal_names() {
+    let result = check(
+        r#"
+module Namespace
+  class Thing
+  end
+end
+
+T.reveal_type(Namespace.const_get("Thing"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `Class[Namespace::Thing]`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
