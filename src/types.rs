@@ -46,6 +46,10 @@ pub enum Type {
     /// when an inherited method is called through `Child`, it resolves to the
     /// `Child` instance type rather than the method's declaring class.
     AttachedClass,
+    /// An attached class while checking the body of the class/module that
+    /// declared it. The owner is retained so reveals remain useful inside the
+    /// body; call-site substitution turns it into the concrete subclass.
+    AttachedClassOf(String),
 }
 
 impl Type {
@@ -330,7 +334,8 @@ impl Type {
             | Self::Symbol
             | Self::Object
             | Self::TypeVar(_)
-            | Self::AttachedClass => false,
+            | Self::AttachedClass
+            | Self::AttachedClassOf(_) => false,
         }
     }
 
@@ -638,6 +643,7 @@ impl fmt::Display for Type {
             }
             Self::TypeVar(name) => write!(f, "{name}"),
             Self::AttachedClass => write!(f, "T.attached_class"),
+            Self::AttachedClassOf(owner) => write!(f, "T.attached_class (of {owner})"),
         }
     }
 }

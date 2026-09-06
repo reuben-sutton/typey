@@ -2203,7 +2203,7 @@ impl<'src> Analyzer<'src> {
             Type::Named(name, arguments) if name == "instance" && arguments.is_empty() => {
                 receiver_type.map_or_else(|| type_.clone(), Self::receiver_instance_type)
             }
-            Type::AttachedClass => attached_class.clone(),
+            Type::AttachedClass | Type::AttachedClassOf(_) => attached_class.clone(),
             Type::Named(name, arguments) => Type::Named(
                 name.clone(),
                 arguments
@@ -3272,7 +3272,7 @@ impl<'src> Analyzer<'src> {
 
     fn contains_attached_class_type(type_: &Type) -> bool {
         match type_ {
-            Type::AttachedClass => true,
+            Type::AttachedClass | Type::AttachedClassOf(_) => true,
             Type::Named(_, arguments) => arguments.iter().any(Self::contains_attached_class_type),
             Type::Array(element) => Self::contains_attached_class_type(element),
             Type::Hash(key, value) => {
@@ -7216,7 +7216,12 @@ impl<'src> Analyzer<'src> {
             )
         {
             if let Some(receiver) = receiver_node.as_ref() {
-                let description = self.static_type_description(receiver);
+                let description = match receiver_type {
+                    Type::AttachedClassOf(ref owner) => {
+                        format!("T.attached_class (of {owner})")
+                    }
+                    _ => self.static_type_description(receiver),
+                };
                 self.error(
                     node,
                     format!(
@@ -7343,7 +7348,15 @@ impl<'src> Analyzer<'src> {
                 if let Some(owner) = key.owner.clone() {
                     if name == "new" {
                         self.infer_initializer_call(node, &owner, &arguments, environment);
-                        Type::named(owner)
+                        if environment
+                            .method_key
+                            .as_ref()
+                            .is_some_and(|method| method.singleton)
+                        {
+                            Type::AttachedClassOf(owner)
+                        } else {
+                            Type::named(owner)
+                        }
                     } else {
                         let type_ = self.eval_global_call(
                             node,
@@ -7686,6 +7699,9 @@ impl<'src> Analyzer<'src> {
         };
         let mut refined_element = element.as_ref().clone();
         for actual in argument_types {
+            if !self.is_assignable(actual, element) {
+                continue;
+            }
             if refined_element.is_any() && !actual.is_any() {
                 refined_element = actual.clone();
             } else {
@@ -8679,7 +8695,8 @@ impl<'src> Analyzer<'src> {
                 | Type::Intersection(_)
                 | Type::Union(_)
                 | Type::TypeVar(_)
-                | Type::AttachedClass => return None,
+                | Type::AttachedClass
+                | Type::AttachedClassOf(_) => return None,
             };
             (owner.to_owned(), false)
         };
@@ -9185,7 +9202,15 @@ impl<'src> Analyzer<'src> {
                         "`T.attached_class` may only be used in singleton methods on classes or instance methods on `has_attached_class!` modules",
                     );
                 }
-                Type::AttachedClass
+                if (is_singleton && !is_module)
+                    || (!is_singleton && is_module && has_attached_class)
+                {
+                    owner.map_or(Type::AttachedClass, |owner| {
+                        Type::AttachedClassOf(owner.to_owned())
+                    })
+                } else {
+                    Type::AttachedClass
+                }
             }
             "absurd" => {
                 let actual = argument_types.first().cloned().unwrap_or(Type::Any);
@@ -9480,9 +9505,11 @@ impl<'src> Analyzer<'src> {
                 Type::Proc(_, _) => Self::class_object_type("Proc"),
                 Type::Object => Self::class_object_type("Object"),
                 Type::Named(class, _) => Self::class_object_type(class),
-                Type::Intersection(_) | Type::Union(_) | Type::TypeVar(_) | Type::AttachedClass => {
-                    Type::Any
-                }
+                Type::Intersection(_)
+                | Type::Union(_)
+                | Type::TypeVar(_)
+                | Type::AttachedClass
+                | Type::AttachedClassOf(_) => Type::Any,
             };
         }
 
@@ -9848,7 +9875,12 @@ impl<'src> Analyzer<'src> {
                 }
                 self.eval_common_method(name)
             }
-            Type::Any | Type::Anything | Type::Object | Type::TypeVar(_) | Type::AttachedClass => {
+            Type::Any
+            | Type::Anything
+            | Type::Object
+            | Type::TypeVar(_)
+            | Type::AttachedClass
+            | Type::AttachedClassOf(_) => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, &[Type::Any], environment);
                 }
@@ -10261,6 +10293,9 @@ impl<'src> Analyzer<'src> {
                 for (argument, actual) in site.argument_nodes.iter().zip(site.argument_types) {
                     let actual = self.tuple_literal_argument_type(argument, actual, element);
                     self.check_assignable(argument, &actual, element);
+                    if !self.is_assignable(&actual, element) {
+                        continue;
+                    }
                     if result_element.is_any() && !actual.is_any() {
                         result_element = actual;
                     } else {
@@ -11211,8 +11246,33 @@ impl<'src> Analyzer<'src> {
 
     fn check_assignable<'node>(&mut self, node: &Node<'node>, actual: &Type, expected: &Type) {
         if !self.is_assignable(actual, expected) {
-            self.error(node, format!("Expected `{expected}`, but found `{actual}`"));
+            let attached_class_expected = Self::contains_attached_class_type(expected);
+            let actual = if attached_class_expected {
+                self.literal_type_description(node, actual)
+            } else {
+                actual.to_string()
+            };
+            if attached_class_expected {
+                self.error(node, format!("Expected `{expected}` but found `{actual}`"));
+            } else {
+                self.error(node, format!("Expected `{expected}`, but found `{actual}`"));
+            }
         }
+    }
+
+    fn literal_type_description(&self, node: &Node<'_>, type_: &Type) -> String {
+        if matches!(type_, Type::String) {
+            if let Some(string) = node.as_string_node() {
+                let value = String::from_utf8_lossy(string.unescaped());
+                return format!("String(\"{value}\")");
+            }
+        }
+        if matches!(type_, Type::Integer) {
+            if node.as_integer_node().is_some() {
+                return format!("Integer({})", prism::text(self.source, node));
+            }
+        }
+        type_.to_string()
     }
 
     fn resolve_signature_names(&self, signature: &MethodSig, owner: Option<&str>) -> MethodSig {
@@ -11586,6 +11646,12 @@ impl<'src> Analyzer<'src> {
                 .any(|member| self.is_assignable(member, expected));
         }
         match (actual, expected) {
+            (Type::AttachedClassOf(actual), Type::Named(expected, _)) => {
+                self.nominal_subtype(actual, expected)
+            }
+            (Type::AttachedClassOf(actual), Type::AttachedClassOf(expected)) => {
+                self.nominal_subtype(actual, expected)
+            }
             (Type::Array(actual), Type::Array(expected)) => self.is_assignable(actual, expected),
             (Type::Hash(actual_key, actual_value), Type::Hash(expected_key, expected_value)) => {
                 self.is_assignable(actual_key, expected_key)
