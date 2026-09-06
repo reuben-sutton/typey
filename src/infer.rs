@@ -7562,6 +7562,13 @@ impl<'src> Analyzer<'src> {
             return Type::String;
         }
 
+        if name == "tap" {
+            if let Some(block) = site.block {
+                let _ = self.eval_block_node(block, std::slice::from_ref(receiver), environment);
+            }
+            return receiver.clone();
+        }
+
         if name == "freeze" {
             return receiver.clone();
         }
