@@ -7558,6 +7558,7 @@ impl<'src> Analyzer<'src> {
                 Type::Integer
             }
             "empty?" | "include?" | "intersect?" => Type::bool(),
+            "<=>" => Type::union([Type::Nil, Type::Integer]),
             "any?" | "all?" | "none?" => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
