@@ -8426,6 +8426,12 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Hash(Box::new(key.clone()), Box::new(value.clone()))
             }
+            "sort" => {
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, &[key.clone(), value.clone()], environment);
+                }
+                Type::Array(Box::new(Type::Tuple(vec![key.clone(), value.clone()])))
+            }
             "sort_by" => {
                 if site.block.is_none() {
                     return Type::named("Enumerator");
