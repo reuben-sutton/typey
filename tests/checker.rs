@@ -143,19 +143,28 @@ fn applies_short_rbs_types_to_generated_accessors() {
 #[test]
 fn preserves_array_types_through_must_on_slices() {
     let result = check_fixture("tests/fixtures/must_array_slice.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T::Array[String]`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn propagates_typed_keyword_arguments_into_must_ivar_reads() {
     let result = check_fixture("tests/fixtures/typed_keyword_ivar_must.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `String`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -186,9 +195,14 @@ fn models_numeric_unary_methods() {
 #[test]
 fn models_integer_bitwise_operators() {
     let result = check_fixture("tests/fixtures/integer_bitwise.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `Integer`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Integer`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -205,7 +219,10 @@ fn models_class_object_methods() {
         "Revealed type: `T.nilable([String, Integer])`",
         "Revealed type: `T.noreturn`",
     ] {
-        assert!(notes.iter().any(|message| message.contains(expected)), "missing {expected} in {notes:?}");
+        assert!(
+            notes.iter().any(|message| message.contains(expected)),
+            "missing {expected} in {notes:?}"
+        );
     }
 }
 
@@ -321,11 +338,15 @@ fn destructures_typed_tuple_elements_in_collection_blocks() {
         .map(|diagnostic| diagnostic.message.as_str())
         .collect::<Vec<_>>();
     assert!(
-        notes.iter().any(|message| message.contains("Revealed type: `String`")),
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
         "{notes:?}"
     );
     assert!(
-        notes.iter().any(|message| message.contains("Revealed type: `Integer`")),
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Integer`")),
         "{notes:?}"
     );
 }
@@ -333,37 +354,55 @@ fn destructures_typed_tuple_elements_in_collection_blocks() {
 #[test]
 fn preserves_typed_ivar_elements_through_empty_resets() {
     let result = check_fixture("tests/fixtures/typed_ivar_empty_reset.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T::Array[String]`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn inherits_typed_ivars_from_superclasses() {
     let result = check_fixture("tests/fixtures/inherited_typed_ivar.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T::Array[String]`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn preserves_generic_accessor_types_through_nested_iteration() {
     let result = check_fixture("tests/fixtures/generic_accessor_iteration.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `Integer`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Integer`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn narrows_nilable_locals_after_safe_navigation_guards() {
     let result = check_fixture("tests/fixtures/safe_navigation_narrowing.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `String`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -386,29 +425,41 @@ fn narrows_class_objects_by_subclass_comparisons() {
 #[test]
 fn preserves_nil_for_locals_assigned_only_in_unreached_rescues() {
     let result = check_fixture("tests/fixtures/rescue_definite_assignment.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `NilClass`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `NilClass`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn models_array_intersection_predicates() {
     let result = check_fixture("tests/fixtures/array_intersect_predicate.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `T::Boolean`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `T::Boolean`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn models_array_comparison() {
     let result = check_fixture("tests/fixtures/array_comparison.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T.nilable(Integer)`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T.nilable(Integer)`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -436,27 +487,41 @@ T.reveal_type(["unknown"].to_s)
 #[test]
 fn models_array_to_set() {
     let result = check_fixture("tests/fixtures/array_to_set.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `Set[String]`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Set[String]`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn models_set_predicates() {
     let result = check_fixture("tests/fixtures/set_predicate.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `T::Boolean`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `T::Boolean`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn models_string_bang_methods() {
     let result = check_fixture("tests/fixtures/string_bang_methods.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T.nilable(String)`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T.nilable(String)`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -466,7 +531,9 @@ fn models_symbol_to_proc_collection_blocks() {
         result
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `T::Array[String]`"))
+            .filter(|diagnostic| diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`"))
             .count(),
         2,
         "{:?}",
@@ -477,25 +544,40 @@ fn models_symbol_to_proc_collection_blocks() {
 #[test]
 fn models_string_shellescape() {
     let result = check_fixture("tests/fixtures/string_shellescape.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `String`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn narrows_rescue_references_to_the_exception_type() {
     let result = check_fixture("tests/fixtures/rescue_narrowing.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `Integer`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Integer`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
 fn narrows_nested_rescue_collection_elements() {
     let result = check_fixture("tests/fixtures/nested_rescue_collection.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `Integer`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Integer`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -1174,10 +1256,9 @@ fn parses_the_supported_advanced_sorbet_type_forms() {
         typey::signature::parse_type("T.proc.params(value: String).returns(Integer)"),
         Type::Proc(vec![Type::String], Box::new(Type::Integer))
     );
-    let benchmark_signature = typey::signature::parse_sorbet_signature(
-        "sig { params(blk: T.proc.void).returns(Float) }",
-    )
-    .expect("benchmark signature parses");
+    let benchmark_signature =
+        typey::signature::parse_sorbet_signature("sig { params(blk: T.proc.void).returns(Float) }")
+            .expect("benchmark signature parses");
     assert_eq!(benchmark_signature.return_type, Type::Float);
     assert!(!benchmark_signature.is_void);
     assert_eq!(
@@ -1589,12 +1670,14 @@ fn publishes_only_the_final_type_per_expression() {
     let types = result
         .types
         .iter()
-        .filter(|inferred| {
-            inferred.start == start && inferred.end == start + "command.to_s".len()
-        })
+        .filter(|inferred| inferred.start == start && inferred.end == start + "command.to_s".len())
         .collect::<Vec<_>>();
     assert_eq!(types.len(), 1, "duplicate final types: {types:?}");
-    assert_eq!(types[0].type_, Type::String, "unexpected final type: {types:?}");
+    assert_eq!(
+        types[0].type_,
+        Type::String,
+        "unexpected final type: {types:?}"
+    );
     assert!(types[0].is_send, "send metadata was lost: {types:?}");
 }
 
@@ -2542,11 +2625,15 @@ T.reveal_type(Namespace.const_get("Thing"))
         CheckerConfig::default(),
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `Class[Namespace::Thing]`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `Class[Namespace::Thing]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -2566,11 +2653,15 @@ T.reveal_type(entries.to_h { |entry| [entry.key, entry] })
         CheckerConfig::default(),
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T::Hash[String, Entry]`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Hash[String, Entry]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -2587,11 +2678,15 @@ T.reveal_type(left - right)
         CheckerConfig::default(),
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T::Set[String]`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Set[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -2632,16 +2727,24 @@ T.reveal_type(sorted.to_h)
         CheckerConfig::default(),
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T::Array[[String, Integer]]`")
-    }), "{:?}", result.diagnostics);
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T::Hash[String, Integer]`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[[String, Integer]]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Hash[String, Integer]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -2653,11 +2756,14 @@ T.reveal_type("a" <=> "b")
         CheckerConfig::default(),
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `Integer`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Integer`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -2818,10 +2924,9 @@ T.reveal_type(values.map { |value| value.to_s })
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("Revealed type: `T::Array[String]`")),
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T::Array[String]`")),
         "{:?}",
         result.diagnostics
     );
@@ -2838,10 +2943,9 @@ T.reveal_type(values)
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("Revealed type: `T::Array[String]`")),
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T::Array[String]`")),
         "{:?}",
         result.diagnostics
     );
@@ -2925,10 +3029,9 @@ T.reveal_type(OptionParser.new.parse!(["--name", "value"]))
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("Revealed type: `T::Array[String]`")),
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T::Array[String]`")),
         "missing Array[String] reveal in {:?}",
         result.diagnostics
     );
@@ -4217,9 +4320,7 @@ T.reveal_type("  message  ".squish)
         result
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic
-                .message
-                .contains("Revealed type: `String`"))
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `String`"))
             .count(),
         5,
         "{:?}",
@@ -4242,9 +4343,10 @@ T.reveal_type(ActiveSupport::Inflector.classify("posts"))
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
-        result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `String`")
-        }),
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }),
         "{:?}",
         result.diagnostics
     );
@@ -4312,7 +4414,9 @@ T.reveal_type(extract(AST::Node.new))
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `T.nilable(String)`")
+            diagnostic
+                .message
+                .contains("Revealed type: `T.nilable(String)`")
         }),
         "{:?}",
         result.diagnostics
@@ -4352,7 +4456,9 @@ T.reveal_type(Command.new(Files.new).files)
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
         }),
         "{:?}",
         result.diagnostics
@@ -4374,7 +4480,9 @@ T.reveal_type(values)
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
         }),
         "{:?}",
         result.diagnostics
@@ -4399,7 +4507,9 @@ T.reveal_type(collect_strings([1]))
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
         }),
         "{:?}",
         result.diagnostics
@@ -4422,7 +4532,9 @@ T.reveal_type(strings)
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
         }),
         "{:?}",
         result.diagnostics
@@ -4589,7 +4701,9 @@ T.reveal_type(values)
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
         }),
         "{:?}",
         result.diagnostics
@@ -4631,9 +4745,10 @@ T.reveal_type(path)
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
-        result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `String`")
-        }),
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }),
         "{:?}",
         result.diagnostics
     );
@@ -4667,9 +4782,10 @@ T.reveal_type(Child.new.read_value)
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
-        result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `String`")
-        }),
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }),
         "{:?}",
         result.diagnostics
     );
@@ -4687,11 +4803,10 @@ T.reveal_type(enumerator)
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
-        result.diagnostics.iter().any(|diagnostic| {
-            diagnostic
-                .message
-                .contains("Revealed type: `Enumerator`")
-        }),
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Enumerator`") }),
         "{:?}",
         result.diagnostics
     );
@@ -4709,9 +4824,10 @@ T.reveal_type(current_binding)
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
-        result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.message.contains("Revealed type: `Binding`")
-        }),
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Binding`") }),
         "{:?}",
         result.diagnostics
     );

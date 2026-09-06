@@ -36,19 +36,21 @@ pub fn expectations(source: &str) -> Vec<InlineExpectation> {
     let mut result = Vec::new();
     for (index, line) in source.lines().enumerate() {
         for (severity, marker) in [(Severity::Error, "# error:"), (Severity::Note, "# note:")] {
-            if let Some((_, message)) = line.split_once(marker) {
+            if let Some((prefix, message)) = line.split_once(marker) {
                 let message = message.trim();
                 if !message.is_empty() {
                     // Sorbet renders `T.reveal_type` as an error diagnostic in
                     // its test harness. Typey's public diagnostic model keeps
                     // reveals as notes, so accept either fixture spelling as
                     // the same semantic expectation.
-                    let severity =
-                        if severity == Severity::Error && message.starts_with("Revealed type:") {
-                            Severity::Note
-                        } else {
-                            severity
-                        };
+                    let severity = if severity == Severity::Error
+                        && (message.starts_with("Revealed type:")
+                            || prefix.contains("T.reveal_type"))
+                    {
+                        Severity::Note
+                    } else {
+                        severity
+                    };
                     result.push(InlineExpectation {
                         severity,
                         line: index + 1,

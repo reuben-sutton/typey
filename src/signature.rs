@@ -490,10 +490,7 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
         extract_call(text, "returns").map_or(Type::Any, |body| parse_type(&body))
     };
 
-    if text.contains("params")
-        || text.contains("returns")
-        || is_void
-        || !type_parameters.is_empty()
+    if text.contains("params") || text.contains("returns") || is_void || !type_parameters.is_empty()
     {
         let mut signature = MethodSig::new(params, return_type);
         signature.param_names = param_names;

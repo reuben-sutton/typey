@@ -31,16 +31,19 @@ fn parses_inline_expectations_with_reveal_compatibility() {
     let parsed = expectations(
         "value = 1 # error: Expected Integer\n\
          T.reveal_type(value) # error: Revealed type: `Integer`\n\
+         T.reveal_type(value) # error: `Integer`\n\
          other = 2 # note: a note\n\
          ignored = 3 # error:\n",
     );
-    assert_eq!(parsed.len(), 3);
+    assert_eq!(parsed.len(), 4);
     assert_eq!(parsed[0].severity, Severity::Error);
     assert_eq!(parsed[0].line, 1);
     assert_eq!(parsed[1].severity, Severity::Note);
     assert_eq!(parsed[1].line, 2);
     assert_eq!(parsed[2].severity, Severity::Note);
-    assert_eq!(parsed[2].message, "a note");
+    assert_eq!(parsed[2].message, "`Integer`");
+    assert_eq!(parsed[3].severity, Severity::Note);
+    assert_eq!(parsed[3].message, "a note");
 }
 
 #[test]

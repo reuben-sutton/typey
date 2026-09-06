@@ -284,10 +284,7 @@ struct LocalWriteCollector {
 }
 
 impl<'pr> Visit<'pr> for LocalWriteCollector {
-    fn visit_local_variable_write_node(
-        &mut self,
-        node: &ruby_prism::LocalVariableWriteNode<'pr>,
-    ) {
+    fn visit_local_variable_write_node(&mut self, node: &ruby_prism::LocalVariableWriteNode<'pr>) {
         self.names.insert(prism::constant_name(node.name()));
         ruby_prism::visit_local_variable_write_node(self, node);
     }
@@ -3530,12 +3527,8 @@ impl<'src> Analyzer<'src> {
             let actual = Self::normal_type(self.eval_node(&value_node, environment));
             let name = prism::constant_name(write.name());
             let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
-            let type_ = self.preserve_typed_empty_array_ivar(
-                environment,
-                &name,
-                &value_node,
-                type_,
-            );
+            let type_ =
+                self.preserve_typed_empty_array_ivar(environment, &name, &value_node, type_);
             self.observe_ivar(environment, name.clone(), &type_);
             environment.bind(ivar_refinement_key(&name), type_.clone());
             return Eval::value(self.record(node, type_));
@@ -5606,9 +5599,9 @@ impl<'src> Analyzer<'src> {
                 if let Some(receiver) = call.receiver() {
                     let can_refine_receiver = receiver.as_local_variable_read_node().is_some()
                         || receiver.as_parentheses_node().is_some()
-                        || receiver.as_call_node().is_some_and(|call| {
-                            prism::constant_name(call.name()) == "!"
-                        });
+                        || receiver
+                            .as_call_node()
+                            .is_some_and(|call| prism::constant_name(call.name()) == "!");
                     if can_refine_receiver {
                         let (then_reachable, else_reachable) =
                             self.predicate_reachability(&receiver, environment, predicate_type);
@@ -5651,11 +5644,7 @@ impl<'src> Analyzer<'src> {
         })
     }
 
-    fn predicate_is_precise<'node>(
-        &self,
-        node: &Node<'node>,
-        environment: &Environment,
-    ) -> bool {
+    fn predicate_is_precise<'node>(&self, node: &Node<'node>, environment: &Environment) -> bool {
         if let Some(parentheses) = node.as_parentheses_node() {
             return parentheses
                 .body()
@@ -5701,18 +5690,15 @@ impl<'src> Analyzer<'src> {
                 .is_some_and(|receiver| self.predicate_is_precise(&receiver, environment));
         }
         if let Some(receiver) = call.receiver() {
-            let receiver_type = self
-                .recorded_node_type(&receiver)
-                .or_else(|| receiver.as_local_variable_read_node().map(|local| {
-                    environment.get(&prism::constant_name(local.name()))
-                }));
+            let receiver_type = self.recorded_node_type(&receiver).or_else(|| {
+                receiver
+                    .as_local_variable_read_node()
+                    .map(|local| environment.get(&prism::constant_name(local.name())))
+            });
             if let Some(receiver_type) = receiver_type {
-                if let Some(key) = self.receiver_method_key(
-                    Some(&receiver),
-                    &receiver_type,
-                    &name,
-                    environment,
-                ) {
+                if let Some(key) =
+                    self.receiver_method_key(Some(&receiver), &receiver_type, &name, environment)
+                {
                     return self
                         .resolve_method_key(&key)
                         .and_then(|resolved| self.methods.get(&resolved))
@@ -5893,9 +5879,8 @@ impl<'src> Analyzer<'src> {
             if truthy
                 && name == "string?"
                 && call.receiver().as_ref().is_some_and(|receiver| {
-                    self.constant_reference_name(receiver).is_some_and(|name| {
-                        self.nominal_names_match(&name, "NodeHelpers")
-                    })
+                    self.constant_reference_name(receiver)
+                        .is_some_and(|name| self.nominal_names_match(&name, "NodeHelpers"))
                 })
             {
                 if let Some(argument) = arguments.first() {
@@ -5918,11 +5903,8 @@ impl<'src> Analyzer<'src> {
                             &self.predicate_expected_type(&arguments[0], environment),
                             None,
                         );
-                        let narrowed = self.class_object_subclass_narrowing(
-                            &current,
-                            &expected,
-                            truthy,
-                        );
+                        let narrowed =
+                            self.class_object_subclass_narrowing(&current, &expected, truthy);
                         environment.bind(local_name, narrowed);
                         return;
                     }
@@ -6022,21 +6004,118 @@ impl<'src> Analyzer<'src> {
             return current.clone();
         }
         match current {
-            Type::Union(members) => Type::union(
-                members
-                    .iter()
-                    .filter(|member| self.class_object_subclass_narrowing(member, expected, true) != Type::Never)
-                    .cloned(),
-            ),
-            current => {
-                let Some(instance) = Self::class_object_instance_type(current) else {
-                    return current.clone();
-                };
-                self.is_assignable(&instance, expected)
-                    .then_some(current.clone())
-                    .unwrap_or(Type::Never)
+            Type::Union(members) => Type::union(members.iter().filter_map(|member| {
+                let narrowed = self.class_object_subclass_narrowing(member, expected, true);
+                (!narrowed.is_never()).then_some(narrowed)
+            })),
+            Type::Intersection(members) => {
+                let mut narrowed = Vec::new();
+                for member in members {
+                    let next = if Self::is_class_or_module_object(member) {
+                        self.class_object_subclass_narrowing(member, expected, true)
+                    } else {
+                        member.clone()
+                    };
+                    if next.is_never() {
+                        return Type::Never;
+                    }
+                    narrowed.push(next);
+                }
+                Type::intersection(narrowed)
             }
+            Type::Named(name, arguments)
+                if name_matches(name, "Class") || name_matches(name, "Module") =>
+            {
+                if arguments.is_empty() {
+                    return Type::Named(name.clone(), vec![expected.clone()]);
+                }
+                let instance = arguments.first().cloned().unwrap_or(Type::Any);
+                if let Type::Union(members) = &instance {
+                    let narrowed = Type::union(members.iter().filter_map(|member| {
+                        if self.is_assignable(member, expected) {
+                            Some(member.clone())
+                        } else if Self::definitely_disjoint_class_types(self, member, expected) {
+                            None
+                        } else {
+                            let member = member.meet(expected);
+                            (!member.is_never()).then_some(member)
+                        }
+                    }));
+                    return if narrowed.is_never() {
+                        Type::Never
+                    } else {
+                        Type::Named(name.clone(), vec![narrowed])
+                    };
+                }
+                if !instance.is_any() && self.is_assignable(&instance, expected) {
+                    return current.clone();
+                }
+                if Self::definitely_disjoint_class_types(self, &instance, expected) {
+                    return Type::Never;
+                }
+                let instance = instance.meet(expected);
+                if instance.is_never() {
+                    Type::Never
+                } else {
+                    Type::Named(name.clone(), vec![instance])
+                }
+            }
+            _ => current.clone(),
         }
+    }
+
+    fn is_class_or_module_object(type_: &Type) -> bool {
+        matches!(
+            type_,
+            Type::Named(name, _) if name_matches(name, "Class") || name_matches(name, "Module")
+        )
+    }
+
+    fn definitely_disjoint_class_types(&self, actual: &Type, expected: &Type) -> bool {
+        let Some(actual_name) = Self::class_instance_name(actual) else {
+            return false;
+        };
+        let Some(expected_name) = Self::class_instance_name(expected) else {
+            return false;
+        };
+        if !self.known_nominal_name(&actual_name) || !self.known_nominal_name(&expected_name) {
+            return false;
+        }
+        !self.nominal_subtype(&actual_name, &expected_name)
+            && !self.nominal_subtype(&expected_name, &actual_name)
+    }
+
+    fn class_instance_name(type_: &Type) -> Option<String> {
+        match type_ {
+            Type::Named(name, _) => Some(name.clone()),
+            Type::Integer => Some("Integer".to_owned()),
+            Type::Float => Some("Float".to_owned()),
+            Type::String => Some("String".to_owned()),
+            Type::Symbol => Some("Symbol".to_owned()),
+            Type::Object => Some("Object".to_owned()),
+            _ => None,
+        }
+    }
+
+    fn known_nominal_name(&self, name: &str) -> bool {
+        self.classes.contains_key(name)
+            || matches!(
+                name.rsplit_once("::").map_or(name, |(_, tail)| tail),
+                "BasicObject"
+                    | "Object"
+                    | "Integer"
+                    | "Float"
+                    | "String"
+                    | "Symbol"
+                    | "Array"
+                    | "Hash"
+                    | "Class"
+                    | "Module"
+                    | "Proc"
+                    | "NilClass"
+                    | "TrueClass"
+                    | "FalseClass"
+            )
     }
 
     fn predicate_alias_for_value<'node>(
@@ -6090,7 +6169,10 @@ impl<'src> Analyzer<'src> {
         environment: &Environment,
     ) -> Option<PredicateAlias> {
         let name = prism::constant_name(call.name());
-        if !matches!(name.as_str(), "nil?" | "is_a?" | "kind_of?" | "instance_of?") {
+        if !matches!(
+            name.as_str(),
+            "nil?" | "is_a?" | "kind_of?" | "instance_of?"
+        ) {
             return None;
         }
         let receiver = call.receiver()?;
@@ -6129,9 +6211,7 @@ impl<'src> Analyzer<'src> {
         let argument_type = self.node_type(&arguments[0], environment);
         let singleton = matches!(argument_type, Type::Nil | Type::True | Type::False);
         Some(match (name, truthy) {
-            ("==" | "equal?" | "eql?", true) | ("!=", false) => {
-                current.meet(&argument_type)
-            }
+            ("==" | "equal?" | "eql?", true) | ("!=", false) => current.meet(&argument_type),
             ("==" | "equal?" | "eql?", false) | ("!=", true) if singleton => {
                 current.without(&argument_type)
             }
@@ -6146,6 +6226,17 @@ impl<'src> Analyzer<'src> {
         environment: &Environment,
     ) -> Type {
         if let Some(call) = node.as_call_node() {
+            if prism::constant_name(call.name()) == "unsafe"
+                && call.receiver().as_ref().is_some_and(|receiver| {
+                    self.constant_reference_name(receiver)
+                        .is_some_and(|name| name.trim_start_matches("::") == "T")
+                })
+            {
+                // `T.unsafe(x)` deliberately erases the expression's type.
+                // In particular, `klass <= T.unsafe(Integer)` must not
+                // refine a class object to `Class[Integer]`.
+                return Type::Any;
+            }
             if prism::constant_name(call.name()) == "class"
                 && call
                     .receiver()
@@ -6155,7 +6246,15 @@ impl<'src> Analyzer<'src> {
                 return environment.self_type.clone();
             }
         }
-        signature::parse_type(&prism::text(self.source, node))
+        match signature::parse_type(&prism::text(self.source, node)) {
+            Type::Named(name, arguments)
+                if arguments.is_empty()
+                    && (name_matches(&name, "Class") || name_matches(&name, "Module")) =>
+            {
+                Type::Named(name, vec![Type::Any])
+            }
+            type_ => type_,
+        }
     }
 
     fn safe_navigation_method_returns_non_nil<'node>(
@@ -6170,17 +6269,13 @@ impl<'src> Analyzer<'src> {
         if receiver_type.is_any() {
             return false;
         }
-        if let Some(key) = self.receiver_method_key(
-            Some(receiver),
-            &receiver_type,
-            name,
-            environment,
-        ) {
+        if let Some(key) =
+            self.receiver_method_key(Some(receiver), &receiver_type, name, environment)
+        {
             if let Some(resolved) = self.resolve_method_key(&key) {
                 if let Some(state) = self.methods.get(&resolved) {
                     let return_type = state.call_signature().return_type;
-                    return !return_type.is_any()
-                        && return_type.without(&Type::Nil) == return_type;
+                    return !return_type.is_any() && return_type.without(&Type::Nil) == return_type;
                 }
             }
         }
@@ -6571,17 +6666,11 @@ impl<'src> Analyzer<'src> {
                 self.record_method_dependency(&key, environment);
                 if let Some(type_) = tsort_type {
                     type_
-                } else if matches!(
-                    &dispatch_receiver_type,
-                    Type::Array(_) | Type::Tuple(_)
-                ) && matches!(name.as_str(), "each_with_object" | "filter")
+                } else if matches!(&dispatch_receiver_type, Type::Array(_) | Type::Tuple(_))
+                    && matches!(name.as_str(), "each_with_object" | "filter")
                 {
-                    let type_ = self.eval_method_call(
-                        &dispatch_receiver_type,
-                        &name,
-                        &site,
-                        environment,
-                    );
+                    let type_ =
+                        self.eval_method_call(&dispatch_receiver_type, &name, &site, environment);
                     if type_.contains_any() {
                         untyped_origin = Some(UntypedOrigin::FallbackCall);
                     }
@@ -6596,12 +6685,8 @@ impl<'src> Analyzer<'src> {
                             Type::Named(class, _) if name_matches(class, "OptionParser")
                         ))
                 {
-                    let type_ = self.eval_method_call(
-                        &dispatch_receiver_type,
-                        &name,
-                        &site,
-                        environment,
-                    );
+                    let type_ =
+                        self.eval_method_call(&dispatch_receiver_type, &name, &site, environment);
                     if type_.contains_any() {
                         untyped_origin = Some(UntypedOrigin::FallbackCall);
                     }
@@ -6947,12 +7032,9 @@ impl<'src> Analyzer<'src> {
         let resolved_owner = self
             .resolve_method_key(key)
             .and_then(|resolved| resolved.owner);
-        if let Some(type_) = self.eval_tsort_method(
-            receiver_type,
-            name,
-            environment,
-            resolved_owner.as_deref(),
-        ) {
+        if let Some(type_) =
+            self.eval_tsort_method(receiver_type, name, environment, resolved_owner.as_deref())
+        {
             return Some((type_, false));
         }
         self.record_method_dependency(key, environment);
@@ -7216,13 +7298,12 @@ impl<'src> Analyzer<'src> {
         matching
             .into_iter()
             .min_by_key(|(index, signature)| {
-                let positional_count = if !signature.keywords.is_empty()
-                    || signature.accepts_keyword_rest
-                {
-                    arguments.positional_types.len()
-                } else {
-                    arguments.argument_types.len()
-                };
+                let positional_count =
+                    if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
+                        arguments.positional_types.len()
+                    } else {
+                        arguments.argument_types.len()
+                    };
                 (
                     block_preference(signature),
                     signature.params.len().saturating_sub(positional_count),
@@ -7452,7 +7533,8 @@ impl<'src> Analyzer<'src> {
                 .map_or_else(|| actual.clone(), |current| current.join(actual));
             if self.struct_field_types.get(&key) != Some(&next) {
                 self.struct_field_types.insert(key.clone(), next);
-                self.changed_shared.insert(SharedKey::StructField(key.0, key.1));
+                self.changed_shared
+                    .insert(SharedKey::StructField(key.0, key.1));
             }
         }
     }
@@ -7471,7 +7553,10 @@ impl<'src> Analyzer<'src> {
             return None;
         }
         let key = (owner.to_owned(), name.to_owned());
-        self.record_shared_read(SharedKey::StructField(key.0.clone(), key.1.clone()), environment);
+        self.record_shared_read(
+            SharedKey::StructField(key.0.clone(), key.1.clone()),
+            environment,
+        );
         Some(
             self.struct_field_types
                 .get(&key)
@@ -8131,16 +8216,17 @@ impl<'src> Analyzer<'src> {
             .and_then(|edges| match edges {
                 Type::Hash(_, values) => Some(self.array_element_type(&values)),
                 Type::Named(name, arguments)
-                    if arguments.len() == 2 && name_matches(&name, "Hash") => {
+                    if arguments.len() == 2 && name_matches(&name, "Hash") =>
+                {
                     Some(self.array_element_type(&arguments[1]))
                 }
                 _ => None,
             })
             .unwrap_or(Type::Any);
         match name {
-            "strongly_connected_components" => Some(Type::Array(Box::new(Type::Array(
-                Box::new(element),
-            )))),
+            "strongly_connected_components" => {
+                Some(Type::Array(Box::new(Type::Array(Box::new(element)))))
+            }
             "tsort" => Some(Type::Array(Box::new(element))),
             "tsort_each" => Some(Type::Nil),
             _ => None,
@@ -8508,9 +8594,7 @@ impl<'src> Analyzer<'src> {
                     Type::bool()
                 }
                 "length" | "size" => Type::Integer,
-                "to_a" => Type::Array(Box::new(
-                    arguments.first().cloned().unwrap_or(Type::Any),
-                )),
+                "to_a" => Type::Array(Box::new(arguments.first().cloned().unwrap_or(Type::Any))),
                 "-" => Type::Named(class.clone(), arguments.clone()),
                 "|" | "&" | "+" => {
                     let element = arguments.first().cloned().unwrap_or(Type::Any);
@@ -8519,9 +8603,10 @@ impl<'src> Analyzer<'src> {
                         .first()
                         .and_then(|argument| match argument {
                             Type::Named(other_class, other_arguments)
-                                if name_matches(other_class, "Set") => {
-                                    other_arguments.first().cloned()
-                                }
+                                if name_matches(other_class, "Set") =>
+                            {
+                                other_arguments.first().cloned()
+                            }
                             _ => None,
                         })
                         .unwrap_or(Type::Any);
@@ -8558,13 +8643,16 @@ impl<'src> Analyzer<'src> {
                 }
                 _ => self.eval_common_method(name),
             },
-            Type::Named(class, _) if name_matches(class, "Parser::Source::Map")
-                || name_matches(class, "Parser::Source::Range") => match name
+            Type::Named(class, _)
+                if name_matches(class, "Parser::Source::Map")
+                    || name_matches(class, "Parser::Source::Range") =>
             {
-                "line" | "column" | "first_line" | "first_column" | "last_line"
-                | "last_column" => Type::Integer,
-                _ => self.eval_common_method(name),
-            },
+                match name {
+                    "line" | "column" | "first_line" | "first_column" | "last_line"
+                    | "last_column" => Type::Integer,
+                    _ => self.eval_common_method(name),
+                }
+            }
             Type::Named(class, _) if name_matches(class, "Parser::AST::Node") => match name {
                 "location" | "loc" => Type::named("Parser::Source::Map"),
                 _ => self.eval_common_method(name),
@@ -9054,9 +9142,10 @@ impl<'src> Analyzer<'src> {
                         && !inferred.type_.contains_any()
                 })
                 .or_else(|| {
-                    self.types.iter().rev().find(|inferred| {
-                        inferred.start == span.0 && inferred.end == span.1
-                    })
+                    self.types
+                        .iter()
+                        .rev()
+                        .find(|inferred| inferred.start == span.0 && inferred.end == span.1)
                 })
                 .map(|inferred| inferred.type_.clone());
             let Some(type_) = type_ else {
@@ -9260,17 +9349,8 @@ impl<'src> Analyzer<'src> {
                     Type::union([Type::Nil, Type::Integer])
                 }
             }
-            "delete_prefix"
-            | "delete_suffix"
-            | "inspect"
-            | "dump"
-            | "to_str"
-            | "shellescape"
-            | "pluralize"
-            | "singularize"
-            | "underscore"
-            | "classify"
-            | "squish" => Type::String,
+            "delete_prefix" | "delete_suffix" | "inspect" | "dump" | "to_str" | "shellescape"
+            | "pluralize" | "singularize" | "underscore" | "classify" | "squish" => Type::String,
             "+@" => Type::String,
             "index" | "rindex" => Type::union([Type::Nil, Type::Integer]),
             "chomp!" | "chop!" => Type::union([Type::Nil, Type::String]),
@@ -9394,7 +9474,8 @@ impl<'src> Analyzer<'src> {
         expected: &[Type],
         outer: &mut Environment,
     ) -> Type {
-        self.eval_block_node_with_environment(node, expected, outer).0
+        self.eval_block_node_with_environment(node, expected, outer)
+            .0
     }
 
     fn eval_block_node_with_environment<'node>(
@@ -9407,8 +9488,7 @@ impl<'src> Analyzer<'src> {
             return (Type::Any, outer.clone());
         };
         let captured = outer.clone();
-        let (result, block_environment) =
-            self.eval_block_with_environment(&block, expected, outer);
+        let (result, block_environment) = self.eval_block_with_environment(&block, expected, outer);
         self.propagate_block_locals(outer, &captured, &block_environment);
         (Self::block_value_type(&result), block_environment)
     }
@@ -9896,6 +9976,14 @@ impl<'src> Analyzer<'src> {
                     "{}::{name}",
                     owner.expect("owner is present for a type member")
                 ))
+            }
+            Type::TypeVar(name)
+                if !local_type_parameters
+                    .iter()
+                    .any(|parameter| parameter == name)
+                    && (self.classes.contains_key(name) || self.constants.contains_key(name)) =>
+            {
+                Type::Named(self.resolve_name(name, owner), Vec::new())
             }
             Type::Named(name, arguments) => {
                 if arguments.is_empty()
