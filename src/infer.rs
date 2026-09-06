@@ -1992,6 +1992,8 @@ pub(crate) fn check_with_policies(
         type_aliases: BTreeMap::new(),
         ivars: BTreeMap::new(),
         constants: BTreeMap::new(),
+        class_name_suffixes: BTreeMap::new(),
+        constant_name_suffixes: BTreeMap::new(),
         struct_fields: BTreeMap::new(),
         struct_field_types: BTreeMap::new(),
         class_vars: BTreeMap::new(),
@@ -2045,11 +2047,13 @@ struct Analyzer<'src> {
     definitions: BTreeMap<usize, MethodKey>,
     parameter_shapes: BTreeMap<usize, ParameterShape>,
     classes: BTreeMap<String, ClassInfo>,
+    class_name_suffixes: BTreeMap<String, Vec<String>>,
     aliases: BTreeMap<MethodKey, MethodKey>,
     accessors: BTreeMap<MethodKey, AccessorKind>,
     type_aliases: BTreeMap<String, Type>,
     ivars: BTreeMap<IvarKey, Type>,
     constants: BTreeMap<String, Type>,
+    constant_name_suffixes: BTreeMap<String, Vec<String>>,
     struct_fields: BTreeMap<String, Vec<String>>,
     struct_field_types: BTreeMap<(String, String), Type>,
     class_vars: BTreeMap<ClassVarKey, Type>,
@@ -3502,6 +3506,8 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
+
+        self.rebuild_nominal_name_indexes();
     }
 
     fn contains_attached_class_type(type_: &Type) -> bool {
@@ -9448,12 +9454,16 @@ impl<'src> Analyzer<'src> {
 
     fn observe_constant(&mut self, environment: &Environment, name: String, actual: &Type) {
         let key = self.constant_key(environment, &name);
+        let is_new_constant = !self.constants.contains_key(&key);
         let next = self
             .constants
             .get(&key)
             .map_or_else(|| actual.clone(), |current| current.join(actual));
         if self.constants.get(&key) != Some(&next) {
             self.constants.insert(key.clone(), next);
+            if is_new_constant {
+                Self::add_name_suffixes(&mut self.constant_name_suffixes, &key);
+            }
             self.changed_shared.insert(SharedKey::Constant(key));
         }
     }
@@ -12139,65 +12149,103 @@ impl<'src> Analyzer<'src> {
         name.to_owned()
     }
 
+    fn add_name_suffixes(index: &mut BTreeMap<String, Vec<String>>, name: &str) {
+        let mut start = 0;
+        loop {
+            index
+                .entry(name[start..].to_owned())
+                .or_default()
+                .push(name.to_owned());
+            let Some(separator) = name[start..].find("::") else {
+                break;
+            };
+            start += separator + 2;
+        }
+    }
+
+    fn rebuild_nominal_name_indexes(&mut self) {
+        self.class_name_suffixes.clear();
+        self.constant_name_suffixes.clear();
+        let class_names = self.classes.keys().cloned().collect::<Vec<_>>();
+        for name in class_names {
+            Self::add_name_suffixes(&mut self.class_name_suffixes, &name);
+        }
+        let constant_names = self.constants.keys().cloned().collect::<Vec<_>>();
+        for name in constant_names {
+            Self::add_name_suffixes(&mut self.constant_name_suffixes, &name);
+        }
+    }
+
     fn resolve_global_name(&self, name: &str) -> String {
         if self.classes.contains_key(name) {
             return name.to_owned();
         }
-        let suffix = format!("::{name}");
-        let mut matches = self
-            .classes
-            .keys()
-            .filter(|candidate| candidate.ends_with(&suffix))
-            .cloned();
-        let Some(candidate) = matches.next() else {
+        let Some(matches) = self.class_name_suffixes.get(name) else {
             return name.to_owned();
         };
-        if matches.next().is_none() {
-            candidate
+        if matches.len() == 1 {
+            matches[0].clone()
         } else {
             name.to_owned()
         }
     }
 
-    fn nominal_name_candidates(&self, name: &str) -> Vec<String> {
+    fn each_nominal_name_candidate<F>(&self, name: &str, mut visit: F) -> bool
+    where
+        F: FnMut(&str) -> bool,
+    {
         if self.classes.contains_key(name) || self.constants.contains_key(name) {
-            return vec![name.to_owned()];
+            return visit(name);
         }
-        let suffix = format!("::{name}");
-        let mut candidates = self
-            .classes
-            .keys()
-            .filter(|candidate| candidate.ends_with(&suffix))
-            .cloned()
-            .collect::<Vec<_>>();
-        candidates.extend(
-            self.constants
-                .keys()
-                .filter(|candidate| candidate.ends_with(&suffix))
-                .cloned(),
-        );
-        if candidates.is_empty() {
-            candidates.push(name.to_owned());
+
+        let mut found = false;
+        if let Some(candidates) = self.class_name_suffixes.get(name) {
+            found = true;
+            for candidate in candidates {
+                if visit(candidate) {
+                    return true;
+                }
+            }
         }
-        candidates
+        if let Some(candidates) = self.constant_name_suffixes.get(name) {
+            found = true;
+            for candidate in candidates {
+                if visit(candidate) {
+                    return true;
+                }
+            }
+        }
+        if !found {
+            visit(name)
+        } else {
+            false
+        }
     }
 
     fn nominal_names_match(&self, actual: &str, expected: &str) -> bool {
         if nominal_name(actual) == nominal_name(expected) {
             return true;
         }
-        if self.nominal_name_candidates(actual).iter().any(|actual| {
-            self.nominal_name_candidates(expected)
-                .iter()
-                .any(|expected| nominal_name(actual) == nominal_name(expected))
+        if self.each_nominal_name_candidate(actual, |actual| {
+            self.each_nominal_name_candidate(expected, |expected| {
+                nominal_name(actual) == nominal_name(expected)
+            })
         }) {
             return true;
         }
         let actual = self.resolve_global_name(actual);
         let expected = self.resolve_global_name(expected);
         actual == expected
-            || (self.classes.contains_key(&actual) && expected.ends_with(&format!("::{actual}")))
-            || (self.classes.contains_key(&expected) && actual.ends_with(&format!("::{expected}")))
+            || (self.classes.contains_key(&actual)
+                && Self::qualified_name_ends_with(&expected, &actual))
+            || (self.classes.contains_key(&expected)
+                && Self::qualified_name_ends_with(&actual, &expected))
+    }
+
+    fn qualified_name_ends_with(name: &str, suffix: &str) -> bool {
+        name.len() >= suffix.len() + 2
+            && name.ends_with(suffix)
+            && name.as_bytes()[name.len() - suffix.len() - 2..].starts_with(b"::")
     }
 
     fn normalize_class_graph(&mut self) {
@@ -12425,59 +12473,52 @@ impl<'src> Analyzer<'src> {
     }
 
     fn nominal_subtype(&self, actual: &str, expected: &str) -> bool {
-        let actual_candidates = self
-            .nominal_name_candidates(actual)
-            .into_iter()
-            .map(|name| nominal_name(&name).to_owned())
-            .collect::<Vec<_>>();
-        let expected_candidates = self
-            .nominal_name_candidates(expected)
-            .into_iter()
-            .map(|name| nominal_name(&name).to_owned())
-            .collect::<Vec<_>>();
-        if expected_candidates
-            .iter()
-            .any(|expected| expected == "BasicObject")
-        {
+        if self.each_nominal_name_candidate(expected, |expected| {
+            nominal_name(expected) == "BasicObject"
+        }) {
             return true;
         }
-        actual_candidates.iter().any(|actual| {
-            expected_candidates.iter().any(|expected| {
-                if actual == expected {
-                    return true;
-                }
-                let mut pending = vec![actual.clone()];
-                let mut visited = BTreeSet::new();
-                while let Some(name) = pending.pop() {
-                    if !visited.insert(name.clone()) {
-                        continue;
-                    }
-                    if name == *expected {
-                        return true;
-                    }
-                    if let Some(superclass) = Self::builtin_superclass(&name) {
-                        pending.push(superclass.to_owned());
-                    }
-                    let Some(info) = self.classes.get(&name) else {
-                        continue;
-                    };
-                    if let Some(superclass) = &info.superclass {
-                        pending.push(nominal_name(superclass).to_owned());
-                    }
-                    pending.extend(
-                        info.includes
-                            .iter()
-                            .map(|include| nominal_name(include).to_owned()),
-                    );
-                    pending.extend(
-                        info.prepends
-                            .iter()
-                            .map(|prepend| nominal_name(prepend).to_owned()),
-                    );
-                }
-                false
+        self.each_nominal_name_candidate(actual, |actual| {
+            self.each_nominal_name_candidate(expected, |expected| {
+                self.nominal_subtype_names(nominal_name(actual), nominal_name(expected))
             })
         })
+    }
+
+    fn nominal_subtype_names(&self, actual: &str, expected: &str) -> bool {
+        if actual == expected {
+            return true;
+        }
+        let mut pending = vec![actual.to_owned()];
+        let mut visited = BTreeSet::new();
+        while let Some(name) = pending.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if name == expected {
+                return true;
+            }
+            if let Some(superclass) = Self::builtin_superclass(&name) {
+                pending.push(superclass.to_owned());
+            }
+            let Some(info) = self.classes.get(&name) else {
+                continue;
+            };
+            if let Some(superclass) = &info.superclass {
+                pending.push(nominal_name(superclass).to_owned());
+            }
+            pending.extend(
+                info.includes
+                    .iter()
+                    .map(|include| nominal_name(include).to_owned()),
+            );
+            pending.extend(
+                info.prepends
+                    .iter()
+                    .map(|prepend| nominal_name(prepend).to_owned()),
+            );
+        }
+        false
     }
 
     fn builtin_superclass(name: &str) -> Option<&'static str> {

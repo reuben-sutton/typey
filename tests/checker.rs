@@ -1384,6 +1384,15 @@ fn lattice_facade_has_top_and_bottom_identities() {
         Type::union([call_node_array, dynamic_array.clone()]),
         dynamic_array
     );
+    let mixed_string_union = Type::Union(vec![
+        Type::Named("String".to_owned(), Vec::new()),
+        Type::String,
+    ]);
+    let canonical_string_union = Type::union([mixed_string_union]);
+    assert_eq!(
+        Type::union([canonical_string_union.clone()]),
+        canonical_string_union
+    );
     assert_eq!(
         Type::intersection([Type::Integer, Type::String]),
         Type::Never

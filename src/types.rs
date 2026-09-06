@@ -5,7 +5,7 @@ use std::fmt;
 /// Types are deliberately values instead of global symbols.  That keeps the
 /// inference engine easy to experiment with: a new type constructor can be
 /// added here without threading it through a global-state interner first.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Type {
     /// Sorbet's gradual escape hatch.
     Any,
@@ -135,7 +135,11 @@ impl Type {
             1 => members.pop().expect("one member exists"),
             _ => {
                 // Stable output matters for Sorbet-style fixture tests.
-                members.sort_by_key(ToString::to_string);
+                members.sort_by(|left, right| {
+                    left.to_string()
+                        .cmp(&right.to_string())
+                        .then_with(|| left.cmp(right))
+                });
                 Self::Union(members)
             }
         }
@@ -337,7 +341,11 @@ impl Type {
             0 => Self::Any,
             1 => members.pop().expect("one member exists"),
             _ => {
-                members.sort_by_key(ToString::to_string);
+                members.sort_by(|left, right| {
+                    left.to_string()
+                        .cmp(&right.to_string())
+                        .then_with(|| left.cmp(right))
+                });
                 Self::Intersection(members)
             }
         }
