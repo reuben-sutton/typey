@@ -12439,6 +12439,14 @@ impl<'src> Analyzer<'src> {
                     return Type::Array(Box::new(self.flat_map_element_type(block_return_type)));
                 }
             }
+            if name == "sort" {
+                if let Some(Type::Hash(key, value)) = receiver_type {
+                    return Type::Array(Box::new(Type::Tuple(vec![
+                        key.as_ref().clone(),
+                        value.as_ref().clone(),
+                    ])));
+                }
+            }
             if name == "to_h" {
                 if let Some(block_return_type) = block_return_type {
                     if let Some((key, value)) = Self::pair_types(block_return_type) {

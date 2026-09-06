@@ -4176,6 +4176,44 @@ T.reveal_type(YAML.load_file("config.yml"))
 }
 
 #[test]
+fn preserves_hash_pairs_through_vendored_sort_and_to_h() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "hash_sort_to_h.rb",
+        r#"# typed: true
+
+entries = {"package" => {"violations" => ["dependency"], "files" => ["a.rb"]}}
+T.reveal_type(entries.sort)
+T.reveal_type(entries.sort.to_h)
+"#,
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.diagnostic.severity == Severity::Note
+                && diagnostic.diagnostic.message.contains(
+                    "Revealed type: `T::Array[[String, T::Hash[String, T::Array[String]]]]`",
+                )
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.diagnostic.severity == Severity::Note
+                && diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Revealed type: `T::Hash[String, T::Hash[String, T::Array[String]]]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn narrows_case_assignments_to_nominal_subclasses() {
     let result = check(
         r#"
