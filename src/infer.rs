@@ -7328,6 +7328,13 @@ impl<'src> Analyzer<'src> {
         }
 
         if let Some(instance) = Self::class_object_instance_type(receiver) {
+            if Self::named_type_name(&instance)
+                .is_some_and(|name| name_matches(&name, "ActiveSupport::Inflector"))
+            {
+                if matches!(name, "classify" | "camelize" | "underscore" | "humanize") {
+                    return Type::String;
+                }
+            }
             match name {
                 "===" => return Type::bool(),
                 "const_source_location" => {
