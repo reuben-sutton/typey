@@ -9980,9 +9980,12 @@ impl<'src> Analyzer<'src> {
             }
             "let" | "cast" | "assert_type!" | "bind" => {
                 let actual = argument_types.first().cloned().unwrap_or(Type::Any);
-                let mut expected = argument_nodes
-                    .get(1)
-                    .map_or(Type::Any, |argument| self.type_from_node(argument));
+                let expected = argument_nodes.get(1).map_or(Type::Any, |argument| {
+                    let type_ = self.type_from_node(argument);
+                    let owner = self.lexical_owner(environment);
+                    self.resolve_type_names(&type_, owner.as_deref())
+                });
+                let mut expected = expected;
                 if name == "let"
                     && environment
                         .method_key

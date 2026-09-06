@@ -14,5 +14,10 @@ module LexicalPredicate
 
       other.message
     end
+
+    #: (BasicObject other) -> String?
+    def cast_message(other)
+      T.cast(other, Error).message
+    end
   end
 end
