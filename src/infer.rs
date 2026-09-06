@@ -10290,6 +10290,9 @@ impl<'src> Analyzer<'src> {
         name: &str,
         argument_types: &[Type],
     ) -> Option<Type> {
+        if *receiver == Type::String && matches!(name, "bytes" | "codepoints") {
+            return Some(Type::Array(Box::new(Type::Integer)));
+        }
         if name != "literal_value" {
             return None;
         }

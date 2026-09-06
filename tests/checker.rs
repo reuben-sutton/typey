@@ -3933,6 +3933,35 @@ enumerator.sort_by { |value| value }
 }
 
 #[test]
+fn keeps_string_byte_results_concrete_through_rbi_dispatch() {
+    let source = r#"
+T.reveal_type("text".bytes)
+T.reveal_type("text".codepoints)
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("string_bytes.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.diagnostic.severity == Severity::Note
+                    && diagnostic
+                        .diagnostic
+                        .message
+                        .contains("Revealed type: `T::Array[Integer]`")
+            })
+            .count(),
+        2,
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"
