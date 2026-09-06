@@ -3055,6 +3055,33 @@ accept_class(Outer::Child)
 }
 
 #[test]
+fn preserves_namespaced_classes_that_shadow_primitives() {
+    let result = check(
+        r#"
+module Outer
+  class Symbol
+  end
+
+  class Registry
+    def build
+      Symbol.new
+    end
+  end
+end
+
+T.reveal_type(Outer::Registry.new.build)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `Outer::Symbol`")
+    }));
+}
+
+#[test]
 fn refines_or_assignments_to_the_non_nil_rhs() {
     let source = r#"class Example
   #: -> Example

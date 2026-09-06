@@ -1575,10 +1575,13 @@ impl<'src> Analyzer<'src> {
         let instance = Self::class_object_instance_type(type_)?;
         let builtin = match &instance {
             Type::Named(name, arguments) if arguments.is_empty() => {
-                let tail = name
-                    .rsplit_once("::")
-                    .map_or(name.as_str(), |(_, tail)| tail);
-                match tail {
+                // A project namespace may define a class whose short name
+                // matches a Ruby primitive (for example
+                // `Spoom::Model::Symbol`).  Only the actual top-level
+                // builtins have structural primitive semantics; otherwise
+                // `Some(Symbol.new)` would incorrectly become the language's
+                // built-in `Symbol` type.
+                match name.as_str() {
                     "Integer" => Some(Type::Integer),
                     "Float" => Some(Type::Float),
                     "String" => Some(Type::String),
@@ -3223,7 +3226,7 @@ impl<'src> Analyzer<'src> {
         if let Some(write) = node.as_instance_variable_write_node() {
             let value_node = write.value();
             let actual = Self::normal_type(self.eval_node(&value_node, environment));
-            let type_ = self.apply_inline_assertion(node, actual);
+            let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
             let name = prism::constant_name(write.name());
             self.observe_ivar(environment, name.clone(), &type_);
             environment.bind(ivar_refinement_key(&name), type_.clone());
@@ -3237,7 +3240,8 @@ impl<'src> Analyzer<'src> {
             let result =
                 self.eval_compound_assignment(current, &operator, &value_node, environment);
             let (normal_type, abrupt, flow) = (result.normal_type, result.abrupt, result.flow);
-            let normal_type = normal_type.map(|type_| self.apply_inline_assertion(node, type_));
+            let normal_type = normal_type
+                .map(|type_| self.apply_inline_assertion_in_environment(node, type_, environment));
             if let Some(type_) = normal_type.as_ref() {
                 self.observe_ivar(environment, name.clone(), type_);
                 environment.bind(ivar_refinement_key(&name), type_.clone());
@@ -3252,7 +3256,8 @@ impl<'src> Analyzer<'src> {
             let current = self.ivar_type(environment, &name);
             let result = self.eval_and_assignment(current, &value_node, environment);
             let (normal_type, abrupt, flow) = (result.normal_type, result.abrupt, result.flow);
-            let normal_type = normal_type.map(|type_| self.apply_inline_assertion(node, type_));
+            let normal_type = normal_type
+                .map(|type_| self.apply_inline_assertion_in_environment(node, type_, environment));
             if let Some(type_) = normal_type.as_ref() {
                 self.observe_ivar(environment, name.clone(), type_);
                 environment.bind(ivar_refinement_key(&name), type_.clone());
@@ -3269,7 +3274,7 @@ impl<'src> Analyzer<'src> {
             let right = Self::normal_type(self.eval_node(&write.value(), environment));
             self.defer_inline_assertions = previous;
             let actual = current.truthy_part().join(&right);
-            let declared = self.apply_inline_assertion(node, actual);
+            let declared = self.apply_inline_assertion_in_environment(node, actual, environment);
             let type_ = if right.without(&Type::Nil) == right {
                 declared.without(&Type::Nil)
             } else {
@@ -3282,13 +3287,13 @@ impl<'src> Analyzer<'src> {
         if let Some(read) = node.as_instance_variable_read_node() {
             let name = prism::constant_name(read.name());
             let actual = self.ivar_type(environment, &name);
-            let type_ = self.apply_inline_assertion(node, actual);
+            let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
             return Eval::value(self.record(node, type_));
         }
         if let Some(write) = node.as_local_variable_write_node() {
             let value_node = write.value();
             let actual = Self::normal_type(self.eval_node(&value_node, environment));
-            let type_ = self.apply_inline_assertion(node, actual);
+            let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
             environment.bind(prism::constant_name(write.name()), type_.clone());
             return Eval::value(self.record(node, type_));
         }
@@ -3304,7 +3309,7 @@ impl<'src> Analyzer<'src> {
             );
             let (normal_type, abrupt, flow) = (result.normal_type, result.abrupt, result.flow);
             let normal_type = normal_type.map(|type_| {
-                let type_ = self.apply_inline_assertion(node, type_);
+                let type_ = self.apply_inline_assertion_in_environment(node, type_, environment);
                 environment.bind(name.clone(), type_.clone());
                 type_
             });
@@ -3318,7 +3323,7 @@ impl<'src> Analyzer<'src> {
             let result = self.eval_and_assignment(environment.get(&name), &value_node, environment);
             let (normal_type, abrupt, flow) = (result.normal_type, result.abrupt, result.flow);
             let normal_type = normal_type.map(|type_| {
-                let type_ = self.apply_inline_assertion(node, type_);
+                let type_ = self.apply_inline_assertion_in_environment(node, type_, environment);
                 environment.bind(name, type_.clone());
                 type_
             });
@@ -3334,7 +3339,7 @@ impl<'src> Analyzer<'src> {
             let right = Self::normal_type(self.eval_node(&write.value(), environment));
             self.defer_inline_assertions = previous;
             let actual = current.truthy_part().join(&right);
-            let declared = self.apply_inline_assertion(node, actual);
+            let declared = self.apply_inline_assertion_in_environment(node, actual, environment);
             environment.bind(
                 name,
                 if right.without(&Type::Nil) == right {
@@ -3352,7 +3357,7 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(read) = node.as_local_variable_read_node() {
             let actual = environment.get(&prism::constant_name(read.name()));
-            let type_ = self.apply_inline_assertion(node, actual);
+            let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
             return Eval::value(self.record(node, type_));
         }
         if node.as_it_local_variable_read_node().is_some() {
@@ -3533,8 +3538,11 @@ impl<'src> Analyzer<'src> {
                 .map(|body| self.eval_node(&body, &mut closure_environment))
                 .unwrap_or_else(|| Eval::value(Type::Nil));
             let return_type = body_result.method_return_type();
-            let type_ = self
-                .apply_inline_assertion(node, Type::Proc(signature.params, Box::new(return_type)));
+            let type_ = self.apply_inline_assertion_in_environment(
+                node,
+                Type::Proc(signature.params, Box::new(return_type)),
+                environment,
+            );
             return Eval::value(self.record(node, type_));
         }
         if let Some(array) = node.as_array_node() {
@@ -3566,7 +3574,7 @@ impl<'src> Analyzer<'src> {
             } else {
                 Type::Array(Box::new(element))
             };
-            let type_ = self.apply_inline_assertion(node, inferred);
+            let type_ = self.apply_inline_assertion_in_environment(node, inferred, environment);
             return Eval::value(self.record(node, type_));
         }
         if let Some(hash) = node.as_hash_node() {
@@ -3598,8 +3606,11 @@ impl<'src> Analyzer<'src> {
             }
             let key = if key.is_never() { Type::Any } else { key };
             let value = if value.is_never() { Type::Any } else { value };
-            let type_ =
-                self.apply_inline_assertion(node, Type::Hash(Box::new(key), Box::new(value)));
+            let type_ = self.apply_inline_assertion_in_environment(
+                node,
+                Type::Hash(Box::new(key), Box::new(value)),
+                environment,
+            );
             return Eval::value(self.record(node, type_));
         }
         if let Some(keyword_hash) = node.as_keyword_hash_node() {
@@ -3627,20 +3638,27 @@ impl<'src> Analyzer<'src> {
             }
             let key = if key.is_never() { Type::Any } else { key };
             let value = if value.is_never() { Type::Any } else { value };
-            let type_ =
-                self.apply_inline_assertion(node, Type::Hash(Box::new(key), Box::new(value)));
+            let type_ = self.apply_inline_assertion_in_environment(
+                node,
+                Type::Hash(Box::new(key), Box::new(value)),
+                environment,
+            );
             return Eval::value(self.record(node, type_));
         }
         if let Some(parentheses) = node.as_parentheses_node() {
             if let Some(body) = parentheses.body() {
                 let result = self.eval_node(&body, environment);
-                let type_ = self.apply_inline_assertion(node, result.type_.clone());
+                let type_ = self.apply_inline_assertion_in_environment(
+                    node,
+                    result.type_.clone(),
+                    environment,
+                );
                 return Eval {
                     type_: self.record(node, type_),
                     ..result
                 };
             }
-            let type_ = self.apply_inline_assertion(node, Type::Nil);
+            let type_ = self.apply_inline_assertion_in_environment(node, Type::Nil, environment);
             return Eval::value(self.record(node, type_));
         }
         if let Some(begin) = node.as_begin_node() {
@@ -3826,7 +3844,8 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(call) = node.as_call_node() {
             let mut result = self.eval_call(node, &call, environment);
-            let type_ = self.apply_inline_assertion(node, result.type_.clone());
+            let type_ =
+                self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
             if result.normal_type.is_some() {
                 result.normal_type = Some(type_.clone());
             }
@@ -3835,8 +3854,8 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(block) = node.as_block_node() {
             let block_type = self.eval_block(&block, &[], environment).type_;
-            let type_ = self.apply_inline_assertion(node, block_type);
-            let type_ = self.apply_inline_assertion(node, type_);
+            let type_ = self.apply_inline_assertion_in_environment(node, block_type, environment);
+            let type_ = self.apply_inline_assertion_in_environment(node, type_, environment);
             return Eval::value(self.record(node, type_));
         }
         if let Some(splat) = node.as_splat_node() {
@@ -3849,7 +3868,8 @@ impl<'src> Analyzer<'src> {
             let predicate = while_node.predicate();
             let statements = while_node.statements();
             let mut result = self.eval_loop(&predicate, statements.as_ref(), environment, true);
-            let type_ = self.apply_inline_assertion(node, result.type_.clone());
+            let type_ =
+                self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
             result.type_ = self.record(node, type_);
             return result;
         }
@@ -3857,7 +3877,8 @@ impl<'src> Analyzer<'src> {
             let predicate = until_node.predicate();
             let statements = until_node.statements();
             let mut result = self.eval_loop(&predicate, statements.as_ref(), environment, false);
-            let type_ = self.apply_inline_assertion(node, result.type_.clone());
+            let type_ =
+                self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
             result.type_ = self.record(node, type_);
             return result;
         }
@@ -3865,7 +3886,7 @@ impl<'src> Analyzer<'src> {
             return self.eval_for(node, &for_node, environment);
         }
 
-        let type_ = self.apply_inline_assertion(node, Type::Any);
+        let type_ = self.apply_inline_assertion_in_environment(node, Type::Any, environment);
         Eval::value(self.record(node, type_))
     }
 
@@ -7791,6 +7812,17 @@ impl<'src> Analyzer<'src> {
         local_type_parameters: &[String],
     ) -> Type {
         match type_ {
+            Type::Symbol
+                if owner
+                    .and_then(|owner| {
+                        let resolved = self.resolve_name("Symbol", Some(owner));
+                        (resolved != "Symbol" && self.classes.contains_key(&resolved))
+                            .then_some(resolved)
+                    })
+                    .is_some() =>
+            {
+                Type::Named(self.resolve_name("Symbol", owner), Vec::new())
+            }
             Type::TypeVar(name)
                 if !local_type_parameters
                     .iter()
@@ -8283,6 +8315,105 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Never
             }
+        }
+    }
+
+    fn apply_inline_assertion_in_environment<'node>(
+        &mut self,
+        node: &Node<'node>,
+        actual: Type,
+        environment: &Environment,
+    ) -> Type {
+        if self.defer_inline_assertions {
+            return actual;
+        }
+        let (start, end) = prism::span(node);
+        let start_line = self.line_map.line_number(start);
+        let end_line = self.line_map.line_number(end.saturating_sub(1));
+        let assertion = [start_line, end_line]
+            .into_iter()
+            .filter_map(|line| self.annotations.assertions.get(&line))
+            .find(|assertion| {
+                assertion.offset >= end
+                    && self.source[end..assertion.offset]
+                        .iter()
+                        .all(|byte| byte.is_ascii_whitespace() || *byte == b',')
+            })
+            .cloned();
+        let Some(assertion) = assertion else {
+            return actual;
+        };
+        let owner = self.lexical_owner(environment);
+        let expected = self.resolve_shadowed_builtin_types(&assertion.type_, owner.as_deref());
+        match assertion.kind {
+            AssertionKind::Let => {
+                self.check_assignable(node, &actual, &expected);
+                expected
+            }
+            AssertionKind::Cast => expected,
+            AssertionKind::Must => {
+                if actual.is_nil() {
+                    self.error(node, "Expected a non-nil value");
+                }
+                actual.without(&Type::Nil)
+            }
+            AssertionKind::Unsafe => Type::Any,
+            AssertionKind::Absurd => {
+                if !actual.is_never() {
+                    self.error(node, format!("Expected `T.noreturn`, but found `{actual}`"));
+                }
+                Type::Never
+            }
+        }
+    }
+
+    fn resolve_shadowed_builtin_types(&self, type_: &Type, owner: Option<&str>) -> Type {
+        match type_ {
+            Type::Symbol => owner
+                .and_then(|owner| {
+                    let resolved = self.resolve_name("Symbol", Some(owner));
+                    (resolved != "Symbol" && self.classes.contains_key(&resolved))
+                        .then_some(Type::named(resolved))
+                })
+                .unwrap_or(Type::Symbol),
+            Type::Array(element) => Type::Array(Box::new(
+                self.resolve_shadowed_builtin_types(element, owner),
+            )),
+            Type::Hash(key, value) => Type::Hash(
+                Box::new(self.resolve_shadowed_builtin_types(key, owner)),
+                Box::new(self.resolve_shadowed_builtin_types(value, owner)),
+            ),
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| self.resolve_shadowed_builtin_types(element, owner))
+                    .collect(),
+            ),
+            Type::Proc(parameters, result) => Type::Proc(
+                parameters
+                    .iter()
+                    .map(|parameter| self.resolve_shadowed_builtin_types(parameter, owner))
+                    .collect(),
+                Box::new(self.resolve_shadowed_builtin_types(result, owner)),
+            ),
+            Type::Named(name, arguments) => Type::Named(
+                name.clone(),
+                arguments
+                    .iter()
+                    .map(|argument| self.resolve_shadowed_builtin_types(argument, owner))
+                    .collect(),
+            ),
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|member| self.resolve_shadowed_builtin_types(member, owner)),
+            ),
+            Type::Intersection(members) => Type::intersection(
+                members
+                    .iter()
+                    .map(|member| self.resolve_shadowed_builtin_types(member, owner)),
+            ),
+            other => other.clone(),
         }
     }
 
