@@ -426,6 +426,14 @@ fn models_symbol_to_proc_collection_blocks() {
 }
 
 #[test]
+fn models_string_shellescape() {
+    let result = check_fixture("tests/fixtures/string_shellescape.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("Revealed type: `String`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
