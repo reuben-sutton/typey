@@ -483,7 +483,7 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
             .collect()
     });
 
-    let is_void = text.contains(".void");
+    let is_void = has_top_level_void(text);
     let return_type = if is_void {
         Type::Nil
     } else {
@@ -492,7 +492,7 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
 
     if text.contains("params")
         || text.contains("returns")
-        || text.contains(".void")
+        || is_void
         || !type_parameters.is_empty()
     {
         let mut signature = MethodSig::new(params, return_type);
@@ -516,6 +516,52 @@ fn normalize_sorbet_parameter_name(name: &str) -> String {
         })
         .unwrap_or(name);
     name.to_owned()
+}
+
+fn has_top_level_void(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+            index += 1;
+            continue;
+        }
+        if byte == b'\\' && quote.is_some() {
+            escaped = true;
+            index += 1;
+            continue;
+        }
+        if let Some(current_quote) = quote {
+            if byte == current_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if paren == 0 && bracket == 0 && bytes[index..].starts_with(b".void") {
+            return true;
+        }
+        match byte {
+            b'(' => paren += 1,
+            b')' => paren = paren.saturating_sub(1),
+            b'[' => bracket += 1,
+            b']' => bracket = bracket.saturating_sub(1),
+            _ => {}
+        }
+        index += 1;
+    }
+    false
 }
 
 /// Parse a Sorbet `T.type_alias { ... }` expression into the alias body.
