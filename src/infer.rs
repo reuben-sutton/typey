@@ -8296,6 +8296,7 @@ impl<'src> Analyzer<'src> {
                 Type::union([Type::Nil, Type::Array(Box::new(element.clone()))])
             }
             "length" | "size" => Type::Integer,
+            "inspect" | "to_s" => Type::String,
             "count" => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);

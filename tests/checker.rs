@@ -385,6 +385,28 @@ fn models_array_comparison() {
 }
 
 #[test]
+fn models_array_inspection_as_string() {
+    let result = check(
+        r#"
+T.reveal_type(["unknown"].inspect)
+T.reveal_type(["unknown"].to_s)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `String`"))
+            .count(),
+        2,
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn models_array_to_set() {
     let result = check_fixture("tests/fixtures/array_to_set.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| {
