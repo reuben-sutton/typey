@@ -4188,6 +4188,28 @@ T.reveal_type(Child.new.read_value)
 }
 
 #[test]
+fn models_enum_for_without_a_block() {
+    let result = check(
+        r#"
+enumerator = enum_for(:each)
+
+T.reveal_type(enumerator)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `Enumerator`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
