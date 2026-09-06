@@ -10941,7 +10941,7 @@ impl<'src> Analyzer<'src> {
                 });
                 Type::Array(Box::new(self.flat_map_element_type(&block_type)))
             }
-            "grep" | "grep_v" => {
+            "grep" => {
                 let filtered = site
                     .argument_types
                     .first()
@@ -12308,6 +12308,26 @@ impl<'src> Analyzer<'src> {
             if name == "flat_map" {
                 if let Some(block_return_type) = block_return_type {
                     return Type::Array(Box::new(self.flat_map_element_type(block_return_type)));
+                }
+            }
+            if name == "grep" {
+                if let Some(expected) = arguments
+                    .argument_types
+                    .first()
+                    .and_then(Self::class_object_value_type)
+                {
+                    let element = match &return_type {
+                        Type::Array(element) => Some(element.as_ref()),
+                        Type::Named(class, arguments)
+                            if arguments.len() == 1 && name_matches(class, "Array") =>
+                        {
+                            arguments.first()
+                        }
+                        _ => None,
+                    };
+                    if let Some(element) = element {
+                        return Type::Array(Box::new(self.meet_predicate_type(element, &expected)));
+                    }
                 }
             }
             return_type

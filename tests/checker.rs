@@ -3877,6 +3877,34 @@ T.reveal_type(filtered)
 }
 
 #[test]
+fn narrows_array_grep_through_vendored_rbi() {
+    let source = r#"
+class Base; end
+class Child < Base; end
+
+values = [] #: Array[Base]
+filtered = values.grep(Child)
+T.reveal_type(filtered)
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("array_grep.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.diagnostic.severity == Severity::Note
+                && diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Revealed type: `T::Array[Child]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"
