@@ -3894,6 +3894,54 @@ T.reveal_type(values)
 }
 
 #[test]
+fn preserves_each_with_object_accumulator_types_for_typed_arrays() {
+    let result = check(
+        r#"
+#: (Array[Integer]) -> Array[String]
+def collect_strings(values)
+  values.each_with_object(["seed"]) do |value, strings|
+    strings << value.to_s
+  end
+end
+
+T.reveal_type(collect_strings([1]))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn infers_empty_each_with_object_accumulators_from_block_writes() {
+    let result = check(
+        r#"
+values = [1] #: Array[Integer]
+strings = values.each_with_object([]) do |value, output|
+  output << value.to_s
+end
+
+T.reveal_type(strings)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_namespaced_classes_that_shadow_primitives() {
     let result = check(
         r#"
