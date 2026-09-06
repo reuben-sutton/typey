@@ -120,6 +120,25 @@ pub fn load_workspace(root: &Path) -> io::Result<Vec<WorkspaceFile>> {
     load_workspace_paths(&paths)
 }
 
+/// Return the vendored Sorbet core and standard-library RBI files.
+///
+/// These declarations are the checker-wide Ruby baseline. Project-local RBIs
+/// remain separate so callers can choose whether to load them, and can take
+/// precedence when the same API is declared in both places.
+pub fn builtin_rbi_paths() -> io::Result<Vec<PathBuf>> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor/sorbet/rbi");
+    discover_ruby_files_with_ignores(&root, &[])
+}
+
+/// Read a repository together with Typey's vendored Sorbet RBI baseline.
+pub fn load_workspace_with_builtins(root: &Path) -> io::Result<Vec<WorkspaceFile>> {
+    let mut paths = discover_ruby_files(root)?;
+    paths.extend(builtin_rbi_paths()?);
+    paths.sort();
+    paths.dedup();
+    load_workspace_paths(&paths)
+}
+
 /// Read an explicit, caller-provided workspace path order.
 pub fn load_workspace_paths(paths: &[PathBuf]) -> io::Result<Vec<WorkspaceFile>> {
     paths

@@ -8,7 +8,7 @@ use std::time::Instant;
 use ruby_prism::{Node, Visit};
 
 use typey::directives::{typed_mode, TypedMode};
-use typey::workspace::{discover_ruby_files, load_workspace_paths};
+use typey::workspace::{builtin_rbi_paths, discover_ruby_files, load_workspace_paths};
 use typey::{check, check_workspace, load_workspace, CheckerConfig, UntypedOrigin};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,7 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if debug {
                 eprintln!("[typey] discovering .rb/.rbi files under {path}");
             }
-            let paths = discover_ruby_files(Path::new(&path))?;
+            let mut paths = discover_ruby_files(Path::new(&path))?;
+            paths.extend(builtin_rbi_paths()?);
+            paths.sort();
+            paths.dedup();
             if paths.is_empty() {
                 return Err(format!("no .rb or .rbi files found below {path}").into());
             }
