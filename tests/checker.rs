@@ -1580,6 +1580,12 @@ fn preserves_tuple_shape_when_pushing_into_typed_arrays() {
 }
 
 #[test]
+fn treats_t_namespaced_enumerables_as_nominal_types() {
+    let result = check_fixture("tests/fixtures/set_enumerable_assignability.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn resolves_module_function_definitions_on_module_receivers() {
     let result = check(
         r#"
