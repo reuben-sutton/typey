@@ -3713,6 +3713,32 @@ accept_class(Outer::Child)
 }
 
 #[test]
+fn preserves_string_types_through_active_support_inflections() {
+    let result = check(
+        r#"
+T.reveal_type("file".pluralize)
+T.reveal_type("offense".pluralize)
+T.reveal_type("name".underscore)
+T.reveal_type("  message  ".squish)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic
+                .message
+                .contains("Revealed type: `String`"))
+            .count(),
+        4,
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_namespaced_classes_that_shadow_primitives() {
     let result = check(
         r#"
