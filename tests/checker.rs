@@ -2991,6 +2991,7 @@ T.reveal_type(values.each)
 T.reveal_type(values.map)
 T.reveal_type(values.each_with_index)
 T.reveal_type(values.select)
+T.reveal_type(values.delete_if)
 T.reveal_type(hash.each)
 T.reveal_type(hash.transform_keys)
 "#,
@@ -3005,7 +3006,39 @@ T.reveal_type(hash.transform_keys)
                 && diagnostic.message.contains("Revealed type: `Enumerator`")
         })
         .count();
-    assert_eq!(enumerators, 6, "{:?}", result.diagnostics);
+    assert_eq!(enumerators, 7, "{:?}", result.diagnostics);
+}
+
+#[test]
+fn models_array_delete_if_types() {
+    let result = check(
+        r#"
+values = [1, 2, 3]
+
+T.reveal_type(values.delete_if { |value| value.even? })
+T.reveal_type(values.delete_if)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Array[Integer]`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Enumerator`")),
+        "{notes:?}"
+    );
 }
 
 #[test]

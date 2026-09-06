@@ -8025,8 +8025,11 @@ impl<'src> Analyzer<'src> {
                 Type::Array(Box::new(block_type.truthy_part()))
             }
             "flatten" => Type::Array(Box::new(self.flattened_array_element_type(element))),
-            "each" | "select" | "filter" | "reject" | "sort" | "reverse" | "rotate" | "shuffle" => {
-                if site.block.is_none() && matches!(name, "each" | "select" | "filter" | "reject") {
+            "each" | "select" | "filter" | "reject" | "delete_if" | "sort" | "reverse"
+            | "rotate" | "shuffle" => {
+                if site.block.is_none()
+                    && matches!(name, "each" | "select" | "filter" | "reject" | "delete_if")
+                {
                     return Type::named("Enumerator");
                 }
                 if let Some(block) = site.block {
