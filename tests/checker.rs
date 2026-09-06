@@ -3791,6 +3791,47 @@ T.reveal_type(Registry.configure)
 }
 
 #[test]
+fn narrows_ast_nodes_after_string_predicates() {
+    let result = check(
+        r#"
+module NodeHelpers
+  #: (AST::Node) -> bool
+  def self.string?(node)
+    true
+  end
+
+  #: (AST::Node) -> (String | Symbol)
+  def self.literal_value(node)
+    "value"
+  end
+end
+
+module AST
+  class Node
+  end
+end
+
+def extract(node)
+  return unless NodeHelpers.string?(node)
+
+  NodeHelpers.literal_value(node)
+end
+
+T.reveal_type(extract(AST::Node.new))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `T.nilable(String)`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_namespaced_classes_that_shadow_primitives() {
     let result = check(
         r#"
