@@ -7634,7 +7634,7 @@ impl<'src> Analyzer<'src> {
             | "downcase" | "capitalize" | "swapcase" | "chomp" | "chop" | "succ" | "next"
             | "delete" | "tr" | "tr_s" | "squeeze" | "scrub" | "center" | "ljust" | "rjust"
             | "prepend" | "concat" | "replace" | "force_encoding" | "to_s" | "dup" | "clone"
-            | "+" | "*" => Type::String,
+            | "+" | "*" | "<<" => Type::String,
             "gsub" | "sub" => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, &[Type::String], environment);
