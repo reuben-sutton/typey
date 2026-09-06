@@ -6020,6 +6020,13 @@ impl<'src> Analyzer<'src> {
                 }
                 type_
             };
+            self.refine_local_array_write(
+                receiver_node.as_ref(),
+                &name,
+                argument_types,
+                &dispatch_receiver_type,
+                environment,
+            );
             if name == "new"
                 && receiver_node
                     .as_ref()
@@ -6065,6 +6072,39 @@ impl<'src> Analyzer<'src> {
             abrupt.join(&callee_abrupt),
             abrupt_flow.union(callee_flow),
         )
+    }
+
+    fn refine_local_array_write(
+        &self,
+        receiver_node: Option<&Node<'_>>,
+        name: &str,
+        argument_types: &[Type],
+        receiver_type: &Type,
+        environment: &mut Environment,
+    ) {
+        if !matches!(name, "push" | "<<") {
+            return;
+        }
+        let Some(local) = receiver_node.and_then(Node::as_local_variable_read_node) else {
+            return;
+        };
+        let Type::Array(element) = receiver_type else {
+            return;
+        };
+        let mut refined_element = element.as_ref().clone();
+        for actual in argument_types {
+            if refined_element.is_any() && !actual.is_any() {
+                refined_element = actual.clone();
+            } else {
+                refined_element = refined_element.join(actual);
+            }
+        }
+        if refined_element != element.as_ref().clone() {
+            environment.bind(
+                prism::constant_name(local.name()),
+                Type::Array(Box::new(refined_element)),
+            );
+        }
     }
 
     fn eval_polymorphic_receiver_call<'a, 'node>(
@@ -7669,7 +7709,15 @@ impl<'src> Analyzer<'src> {
                 let object = site.argument_types.first().cloned().unwrap_or(Type::Any);
                 if let Some(block) = site.block {
                     let expected = vec![element.clone(), object.clone()];
-                    let _ = self.eval_block_node(block, &expected, environment);
+                    let accumulator_name = Self::block_parameter_name(block, 1);
+                    let (_, block_environment) =
+                        self.eval_block_node_with_environment(block, &expected, environment);
+                    if let Some(name) = accumulator_name {
+                        let refined = block_environment.get(&name);
+                        if !refined.is_any() {
+                            return refined;
+                        }
+                    }
                 }
                 object
             }
@@ -7962,11 +8010,17 @@ impl<'src> Analyzer<'src> {
                 Type::union([Type::Nil, element.clone()])
             }
             "push" | "<<" => {
+                let mut result_element = element.clone();
                 for (argument, actual) in site.argument_nodes.iter().zip(site.argument_types) {
                     let actual = self.tuple_literal_argument_type(argument, actual, element);
                     self.check_assignable(argument, &actual, element);
+                    if result_element.is_any() && !actual.is_any() {
+                        result_element = actual;
+                    } else {
+                        result_element = result_element.join(&actual);
+                    }
                 }
-                Type::Array(Box::new(element.clone()))
+                Type::Array(Box::new(result_element))
             }
             "to_a" | "to_ary" => Type::Array(Box::new(element.clone())),
             "to_set" => {
@@ -8324,11 +8378,23 @@ impl<'src> Analyzer<'src> {
         expected: &[Type],
         outer: &mut Environment,
     ) -> Type {
+        self.eval_block_node_with_environment(node, expected, outer).0
+    }
+
+    fn eval_block_node_with_environment<'node>(
+        &mut self,
+        node: &Node<'node>,
+        expected: &[Type],
+        outer: &mut Environment,
+    ) -> (Type, Environment) {
         let Some(block) = node.as_block_node() else {
-            return Type::Any;
+            return (Type::Any, outer.clone());
         };
-        let result = self.eval_block(&block, expected, outer);
-        Self::block_value_type(&result)
+        let captured = outer.clone();
+        let (result, block_environment) =
+            self.eval_block_with_environment(&block, expected, outer);
+        self.propagate_block_locals(outer, &captured, &block_environment);
+        (Self::block_value_type(&result), block_environment)
     }
 
     fn eval_collection_block<'node>(
@@ -8449,7 +8515,18 @@ impl<'src> Analyzer<'src> {
         outer: &mut Environment,
     ) -> Eval {
         let captured = outer.clone();
-        let mut environment = captured.clone();
+        let (result, environment) = self.eval_block_with_environment(block, expected, outer);
+        self.propagate_block_locals(outer, &captured, &environment);
+        result
+    }
+
+    fn eval_block_with_environment<'node>(
+        &mut self,
+        block: &ruby_prism::BlockNode<'node>,
+        expected: &[Type],
+        outer: &Environment,
+    ) -> (Eval, Environment) {
+        let mut environment = outer.clone();
         if let Some(parameters) = block.parameters() {
             if let Some(parameters) = parameters
                 .as_block_parameters_node()
@@ -8491,8 +8568,22 @@ impl<'src> Analyzer<'src> {
         } else {
             Eval::value(Type::Nil)
         };
-        self.propagate_block_locals(outer, &captured, &environment);
-        result
+        (result, environment)
+    }
+
+    fn block_parameter_name<'node>(node: &Node<'node>, index: usize) -> Option<String> {
+        let block = node.as_block_node()?;
+        let parameters = block.parameters()?;
+        let parameters = parameters
+            .as_block_parameters_node()
+            .and_then(|parameters| parameters.parameters())
+            .or_else(|| parameters.as_parameters_node())?;
+        parameters
+            .requireds()
+            .into_iter()
+            .filter_map(|parameter| parameter.as_required_parameter_node())
+            .nth(index)
+            .map(|parameter| prism::constant_name(parameter.name()))
     }
 
     fn destructure_block_parameters<'node>(
