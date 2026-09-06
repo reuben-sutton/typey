@@ -851,6 +851,15 @@ fn preserves_optional_rbs_block_parameters() {
 }
 
 #[test]
+fn treats_unannotated_block_parameters_as_optional() {
+    let result = check_fixture("tests/fixtures/untyped_optional_block.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Note
+            && diagnostic.message.contains("Revealed type: `String`")
+    }));
+}
+
+#[test]
 fn maps_arbitrary_and_anonymous_block_parameter_names() {
     let result = check_fixture("tests/fixtures/block_parameter_names.rb");
     assert!(result

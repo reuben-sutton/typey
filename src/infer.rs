@@ -4624,7 +4624,7 @@ impl<'src> Analyzer<'src> {
                     .or_else(|| parameters.as_parameters_node())
             });
             let mut closure_environment = environment.clone();
-            self.bind_parameters(parameters, Some(&signature), &mut closure_environment);
+            self.bind_parameters(parameters, Some(&signature), &mut closure_environment, true);
             let body_result = lambda
                 .body()
                 .map(|body| self.eval_node(&body, &mut closure_environment))
@@ -5965,6 +5965,7 @@ impl<'src> Analyzer<'src> {
             definition.parameters(),
             Some(&body_signature),
             &mut method_environment,
+            !state.explicit,
         );
         if let Some(parameters) = definition.parameters() {
             if let Some(block) = parameters.block() {
@@ -5975,6 +5976,13 @@ impl<'src> Analyzer<'src> {
                             Box::new(state.block_result_type()),
                         )
                     });
+                    // Keep the local binding consistent with `bind_parameters`:
+                    // an omitted unannotated Ruby block is represented by nil.
+                    let block_type = if !state.explicit {
+                        Type::union([Type::Nil, block_type])
+                    } else {
+                        block_type
+                    };
                     method_environment.bind(prism::constant_name(name), block_type);
                 }
             }
@@ -6160,6 +6168,7 @@ impl<'src> Analyzer<'src> {
         parameters: Option<ParametersNode<'node>>,
         signature: Option<&MethodSig>,
         environment: &mut Environment,
+        block_optional: bool,
     ) {
         let Some(parameters) = parameters else { return };
         let mut index = 0;
@@ -6242,6 +6251,16 @@ impl<'src> Analyzer<'src> {
                 let type_ = signature
                     .and_then(|signature| signature.block.clone())
                     .unwrap_or_else(|| Type::Proc(Vec::new(), Box::new(Type::Any)));
+                // A Ruby `&block` local is nil when the caller did not pass a
+                // block, even when the method's callable block signature is
+                // known. The call-site signature still describes the block
+                // accepted by the method; this local needs the runtime
+                // nilability so `if block`/`unless block` can refine it.
+                let type_ = if block_optional {
+                    Type::union([Type::Nil, type_])
+                } else {
+                    type_
+                };
                 environment.bind(prism::constant_name(name), type_);
             }
         }
@@ -8203,6 +8222,14 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> (Type, UntypedOrigin) {
         if let Type::Union(members) = receiver_type {
+            if matches!(name, "call" | "[]")
+                && members.iter().all(|member| {
+                    member.is_nil() || matches!(member, Type::Proc(_, _) | Type::BoundProc { .. })
+                })
+            {
+                let type_ = self.eval_method_call(receiver_type, name, site, environment);
+                return (type_, UntypedOrigin::InferredMethod);
+            }
             let mut result = Type::Never;
             let mut fallback_origin = UntypedOrigin::FallbackCall;
             for member in members {
@@ -9968,6 +9995,24 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Type {
         if let Type::Union(members) = receiver {
+            // An optional block local is represented as `nil | Proc`.  The
+            // nil member has no normal return value for `call`/`[]` (it
+            // raises at runtime), so it must not erase the concrete return
+            // type of the callable member during inference.
+            if matches!(name, "call" | "[]")
+                && members.iter().all(|member| {
+                    member.is_nil() || matches!(member, Type::Proc(_, _) | Type::BoundProc { .. })
+                })
+            {
+                let mut result = Type::Never;
+                for member in members {
+                    if !member.is_nil() {
+                        result =
+                            result.join(&self.eval_method_call(member, name, site, environment));
+                    }
+                }
+                return if result.is_never() { Type::Any } else { result };
+            }
             let mut result = Type::Never;
             for member in members {
                 result = result.join(&self.eval_method_call(member, name, site, environment));
@@ -11303,7 +11348,9 @@ impl<'src> Analyzer<'src> {
             // unknown-arity proc, not a known zero-argument proc.
             Type::Proc(parameters, result) if parameters.is_empty() && result.is_any() => None,
             Type::Proc(_, _) | Type::BoundProc { .. } => Some(type_.clone()),
-            Type::Union(_) => optional_proc_type(type_),
+            Type::Union(_) => {
+                optional_proc_type(type_).and_then(|proc| Self::passed_block_signature(&proc))
+            }
             _ => None,
         }
     }
@@ -11572,6 +11619,7 @@ impl<'src> Analyzer<'src> {
                     Some(parameters),
                     Some(&MethodSig::new(expected, Type::Any)),
                     &mut environment,
+                    true,
                 );
             } else if let Some(parameters) = parameters.as_parameters_node() {
                 let expected = Self::destructure_block_parameters(&parameters, expected);
@@ -11579,6 +11627,7 @@ impl<'src> Analyzer<'src> {
                     Some(parameters),
                     Some(&MethodSig::new(expected, Type::Any)),
                     &mut environment,
+                    true,
                 );
             } else if parameters.as_it_parameters_node().is_some()
                 || parameters.as_numbered_parameters_node().is_some()
