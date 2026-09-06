@@ -1057,6 +1057,34 @@ T.reveal_type(require_relative("library"))
 }
 
 #[test]
+fn infers_builtin_generic_block_return_types() {
+    let source = r#"
+class Base
+end
+
+classes = Set.new([Base]) #: Set[Class[Base]]
+instances = classes.map { |klass| klass.new }
+T.reveal_type(instances)
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("generic_block.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.diagnostic.severity == Severity::Note
+                && diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Revealed type: `T::Array[Base]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn infers_attr_reader_types_from_instance_variables() {
     let result = check(
         r#"
@@ -2742,6 +2770,32 @@ end
         result.diagnostics.iter().any(|diagnostic| {
             diagnostic.severity == Severity::Note
                 && diagnostic.message.contains("Revealed type: `Integer`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn infers_method_type_parameters_from_block_returns() {
+    let result = check(
+        r#"
+#: [U] () { (Integer) -> U } -> Array[U]
+def collect
+  [1].map { |value| yield(value) }
+end
+
+T.reveal_type(collect { |value| value.to_s })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic
+                    .message
+                    .contains("Revealed type: `T::Array[String]`")
         }),
         "{:?}",
         result.diagnostics

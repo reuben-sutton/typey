@@ -30,6 +30,7 @@ struct ParameterShape {
     rest_index: Option<usize>,
     keywords: BTreeMap<String, bool>,
     accepts_keyword_rest: bool,
+    has_block: bool,
 }
 
 impl ParameterShape {
@@ -62,6 +63,7 @@ impl ParameterShape {
                 node.as_keyword_rest_parameter_node().is_some()
                     || node.as_forwarding_parameter_node().is_some()
             }),
+            has_block: parameters.block().is_some(),
         }
     }
 }
@@ -74,7 +76,15 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     let mut result = signature.clone();
     let mut params = Vec::new();
     let mut keywords = result.keywords.clone();
+    let mut block = result.block.clone();
     for (name, type_) in signature.param_names.iter().zip(&signature.params) {
+        if shape.has_block
+            && matches!(type_, Type::Proc(_, _))
+            && matches!(name.as_str(), "blk" | "block")
+        {
+            block = Some(type_.clone());
+            continue;
+        }
         if let Some(required) = shape.keywords.get(name) {
             keywords.insert(
                 name.clone(),
@@ -94,6 +104,7 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     result.rest_index = shape.rest_index;
     result.accepts_keyword_rest |= shape.accepts_keyword_rest;
     result.keywords = keywords;
+    result.block = block;
     result
 }
 
@@ -1675,6 +1686,7 @@ impl<'src> Analyzer<'src> {
         &self,
         signature: &MethodSig,
         arguments: &CallArguments<'_>,
+        block_return_type: Option<&Type>,
     ) -> BTreeMap<String, Type> {
         let names = signature
             .type_parameters
@@ -1721,6 +1733,16 @@ impl<'src> Analyzer<'src> {
                     );
                 }
             }
+        }
+        if let (Some(Type::Proc(_, expected_return)), Some(actual_return)) =
+            (signature.block.as_ref(), block_return_type)
+        {
+            self.collect_type_parameter_binding(
+                expected_return,
+                actual_return,
+                &names,
+                &mut bindings,
+            );
         }
         bindings
     }
@@ -1794,6 +1816,28 @@ impl<'src> Analyzer<'src> {
                 }
             }
             Type::Named(expected_name, expected_arguments) => {
+                if expected_arguments.len() == 1 && name_matches(expected_name, "Enumerable") {
+                    let element = match actual {
+                        Type::Array(element) => Some((**element).clone()),
+                        Type::Tuple(elements) => Some(Type::union(elements.iter().cloned())),
+                        Type::Hash(key, value) => {
+                            Some(Type::Tuple(vec![(**key).clone(), (**value).clone()]))
+                        }
+                        Type::Named(_, _) => {
+                            self.generic_member_binding("Enumerable::Elem", Some(actual))
+                        }
+                        _ => None,
+                    };
+                    if let Some(element) = element {
+                        self.collect_type_parameter_binding(
+                            &expected_arguments[0],
+                            &element,
+                            names,
+                            bindings,
+                        );
+                        return;
+                    }
+                }
                 if let Type::Named(actual_name, actual_arguments) = actual {
                     if name_matches(expected_name, actual_name)
                         || name_matches(actual_name, expected_name)
@@ -4794,14 +4838,14 @@ impl<'src> Analyzer<'src> {
             return Type::Any;
         };
         self.record_method_dependency(&target, environment);
-        let Some(signature) = self.observe_call(&target, &arguments) else {
+        let Some(signature) = self.observe_call(&target, &arguments, block.is_some()) else {
             if let Some(block) = block {
                 let _ = self.eval_block_node(block, &[Type::Any], environment);
             }
             return Type::Any;
         };
         let receiver_type = environment.self_type.clone();
-        self.observe_block_call(
+        let block_return_type = self.observe_block_call(
             &target,
             block,
             &signature,
@@ -4815,6 +4859,7 @@ impl<'src> Analyzer<'src> {
             &signature,
             &arguments,
             Some(&environment.self_type),
+            block_return_type.as_ref(),
         )
     }
 
@@ -5443,13 +5488,13 @@ impl<'src> Analyzer<'src> {
             }
             let key = self.implicit_method_key(&name, environment);
             self.record_method_dependency(&key, environment);
-            if let Some(signature) = self.observe_call(&key, &arguments) {
+            if let Some(signature) = self.observe_call(&key, &arguments, block.is_some()) {
                 let declared = self
                     .resolve_method_key(&key)
                     .and_then(|resolved| self.methods.get(&resolved))
                     .is_some_and(|state| state.explicit);
                 let receiver_type = environment.self_type.clone();
-                self.observe_block_call(
+                let block_return_type = self.observe_block_call(
                     &key,
                     block.as_ref(),
                     &signature,
@@ -5463,6 +5508,7 @@ impl<'src> Analyzer<'src> {
                     &signature,
                     &arguments,
                     Some(&environment.self_type),
+                    block_return_type.as_ref(),
                 );
                 if type_.contains_any() {
                     untyped_origin = Some(if declared {
@@ -5561,12 +5607,13 @@ impl<'src> Analyzer<'src> {
                         untyped_origin = Some(UntypedOrigin::InferredMethod);
                     }
                     type_
-                } else if let Some(signature) = self.observe_call(&key, &arguments) {
+                } else if let Some(signature) = self.observe_call(&key, &arguments, block.is_some())
+                {
                     let declared = self
                         .resolve_method_key(&key)
                         .and_then(|resolved| self.methods.get(&resolved))
                         .is_some_and(|state| state.explicit);
-                    self.observe_block_call(
+                    let block_return_type = self.observe_block_call(
                         &key,
                         block.as_ref(),
                         &signature,
@@ -5580,6 +5627,7 @@ impl<'src> Analyzer<'src> {
                         &signature,
                         &arguments,
                         Some(&dispatch_receiver_type),
+                        block_return_type.as_ref(),
                     );
                     if type_.contains_any() {
                         untyped_origin = Some(if declared {
@@ -5716,6 +5764,7 @@ impl<'src> Analyzer<'src> {
         &mut self,
         key: &MethodKey,
         arguments: &CallArguments<'_>,
+        has_block: bool,
     ) -> Option<MethodSig> {
         let key = self.resolve_method_key(key)?;
         if let Some(state) = self.methods.get(&key).filter(|state| state.explicit) {
@@ -5726,7 +5775,7 @@ impl<'src> Analyzer<'src> {
                 state.overloads.clone()
             };
             return Some(
-                self.select_overload(&overloads, arguments)
+                self.select_overload(&overloads, arguments, has_block)
                     .unwrap_or(fallback),
             );
         }
@@ -5765,14 +5814,14 @@ impl<'src> Analyzer<'src> {
         arguments: &CallArguments<'node>,
         receiver_type: Option<&Type>,
         environment: &mut Environment,
-    ) {
+    ) -> Option<Type> {
         let Some(block) = block else {
-            return;
+            return None;
         };
         let Some(key) = self.resolve_method_key(key) else {
-            return;
+            return None;
         };
-        let mut bindings = self.infer_type_parameter_bindings(signature, arguments);
+        let mut bindings = self.infer_type_parameter_bindings(signature, arguments, None);
         bindings.extend(self.infer_generic_member_bindings(signature, arguments, receiver_type));
         let block_signature = signature.block.as_ref().map(|block| {
             self.substitute_signature_type(
@@ -5794,7 +5843,22 @@ impl<'src> Analyzer<'src> {
                     .map_or_else(Vec::new, MethodState::block_parameters)
             });
         let block_type = self.eval_block_node(block, &expected, environment);
-        if let Some(Type::Proc(_, expected_return)) = block_signature.as_ref() {
+        let mut checked_bindings =
+            self.infer_type_parameter_bindings(signature, arguments, Some(&block_type));
+        checked_bindings.extend(self.infer_generic_member_bindings(
+            signature,
+            arguments,
+            receiver_type,
+        ));
+        let checked_block_signature = signature.block.as_ref().map(|block| {
+            self.substitute_signature_type(
+                block,
+                receiver_type,
+                &checked_bindings,
+                &signature.type_parameters,
+            )
+        });
+        if let Some(Type::Proc(_, expected_return)) = checked_block_signature.as_ref() {
             if !expected_return.is_any()
                 && !expected_return.is_nil()
                 && !self.is_assignable(&block_type, expected_return)
@@ -5810,16 +5874,26 @@ impl<'src> Analyzer<'src> {
         {
             self.changed_methods.insert(key);
         }
+        Some(block_type)
     }
 
     fn select_overload(
         &self,
         overloads: &[MethodSig],
         arguments: &CallArguments<'_>,
+        has_block: bool,
     ) -> Option<MethodSig> {
         overloads
             .iter()
-            .find(|signature| self.signature_accepts_arguments(signature, arguments))
+            .find(|signature| {
+                (!has_block || signature.block.is_some())
+                    && self.signature_accepts_arguments(signature, arguments)
+            })
+            .or_else(|| {
+                overloads
+                    .iter()
+                    .find(|signature| self.signature_accepts_arguments(signature, arguments))
+            })
             .cloned()
     }
 
@@ -5869,7 +5943,8 @@ impl<'src> Analyzer<'src> {
                 return false;
             }
         }
-        let type_parameter_bindings = self.infer_type_parameter_bindings(signature, arguments);
+        let type_parameter_bindings =
+            self.infer_type_parameter_bindings(signature, arguments, None);
         if !positional_types.iter().enumerate().all(|(index, actual)| {
             let Some(expected) = signature.positional_type(index, positional_types.len()) else {
                 return false;
@@ -6012,7 +6087,7 @@ impl<'src> Analyzer<'src> {
             singleton: false,
         };
         self.record_method_dependency(&key, environment);
-        if let Some(signature) = self.observe_call(&key, arguments) {
+        if let Some(signature) = self.observe_call(&key, arguments, false) {
             let receiver_type = Type::named(owner.to_owned());
             let _ = self.invoke_signature(
                 node,
@@ -6020,6 +6095,7 @@ impl<'src> Analyzer<'src> {
                 &signature,
                 arguments,
                 Some(&receiver_type),
+                None,
             );
         }
     }
@@ -7477,8 +7553,10 @@ impl<'src> Analyzer<'src> {
         signature: &MethodSig,
         arguments: &CallArguments<'node>,
         receiver_type: Option<&Type>,
+        block_return_type: Option<&Type>,
     ) -> Type {
-        let mut type_parameter_bindings = self.infer_type_parameter_bindings(signature, arguments);
+        let mut type_parameter_bindings =
+            self.infer_type_parameter_bindings(signature, arguments, block_return_type);
         type_parameter_bindings.extend(self.infer_generic_member_bindings(
             signature,
             arguments,

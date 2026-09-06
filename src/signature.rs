@@ -936,7 +936,41 @@ fn strip_comment_tail(text: &str) -> &str {
 
 fn extract_call(text: &str, name: &str) -> Option<String> {
     let needle = format!("{name}(");
-    let start = text.find(&needle)? + needle.len() - 1;
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    let start = text.char_indices().find_map(|(index, character)| {
+        if escaped {
+            escaped = false;
+            return None;
+        }
+        if character == '\\' && quote.is_some() {
+            escaped = true;
+            return None;
+        }
+        if let Some(current_quote) = quote {
+            if character == current_quote {
+                quote = None;
+            }
+            return None;
+        }
+        if character == '\'' || character == '"' {
+            quote = Some(character);
+            return None;
+        }
+        if paren == 0 && bracket == 0 && text[index..].starts_with(&needle) {
+            return Some(index + needle.len() - 1);
+        }
+        match character {
+            '(' => paren += 1,
+            ')' => paren = paren.saturating_sub(1),
+            '[' => bracket += 1,
+            ']' => bracket = bracket.saturating_sub(1),
+            _ => {}
+        }
+        None
+    })?;
     let close = matching_delimiter(text, start, '(', ')')?;
     Some(text[start + 1..close].to_owned())
 }
