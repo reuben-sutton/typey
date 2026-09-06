@@ -278,6 +278,45 @@ struct PredicateAlias {
     expected: Option<Type>,
 }
 
+#[derive(Default)]
+struct LocalWriteCollector {
+    names: BTreeSet<String>,
+}
+
+impl<'pr> Visit<'pr> for LocalWriteCollector {
+    fn visit_local_variable_write_node(
+        &mut self,
+        node: &ruby_prism::LocalVariableWriteNode<'pr>,
+    ) {
+        self.names.insert(prism::constant_name(node.name()));
+        ruby_prism::visit_local_variable_write_node(self, node);
+    }
+
+    fn visit_local_variable_and_write_node(
+        &mut self,
+        node: &ruby_prism::LocalVariableAndWriteNode<'pr>,
+    ) {
+        self.names.insert(prism::constant_name(node.name()));
+        ruby_prism::visit_local_variable_and_write_node(self, node);
+    }
+
+    fn visit_local_variable_or_write_node(
+        &mut self,
+        node: &ruby_prism::LocalVariableOrWriteNode<'pr>,
+    ) {
+        self.names.insert(prism::constant_name(node.name()));
+        ruby_prism::visit_local_variable_or_write_node(self, node);
+    }
+
+    fn visit_local_variable_operator_write_node(
+        &mut self,
+        node: &ruby_prism::LocalVariableOperatorWriteNode<'pr>,
+    ) {
+        self.names.insert(prism::constant_name(node.name()));
+        ruby_prism::visit_local_variable_operator_write_node(self, node);
+    }
+}
+
 /// How much file-mode metadata the checker should use. Typey is intentionally
 /// permissive for untyped Ruby, while explicit annotations remain checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4170,7 +4209,10 @@ impl<'src> Analyzer<'src> {
         begin: &ruby_prism::BeginNode<'node>,
         environment: &mut Environment,
     ) -> Eval {
-        let entry = environment.clone();
+        let mut entry = environment.clone();
+        if let Some(rescue) = begin.rescue_clause() {
+            self.bind_rescue_reference_locals(rescue, &mut entry);
+        }
         let mut normal_environment = entry.clone();
         let body_result = if let Some(statements) = begin.statements() {
             self.eval_statements(&statements, &mut normal_environment)
@@ -4229,12 +4271,14 @@ impl<'src> Analyzer<'src> {
                 result.abrupt.without(FlowKind::Raise).join(&rescue_abrupt),
                 body_flow.without(FlowKind::Raise).union(rescue_flow),
             );
-            merged_environment = self.join_flow_environments(
-                &merged_environment,
-                body_flow,
-                &rescue_environment,
-                rescue_flow,
-            );
+            if body_flow.contains(FlowKind::Raise) {
+                merged_environment = self.join_flow_environments(
+                    &merged_environment,
+                    body_flow,
+                    &rescue_environment,
+                    rescue_flow,
+                );
+            }
         }
         *environment = merged_environment;
 
@@ -4259,6 +4303,29 @@ impl<'src> Analyzer<'src> {
         let type_ = self.apply_inline_assertion(node, result.type_.clone());
         result.type_ = self.record(node, type_);
         result
+    }
+
+    fn bind_rescue_reference_locals<'node>(
+        &self,
+        first: ruby_prism::RescueNode<'node>,
+        environment: &mut Environment,
+    ) {
+        let mut next = Some(first);
+        while let Some(rescue) = next {
+            if let Some(reference) = rescue.reference() {
+                self.bind_for_target(&reference, Type::Nil, environment);
+            }
+            if let Some(statements) = rescue.statements() {
+                let mut collector = LocalWriteCollector::default();
+                collector.visit(&statements.as_node());
+                for name in collector.names {
+                    if !environment.contains(&name) {
+                        environment.bind(name, Type::Nil);
+                    }
+                }
+            }
+            next = rescue.subsequent();
+        }
     }
 
     fn eval_rescue_modifier<'node>(
@@ -5478,12 +5545,64 @@ impl<'src> Analyzer<'src> {
             }
         }
         if let Some(local) = node.as_local_variable_read_node() {
-            if let Some(truthy) = environment.known_truthiness(&prism::constant_name(local.name())) {
+            let name = prism::constant_name(local.name());
+            if let Some(truthy) = environment.known_truthiness(&name) {
                 return (truthy, !truthy);
             }
+            if let Some(alias) = environment.predicate_alias(&name) {
+                let source_type = environment.get(&alias.source);
+                let (then_reachable, else_reachable) = if let Some(expected) = &alias.expected {
+                    (
+                        !source_type.meet(expected).is_never(),
+                        !source_type.without(expected).is_never(),
+                    )
+                } else {
+                    (
+                        !source_type.truthy_part().is_never(),
+                        !source_type.falsy_part().is_never(),
+                    )
+                };
+                return if alias.negated {
+                    (else_reachable, then_reachable)
+                } else {
+                    (then_reachable, else_reachable)
+                };
+            }
+            let type_ = environment.get(&name);
+            return (
+                !type_.truthy_part().is_never(),
+                !type_.falsy_part().is_never(),
+            );
+        }
+        if let Some(and) = node.as_and_node() {
+            let left = self.predicate_reachability(
+                &and.left(),
+                environment,
+                &self.predicate_type_for_node(&and.left(), environment, predicate_type),
+            );
+            let right = self.predicate_reachability(
+                &and.right(),
+                environment,
+                &self.predicate_type_for_node(&and.right(), environment, predicate_type),
+            );
+            return (left.0 && right.0, left.1 || (left.0 && right.1));
+        }
+        if let Some(or) = node.as_or_node() {
+            let left = self.predicate_reachability(
+                &or.left(),
+                environment,
+                &self.predicate_type_for_node(&or.left(), environment, predicate_type),
+            );
+            let right = self.predicate_reachability(
+                &or.right(),
+                environment,
+                &self.predicate_type_for_node(&or.right(), environment, predicate_type),
+            );
+            return (left.0 || (left.1 && right.0), left.1 && right.1);
         }
         if let Some(call) = node.as_call_node() {
-            if prism::constant_name(call.name()) == "!" {
+            let name = prism::constant_name(call.name());
+            if name == "!" {
                 if let Some(receiver) = call.receiver() {
                     let can_refine_receiver = receiver.as_local_variable_read_node().is_some()
                         || receiver.as_parentheses_node().is_some()
@@ -5502,12 +5621,34 @@ impl<'src> Analyzer<'src> {
                         );
                     }
                 }
+            } else if name == "nil?" {
+                if let Some(receiver) = call.receiver() {
+                    if let Some(receiver_type) = self.recorded_node_type(&receiver) {
+                        return (
+                            !receiver_type.meet(&Type::Nil).is_never(),
+                            !receiver_type.without(&Type::Nil).is_never(),
+                        );
+                    }
+                }
             }
         }
         (
             !predicate_type.truthy_part().is_never(),
             !predicate_type.falsy_part().is_never(),
         )
+    }
+
+    fn predicate_type_for_node<'node>(
+        &self,
+        node: &Node<'node>,
+        environment: &Environment,
+        fallback: &Type,
+    ) -> Type {
+        self.recorded_node_type(node).unwrap_or_else(|| {
+            node.as_local_variable_read_node()
+                .map(|local| environment.get(&prism::constant_name(local.name())))
+                .unwrap_or_else(|| fallback.clone())
+        })
     }
 
     fn predicate_is_precise<'node>(
@@ -5772,6 +5913,19 @@ impl<'src> Analyzer<'src> {
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
                     let current = environment.get(&local_name);
+                    if matches!(name.as_str(), "<" | "<=") && arguments.len() == 1 {
+                        let expected = self.resolve_type_names(
+                            &self.predicate_expected_type(&arguments[0], environment),
+                            None,
+                        );
+                        let narrowed = self.class_object_subclass_narrowing(
+                            &current,
+                            &expected,
+                            truthy,
+                        );
+                        environment.bind(local_name, narrowed);
+                        return;
+                    }
                     if let Some(narrowed) = self.equality_predicate_narrowing(
                         &name,
                         &current,
@@ -5854,6 +6008,33 @@ impl<'src> Analyzer<'src> {
                     };
                     environment.bind(ivar_refinement_key(&instance_variable_name), narrowed);
                 }
+            }
+        }
+    }
+
+    fn class_object_subclass_narrowing(
+        &self,
+        current: &Type,
+        expected: &Type,
+        truthy: bool,
+    ) -> Type {
+        if !truthy {
+            return current.clone();
+        }
+        match current {
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .filter(|member| self.class_object_subclass_narrowing(member, expected, true) != Type::Never)
+                    .cloned(),
+            ),
+            current => {
+                let Some(instance) = Self::class_object_instance_type(current) else {
+                    return current.clone();
+                };
+                self.is_assignable(&instance, expected)
+                    .then_some(current.clone())
+                    .unwrap_or(Type::Never)
             }
         }
     }
@@ -8103,6 +8284,12 @@ impl<'src> Analyzer<'src> {
             name,
             "nil?" | "is_a?" | "kind_of?" | "instance_of?" | "==" | "!=" | "equal?" | "eql?" | "!"
         ) {
+            return Type::bool();
+        }
+
+        if Self::class_object_instance_type(receiver).is_some()
+            && matches!(name, "<" | "<=" | ">" | ">=")
+        {
             return Type::bool();
         }
 

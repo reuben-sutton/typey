@@ -378,6 +378,22 @@ fn reports_unreachable_statement_branches() {
 }
 
 #[test]
+fn narrows_class_objects_by_subclass_comparisons() {
+    let result = check_fixture("tests/fixtures/class_object_subclass_narrowing.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn preserves_nil_for_locals_assigned_only_in_unreached_rescues() {
+    let result = check_fixture("tests/fixtures/rescue_definite_assignment.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `NilClass`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_array_intersection_predicates() {
     let result = check_fixture("tests/fixtures/array_intersect_predicate.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| {
