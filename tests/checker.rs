@@ -2209,8 +2209,24 @@ T.reveal_type(Mapper.new.to_h { |value| [value, value.length] })
 fn preserves_pair_tuples_for_hash_from_collection_blocks() {
     let result = check(
         r#"
+class HashBuilder
+  class << self
+    sig do
+      type_parameters(:U, :V).params(
+        entries: T.any(
+          T::Array[[T.type_parameter(:U), T.type_parameter(:V)]],
+          T::Hash[T.type_parameter(:U), T.type_parameter(:V)]
+        )
+      ).returns(T::Hash[T.type_parameter(:U), T.type_parameter(:V)])
+    end
+    def build(entries)
+      {}
+    end
+  end
+end
+
 files = ["a", "b"]
-T.reveal_type(Hash[files.collect { |file| [file, file.length] }])
+T.reveal_type(HashBuilder.build(files.collect { |file| [file, file.length] }))
 "#,
         CheckerConfig::default(),
     );
