@@ -14,6 +14,9 @@ sig { params(first: Integer, second: String).void }
 def fixed_keywords(first:, second:)
 end
 
+def accepts_keyword_rest(**kwargs)
+end
+
 sig { returns(T::Array[T.untyped]) }
 def dynamic_positional
   T::Array[T.untyped].new
@@ -45,6 +48,7 @@ fixed(*[1, "two"])
 # These are the dynamic splats Sorbet documents as unsupported.
 fixed(*dynamic_positional) # error: Splats are only supported where the size of the array is known statically
 fixed_keywords(**dynamic_keywords) # error: Keyword args with splats are only supported where the shape of the hash is known statically
+accepts_keyword_rest(**dynamic_keywords)
 
 # An untyped value does not provide enough information for arity checking, but
 # it should not be mistaken for an empty argument list.

@@ -11819,7 +11819,7 @@ impl<'src> Analyzer<'src> {
                 );
             }
         }
-        if arguments.has_dynamic_keyword_splat {
+        if arguments.has_dynamic_keyword_splat && !signature.accepts_keyword_rest {
             self.error(
                 node,
                 "Keyword args with splats are only supported where the shape of the hash is known statically",
