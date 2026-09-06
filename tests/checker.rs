@@ -1632,7 +1632,7 @@ class TypedGraph
   end
 
   def cycles
-    strongly_connected_components.reject { |component| component.length == 1 }
+    @cycles ||= strongly_connected_components.reject { |component| component.length == 1 }
   end
 end
 
