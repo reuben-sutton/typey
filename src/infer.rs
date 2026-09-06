@@ -2689,7 +2689,15 @@ impl<'src> Analyzer<'src> {
             let key = (inferred.start, inferred.end);
             if let Some(previous) = by_span.get_mut(&key) {
                 let is_send = previous.is_send || inferred.is_send;
-                *previous = inferred;
+                match (previous.type_.contains_any(), inferred.type_.contains_any()) {
+                    (true, false) => *previous = inferred,
+                    (false, true) => {}
+                    (false, false) => {
+                        previous.type_ = previous.type_.join(&inferred.type_);
+                        previous.untyped_origin = None;
+                    }
+                    (true, true) => *previous = inferred,
+                }
                 previous.is_send = is_send;
             } else {
                 by_span.insert(key, inferred);
