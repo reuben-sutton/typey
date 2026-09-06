@@ -4870,6 +4870,34 @@ T.reveal_type(Registry.configure)
 }
 
 #[test]
+fn models_dynamic_const_get_as_an_object() {
+    let result = check(
+        r#"
+module Registry
+  VALUE = 1
+
+  #: (String) -> Object
+  def self.lookup(name)
+    const_get(name)
+  end
+end
+
+T.reveal_type(Registry.lookup("VALUE"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `Object`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn narrows_ast_nodes_after_string_predicates() {
     let result = check(
         r#"

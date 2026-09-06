@@ -10008,6 +10008,12 @@ impl<'src> Analyzer<'src> {
                         return self.resolve_type_names(&type_, Some(&owner));
                     }
                 }
+                if Self::named_type_name(&instance).is_some() {
+                    // A dynamically named constant can hold any Ruby object.  That
+                    // is less precise than resolving a literal name, but it is
+                    // still soundly an Object rather than an untyped value.
+                    return Type::Object;
+                }
             }
             if Self::named_type_name(&instance)
                 .is_some_and(|name| name_matches(&name, "ActiveSupport::Inflector"))
