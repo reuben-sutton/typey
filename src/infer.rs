@@ -7901,6 +7901,14 @@ impl<'src> Analyzer<'src> {
                 });
                 Type::Array(Box::new(self.flat_map_element_type(&block_type)))
             }
+            "to_h" => {
+                let pair_type = site.block.map_or_else(
+                    || element.clone(),
+                    |block| self.eval_collection_block(block, element, environment),
+                );
+                let (key, value) = Self::pair_types(&pair_type).unwrap_or((Type::Any, Type::Any));
+                Type::Hash(Box::new(key), Box::new(value))
+            }
             "each_with_object" => {
                 if site.block.is_none() {
                     return Type::named("Enumerator");
@@ -9786,6 +9794,26 @@ impl<'src> Analyzer<'src> {
                 }
             }
             _ => Type::Any,
+        }
+    }
+
+    fn pair_types(type_: &Type) -> Option<(Type, Type)> {
+        match type_ {
+            Type::Tuple(elements) if elements.len() == 2 => {
+                Some((elements[0].clone(), elements[1].clone()))
+            }
+            Type::Array(element) => Self::pair_types(element),
+            Type::Union(members) => {
+                let mut pairs = members.iter().map(Self::pair_types);
+                let (mut key, mut value) = pairs.next()??;
+                for pair in pairs {
+                    let (next_key, next_value) = pair?;
+                    key = key.join(&next_key);
+                    value = value.join(&next_value);
+                }
+                Some((key, value))
+            }
+            _ => None,
         }
     }
 
