@@ -3442,6 +3442,27 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
+
+        // An RBI declaration without a signature is an external method, not
+        // a method whose return type is known to be bottom. `MethodState`
+        // uses `None`/`Never` provisionally for unresolved source methods so
+        // convergence can fill them in later, but an empty RBI body has no
+        // implementation for the worklist to analyze. Seed those declarations
+        // with Sorbet's gradual fallback instead of leaking `T.noreturn` into
+        // callers and making ordinary branches appear unreachable.
+        let rbi_definition_keys = self
+            .definitions
+            .iter()
+            .filter(|(offset, _)| self.is_project_rbi_offset(**offset))
+            .map(|(_, key)| key.clone())
+            .collect::<BTreeSet<_>>();
+        for key in rbi_definition_keys {
+            if let Some(state) = self.methods.get_mut(&key) {
+                if !state.explicit && state.return_type.is_none() {
+                    state.return_type = Some(Type::Any);
+                }
+            }
+        }
     }
 
     fn contains_attached_class_type(type_: &Type) -> bool {
@@ -5973,6 +5994,16 @@ impl<'src> Analyzer<'src> {
         self.rbi_ranges
             .iter()
             .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
+    }
+
+    fn is_project_rbi_offset(&self, offset: usize) -> bool {
+        self.rbi_ranges
+            .iter()
+            .any(|(range_start, range_end)| offset >= *range_start && offset < *range_end)
+            && !self
+                .builtin_rbi_ranges
+                .iter()
+                .any(|(range_start, range_end)| offset >= *range_start && offset < *range_end)
     }
 
     fn eval_super<'node>(

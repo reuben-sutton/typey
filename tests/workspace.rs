@@ -302,3 +302,41 @@ fn handles_empty_and_single_file_workspace_inputs() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn unsigned_rbi_declarations_are_untyped_not_noreturn() {
+    let files = [
+        WorkspaceFile::new(
+            "external.rbi",
+            "class External\n  def value; end\nend\n",
+        ),
+        WorkspaceFile::new(
+            "caller.rb",
+            "# typed: true\n\nvalue = External.new.value\nT.reveal_type(value)\nif value\n  :reachable\nend\n",
+        ),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(
+        !result.has_errors(),
+        "unexpected workspace diagnostics: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .diagnostic
+                .message
+                .contains("Revealed type: `T.untyped`")
+        }),
+        "missing untyped reveal: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.diagnostic.message.contains("unreachable")),
+        "unexpected unreachable diagnostic: {:?}",
+        result.diagnostics
+    );
+}
