@@ -151,6 +151,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut application_untyped_send_spans = BTreeSet::new();
                 let mut application_untyped_by_origin = BTreeMap::<UntypedOrigin, usize>::new();
                 let mut application_seen_untyped = BTreeSet::new();
+                let mut application_examples_by_origin =
+                    BTreeMap::<UntypedOrigin, Vec<String>>::new();
                 for inferred in &result.types {
                     if !is_application_source(&inferred.path) || !inferred.is_send {
                         continue;
@@ -167,6 +169,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             origin,
                         )) {
                             *application_untyped_by_origin.entry(origin).or_default() += 1;
+                            let examples =
+                                application_examples_by_origin.entry(origin).or_default();
+                            if examples.len() < 5 {
+                                if let Some(source) = sources_by_path.get(&inferred.path) {
+                                    let snippet = source
+                                        .get(inferred.start..inferred.end)
+                                        .unwrap_or_default()
+                                        .replace('\n', " ");
+                                    let line = source[..inferred.start.min(source.len())]
+                                        .bytes()
+                                        .filter(|byte| *byte == b'\n')
+                                        .count()
+                                        + 1;
+                                    examples.push(format!(
+                                        "{}:{} `{}` => `{}`",
+                                        inferred.path.display(),
+                                        line,
+                                        snippet,
+                                        inferred.type_
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
@@ -233,6 +257,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "[typey] application lib {}: {count} unique spans",
                         untyped_origin_label(origin)
                     );
+                    if let Some(examples) = application_examples_by_origin.get(&origin) {
+                        for example in examples {
+                            eprintln!("[typey]   application example: {example}");
+                        }
+                    }
                 }
                 let mut application_files = BTreeMap::<PathBuf, (usize, usize, usize)>::new();
                 for (path, start, end) in &application_syntactic_send_spans {
@@ -260,6 +289,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         sends
                     );
                 }
+                let sorbet_input_syntactic_send_spans = files
+                    .iter()
+                    .filter(|file| is_sorbet_input_source(&file.path))
+                    .flat_map(|file| {
+                        syntactic_send_spans(&file.source)
+                            .into_iter()
+                            .map(|(start, end)| (file.path.clone(), start, end))
+                    })
+                    .collect::<BTreeSet<_>>();
+                let sorbet_input_recorded_send_spans = result
+                    .types
+                    .iter()
+                    .filter(|inferred| is_sorbet_input_source(&inferred.path) && inferred.is_send)
+                    .map(|inferred| (inferred.path.clone(), inferred.start, inferred.end))
+                    .collect::<BTreeSet<_>>();
+                eprintln!(
+                    "[typey] sorbet input send sites: {} source spans, {} recorded spans",
+                    sorbet_input_syntactic_send_spans.len(),
+                    sorbet_input_recorded_send_spans.len()
+                );
                 let explicit_untyped = strict_paths
                     .iter()
                     .filter_map(|path| sources_by_path.get(path))
@@ -358,6 +407,22 @@ fn is_application_source(path: &Path) -> bool {
         && path
             .components()
             .any(|component| component.as_os_str() == std::ffi::OsStr::new("lib"))
+}
+
+fn is_sorbet_input_source(path: &Path) -> bool {
+    if !matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("rb" | "rbi")
+    ) {
+        return false;
+    }
+    let mut saw_sorbet = false;
+    path.components().any(|component| {
+        let name = component.as_os_str();
+        let is_sorbet_rbi = saw_sorbet && name == std::ffi::OsStr::new("rbi");
+        saw_sorbet = name == std::ffi::OsStr::new("sorbet");
+        is_sorbet_rbi || name == std::ffi::OsStr::new("lib")
+    })
 }
 
 #[derive(Default)]
