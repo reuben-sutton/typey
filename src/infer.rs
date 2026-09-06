@@ -6143,7 +6143,7 @@ impl<'src> Analyzer<'src> {
         receiver_type: &Type,
         environment: &mut Environment,
     ) {
-        if !matches!(name, "push" | "<<") {
+        if !matches!(name, "push" | "<<" | "prepend") {
             return;
         }
         let Some(local) = receiver_node.and_then(Node::as_local_variable_read_node) else {
