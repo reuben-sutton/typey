@@ -103,6 +103,11 @@ fn maps_nullable_proc_parameters_to_blocks() {
 }
 
 #[test]
+fn maps_arbitrary_and_anonymous_block_parameter_names() {
+    check_fixture("tests/fixtures/block_parameter_names.rb");
+}
+
+#[test]
 fn narrows_case_after_terminating_type_branch() {
     let result = check_fixture("tests/fixtures/terminating_case_narrowing.rb");
     assert!(result
