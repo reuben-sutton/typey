@@ -1503,6 +1503,38 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     }
 
     fn visit_call_node(&mut self, node: &CallNode<'pr>) {
+        // Mixins are often applied from a top-level setup file rather than
+        // inside the class body (`Minitest::Test.extend(TestMacro)`). Keep
+        // those constant-receiver calls in the class graph so later method
+        // lookup sees the same ancestors Ruby does at runtime.
+        if self.method_depth == 0
+            && node.receiver().is_some()
+            && matches!(
+                prism::constant_name(node.name()).as_str(),
+                "include" | "prepend" | "extend"
+            )
+            && node
+                .arguments()
+                .is_some_and(|arguments| !arguments.arguments().is_empty())
+        {
+            let receiver = node.receiver().expect("receiver was checked");
+            let owner = self.scope_reference(&receiver);
+            if owner != "self" && owner != "super" {
+                if let Some(argument) = node
+                    .arguments()
+                    .and_then(|arguments| arguments.arguments().into_iter().next())
+                {
+                    let module = self.scope_reference(&argument);
+                    let info = self.classes.entry(owner).or_default();
+                    match prism::constant_name(node.name()).as_str() {
+                        "include" => info.includes.push(module),
+                        "prepend" => info.prepends.push(module),
+                        "extend" => info.extends.push(module),
+                        _ => unreachable!("mixin names are checked above"),
+                    }
+                }
+            }
+        }
         if self.method_depth == 0 && node.receiver().is_none() && self.class_stack.last().is_some()
         {
             let name = prism::constant_name(node.name());
