@@ -3979,6 +3979,23 @@ end
 }
 
 #[test]
+fn checks_literal_arrays_as_tuples_through_vendored_rbi() {
+    let source = r#"
+class Collector
+  #: (Array[[String, Integer]]) -> void
+  def initialize(items)
+    items << ["value", 1]
+  end
+end
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("tuple_argument.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"

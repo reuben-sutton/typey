@@ -12354,10 +12354,11 @@ impl<'src> Analyzer<'src> {
     }
 
     fn check_assignable<'node>(&mut self, node: &Node<'node>, actual: &Type, expected: &Type) {
-        if !self.is_assignable(actual, expected) {
+        let actual = self.tuple_literal_argument_type(node, actual, expected);
+        if !self.is_assignable(&actual, expected) {
             let attached_class_expected = Self::contains_attached_class_type(expected);
             let actual = if attached_class_expected {
-                self.literal_type_description(node, actual)
+                self.literal_type_description(node, &actual)
             } else {
                 actual.to_string()
             };
