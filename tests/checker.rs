@@ -4210,6 +4210,26 @@ T.reveal_type(enumerator)
 }
 
 #[test]
+fn models_binding_return_type() {
+    let result = check(
+        r#"
+current_binding = binding
+
+T.reveal_type(current_binding)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `Binding`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
