@@ -2146,6 +2146,15 @@ impl<'src> Analyzer<'src> {
         if info.type_members.is_empty() {
             return type_;
         }
+        if let Some(Type::Named(expected_name, expected_arguments)) =
+            self.expected_return_type.as_ref()
+        {
+            if name_matches(name, expected_name)
+                && expected_arguments.len() == info.type_members.len()
+            {
+                return Type::Named(expected_name.clone(), expected_arguments.clone());
+            }
+        }
         let mut arguments = vec![Type::Any; info.type_members.len()];
         for member in info.type_members.values() {
             arguments[member.index] = member.fixed.as_ref().map_or(Type::Any, |fixed| {
@@ -6133,7 +6142,12 @@ impl<'src> Analyzer<'src> {
         for parameter in &parameters.optionals() {
             if let Some(optional) = parameter.as_optional_parameter_node() {
                 self.bind_parameter(environment, optional.name(), signature, index);
+                let previous_expected_return = self.expected_return_type.take();
+                self.expected_return_type = signature
+                    .and_then(|signature| signature.params.get(index))
+                    .cloned();
                 self.eval_node(&optional.value(), environment);
+                self.expected_return_type = previous_expected_return;
                 index += 1;
             }
         }
@@ -6164,7 +6178,16 @@ impl<'src> Analyzer<'src> {
                 self.bind_keyword_parameter(environment, required.name(), signature);
             } else if let Some(optional) = parameter.as_optional_keyword_parameter_node() {
                 self.bind_keyword_parameter(environment, optional.name(), signature);
+                let previous_expected_return = self.expected_return_type.take();
+                self.expected_return_type = signature
+                    .and_then(|signature| {
+                        signature
+                            .keywords
+                            .get(&prism::constant_name(optional.name()))
+                    })
+                    .map(|parameter| parameter.type_.clone());
                 self.eval_node(&optional.value(), environment);
+                self.expected_return_type = previous_expected_return;
             }
         }
         if let Some(rest) = parameters

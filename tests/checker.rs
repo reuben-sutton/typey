@@ -512,6 +512,35 @@ T.reveal_type(File.new("fixture", "r").first)
 }
 
 #[test]
+fn infers_empty_generic_defaults_from_parameter_types() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "generic_default.rb",
+        r#"# typed: true
+
+class UsesSet
+  #: (?Set[String]) -> void
+  def initialize(values = T.reveal_type(Set.new))
+  end
+end
+"#,
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .diagnostic
+                .message
+                .contains("Revealed type: `Set[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn infers_generic_hash_types_from_nested_pair_arrays() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs load");
