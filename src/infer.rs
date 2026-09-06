@@ -7754,7 +7754,15 @@ impl<'src> Analyzer<'src> {
                     self.constant_reference_name(receiver)
                         .is_some_and(|name| name.trim_start_matches("::") == "Struct")
                 });
-            let mut result = if struct_constructor {
+            let yaml_dump = name == "dump"
+                && argument_types.len() == 1
+                && receiver_node.as_ref().is_some_and(|receiver| {
+                    self.constant_reference_name(receiver)
+                        .is_some_and(|name| name.trim_start_matches("::") == "YAML")
+                });
+            let mut result = if yaml_dump {
+                Type::String
+            } else if struct_constructor {
                 Self::class_object_type("Struct")
             } else if matches!(
                 dispatch_receiver_type,

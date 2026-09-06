@@ -4947,6 +4947,22 @@ T.reveal_type(Psych.dump({"key" => "value"}))
         "{:?}",
         result.diagnostics
     );
+
+    let result = check(
+        r#"
+T.reveal_type(YAML.dump({"key" => "value"}))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
