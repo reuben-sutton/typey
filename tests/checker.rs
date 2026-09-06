@@ -333,6 +333,14 @@ fn preserves_generic_accessor_types_through_nested_iteration() {
 }
 
 #[test]
+fn narrows_nilable_locals_after_safe_navigation_guards() {
+    let result = check_fixture("tests/fixtures/safe_navigation_narrowing.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("Revealed type: `String`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
