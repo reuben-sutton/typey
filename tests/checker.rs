@@ -5058,6 +5058,37 @@ T.reveal_type(Outer::Registry.new.build)
 }
 
 #[test]
+fn resolves_instance_methods_after_implicit_class_construction() {
+    let result = check(
+        r#"
+class Generator
+  class << self
+    def build
+      T.reveal_type(new.generate)
+    end
+  end
+
+  def generate
+    "generated"
+  end
+end
+
+Generator.build
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn refines_or_assignments_to_the_non_nil_rhs() {
     let source = r#"class Example
   #: -> Example

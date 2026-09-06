@@ -2175,6 +2175,9 @@ impl<'src> Analyzer<'src> {
         if let Some(instance) = Self::class_object_instance_type(type_) {
             return instance;
         }
+        if let Type::AttachedClassOf(owner) = type_ {
+            return Type::named(owner.clone());
+        }
         if let Type::Union(members) = type_ {
             return Type::union(members.iter().map(Self::receiver_instance_type));
         }
@@ -9084,6 +9087,8 @@ impl<'src> Analyzer<'src> {
     ) -> Option<MethodKey> {
         let (owner, class_object) = if let Some(owner) = Self::class_object_owner(receiver_type) {
             (owner, true)
+        } else if let Type::AttachedClassOf(owner) = receiver_type {
+            (owner.clone(), false)
         } else if let Type::Named(owner, _) = receiver_type {
             (owner.clone(), false)
         } else {
