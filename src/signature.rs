@@ -443,7 +443,7 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
             .into_iter()
             .filter_map(|part| {
                 split_top_level_colon(&part).map(|(name, ty)| {
-                    param_names.push(name.trim().trim_start_matches('*').to_owned());
+                    param_names.push(normalize_sorbet_parameter_name(name));
                     parse_type(ty)
                 })
             })
@@ -470,6 +470,19 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
     } else {
         None
     }
+}
+
+fn normalize_sorbet_parameter_name(name: &str) -> String {
+    let name = name.trim().trim_start_matches('*').trim();
+    let name = name
+        .strip_prefix('"')
+        .and_then(|name| name.strip_suffix('"'))
+        .or_else(|| {
+            name.strip_prefix('\'')
+                .and_then(|name| name.strip_suffix('\''))
+        })
+        .unwrap_or(name);
+    name.to_owned()
 }
 
 /// Parse a Sorbet `T.type_alias { ... }` expression into the alias body.

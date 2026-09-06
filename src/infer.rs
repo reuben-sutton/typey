@@ -31,6 +31,7 @@ struct ParameterShape {
     keywords: BTreeMap<String, bool>,
     accepts_keyword_rest: bool,
     has_block: bool,
+    block_name: Option<String>,
 }
 
 impl ParameterShape {
@@ -64,6 +65,10 @@ impl ParameterShape {
                     || node.as_forwarding_parameter_node().is_some()
             }),
             has_block: parameters.block().is_some(),
+            block_name: parameters
+                .block()
+                .and_then(|block| block.name())
+                .map(prism::constant_name),
         }
     }
 }
@@ -78,7 +83,9 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     let mut keywords = result.keywords.clone();
     let mut block = result.block.clone();
     for (name, type_) in signature.param_names.iter().zip(&signature.params) {
-        if shape.has_block && matches!(name.as_str(), "blk" | "block") {
+        let is_block_parameter =
+            shape.has_block && (shape.block_name.as_deref() == Some(name.as_str()) || name == "&");
+        if is_block_parameter {
             if let Some(proc_type) = optional_proc_type(type_) {
                 block = Some(proc_type);
                 continue;
