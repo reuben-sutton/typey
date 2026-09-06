@@ -3370,6 +3370,39 @@ impl<'src> Analyzer<'src> {
         );
     }
 
+    fn constant_is_known(&self, environment: &Environment, name: &str) -> bool {
+        let name = name.trim_start_matches("::");
+        if name == "T" || name.starts_with("T::") {
+            return true;
+        }
+        let owner = self.lexical_owner(environment);
+        let resolved = self.resolve_name(name, owner.as_deref());
+        self.classes.contains_key(&resolved)
+            || self.constants.contains_key(&resolved)
+            || self.type_aliases.contains_key(&resolved)
+            || self.known_nominal_name(name)
+            || self.class_name_suffixes.contains_key(name)
+            || self.constant_name_suffixes.contains_key(name)
+    }
+
+    fn report_missing_constant_if_needed<'node>(
+        &mut self,
+        node: &Node<'node>,
+        environment: &Environment,
+        name: &str,
+    ) {
+        if !self.reports_missing_api(node) || self.constant_is_known(environment, name) {
+            return;
+        }
+        self.error(
+            node,
+            format!(
+                "Unable to resolve constant `{}`",
+                name.trim_start_matches("::")
+            ),
+        );
+    }
+
     fn validate_rbs_parameter_kinds(
         &mut self,
         offset: usize,
@@ -4500,11 +4533,14 @@ impl<'src> Analyzer<'src> {
         if let Some(constant) = node.as_constant_read_node() {
             let name = prism::constant_name(constant.name());
             let actual = self.constant_type(environment, &name);
+            self.report_missing_constant_if_needed(node, environment, &name);
             let type_ = self.apply_inline_assertion(node, actual);
             return Eval::value(self.record(node, type_));
         }
         if let Some(path) = node.as_constant_path_node() {
-            let actual = self.constant_type(environment, &self.constant_path_name(&path));
+            let name = self.constant_path_name(&path);
+            let actual = self.constant_type(environment, &name);
+            self.report_missing_constant_if_needed(node, environment, &name);
             let type_ = self.apply_inline_assertion(node, actual);
             return Eval::value(self.record(node, type_));
         }
@@ -7086,19 +7122,63 @@ impl<'src> Analyzer<'src> {
 
     fn known_nominal_name(&self, name: &str) -> bool {
         self.classes.contains_key(name)
+            || matches!(name, "ActiveSupport::Inflector")
             || matches!(
                 name.rsplit_once("::").map_or(name, |(_, tail)| tail),
                 "BasicObject"
                     | "Object"
+                    | "Kernel"
+                    | "Numeric"
                     | "Integer"
                     | "Float"
+                    | "Rational"
+                    | "Complex"
                     | "String"
                     | "Symbol"
                     | "Array"
                     | "Hash"
+                    | "Range"
+                    | "Regexp"
+                    | "MatchData"
+                    | "Encoding"
+                    | "Time"
+                    | "Date"
+                    | "DateTime"
                     | "Class"
                     | "Module"
                     | "Proc"
+                    | "Binding"
+                    | "Method"
+                    | "UnboundMethod"
+                    | "Enumerator"
+                    | "Struct"
+                    | "Thread"
+                    | "Mutex"
+                    | "Ractor"
+                    | "Fiber"
+                    | "IO"
+                    | "File"
+                    | "Dir"
+                    | "ENV"
+                    | "ARGF"
+                    | "Set"
+                    | "Random"
+                    | "SecureRandom"
+                    | "OptionParser"
+                    | "JSON"
+                    | "Psych"
+                    | "YAML"
+                    | "ActiveSupport"
+                    | "ActiveSupport::Inflector"
+                    | "Exception"
+                    | "StandardError"
+                    | "RuntimeError"
+                    | "ArgumentError"
+                    | "TypeError"
+                    | "NameError"
+                    | "NoMethodError"
+                    | "IOError"
+                    | "SystemCallError"
                     | "NilClass"
                     | "TrueClass"
                     | "FalseClass"

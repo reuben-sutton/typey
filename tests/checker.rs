@@ -82,6 +82,11 @@ fn reports_missing_methods_in_typed_true_files() {
 }
 
 #[test]
+fn reports_missing_constants_in_typed_true_files() {
+    check_fixture("tests/fixtures/missing_constants.rb");
+}
+
+#[test]
 fn applies_rubys_implicit_object_superclass() {
     check_fixture("tests/fixtures/default_object_inheritance.rb");
 }
