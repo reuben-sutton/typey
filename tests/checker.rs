@@ -2799,6 +2799,43 @@ T.reveal_type(values)
 }
 
 #[test]
+fn infers_each_with_object_nested_tuple_types_through_append() {
+    let result = check(
+        r#"
+values = T.let(T.unsafe(nil), T::Array[[String, Object]])
+result = values.each_with_object([]) do |(package, dependencies), invalid_packages|
+  invalid_dependencies = if dependencies.is_a?(Array)
+    dependency_values = dependencies #: as Array[Object]
+    dependency_values.filter { |path| path.nil? }
+  else
+    []
+  end
+  T.reveal_type(package)
+  T.reveal_type(dependencies)
+  T.reveal_type(invalid_dependencies)
+  invalid_packages << [package, invalid_dependencies] if invalid_dependencies.any?
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    for expected in [
+        "Revealed type: `String`",
+        "Revealed type: `Object`",
+        "Revealed type: `T::Array[Object]`",
+    ] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing {expected} in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"

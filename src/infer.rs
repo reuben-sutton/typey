@@ -4886,15 +4886,40 @@ impl<'src> Analyzer<'src> {
             environment.bind(prism::constant_name(target.name()), type_);
             return;
         }
+        if let Some(required) = target.as_required_parameter_node() {
+            environment.bind(prism::constant_name(required.name()), type_);
+            return;
+        }
         if let Some(multi) = target.as_multi_target_node() {
-            for child in &multi.lefts() {
-                self.bind_for_target(&child, type_.clone(), environment);
+            let lefts = multi.lefts().into_iter().collect::<Vec<_>>();
+            let rights = multi.rights().into_iter().collect::<Vec<_>>();
+            let known_length = match &type_ {
+                Type::Tuple(elements) => Some(elements.len()),
+                _ => None,
+            };
+            for (index, child) in lefts.iter().enumerate() {
+                self.bind_for_target(
+                    child,
+                    self.multi_assignment_element_type(&type_, index, known_length),
+                    environment,
+                );
             }
             if let Some(rest) = multi.rest() {
-                self.bind_for_target(&rest, Type::Array(Box::new(type_.clone())), environment);
+                self.bind_for_target(
+                    &rest,
+                    Type::Array(Box::new(self.array_element_type(&type_))),
+                    environment,
+                );
             }
-            for child in &multi.rights() {
-                self.bind_for_target(&child, type_.clone(), environment);
+            let right_start = known_length
+                .map(|length| lefts.len().max(length.saturating_sub(rights.len())))
+                .unwrap_or(lefts.len());
+            for (index, child) in rights.iter().enumerate() {
+                self.bind_for_target(
+                    child,
+                    self.multi_assignment_element_type(&type_, right_start + index, known_length),
+                    environment,
+                );
             }
         }
     }
@@ -5168,10 +5193,16 @@ impl<'src> Analyzer<'src> {
         let Some(parameters) = parameters else { return };
         let mut index = 0;
         for parameter in &parameters.requireds() {
-            if let Some(required) = parameter.as_required_parameter_node() {
+            let type_ = signature
+                .and_then(|signature| signature.params.get(index))
+                .cloned()
+                .unwrap_or(Type::Any);
+            if parameter.as_multi_target_node().is_some() {
+                self.bind_for_target(&parameter, type_, environment);
+            } else if let Some(required) = parameter.as_required_parameter_node() {
                 self.bind_parameter(environment, required.name(), signature, index);
-                index += 1;
             }
+            index += 1;
         }
         for parameter in &parameters.optionals() {
             if let Some(optional) = parameter.as_optional_parameter_node() {
@@ -5977,6 +6008,21 @@ impl<'src> Analyzer<'src> {
                 );
                 self.record_method_dependency(&key, environment);
                 if let Some(type_) = tsort_type {
+                    type_
+                } else if matches!(
+                    &dispatch_receiver_type,
+                    Type::Array(_) | Type::Tuple(_)
+                ) && matches!(name.as_str(), "each_with_object" | "filter")
+                {
+                    let type_ = self.eval_method_call(
+                        &dispatch_receiver_type,
+                        &name,
+                        &site,
+                        environment,
+                    );
+                    if type_.contains_any() {
+                        untyped_origin = Some(UntypedOrigin::FallbackCall);
+                    }
                     type_
                 } else {
                     let inferred_accessor = self
