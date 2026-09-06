@@ -442,6 +442,14 @@ fn narrows_rescue_references_to_the_exception_type() {
 }
 
 #[test]
+fn narrows_nested_rescue_collection_elements() {
+    let result = check_fixture("tests/fixtures/nested_rescue_collection.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("Revealed type: `Integer`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
