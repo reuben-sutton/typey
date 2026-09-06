@@ -87,6 +87,19 @@ fn reports_missing_constants_in_typed_true_files() {
 }
 
 #[test]
+fn dispatches_structural_collections_through_vendored_rbis() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs read");
+    files.push(WorkspaceFile::new(
+        "tests/fixtures/collection_rbi_dispatch.rb",
+        std::fs::read_to_string("tests/fixtures/collection_rbi_dispatch.rb")
+            .expect("fixture exists"),
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn applies_rubys_implicit_object_superclass() {
     check_fixture("tests/fixtures/default_object_inheritance.rb");
 }

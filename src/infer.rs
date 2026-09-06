@@ -2668,12 +2668,15 @@ impl<'src> Analyzer<'src> {
             let first = bindings.next()?;
             return Some(bindings.fold(first, |current, member| current.join(&member)));
         }
-        let Type::Named(receiver_owner, arguments) = receiver_type else {
-            return None;
+        let (receiver_owner, arguments) = match receiver_type {
+            Type::Named(receiver_owner, arguments) => (receiver_owner.clone(), arguments.clone()),
+            Type::Array(element) => ("Array".to_owned(), vec![(*element).clone()]),
+            Type::Hash(key, value) => ("Hash".to_owned(), vec![(*key).clone(), (*value).clone()]),
+            _ => return None,
         };
         let (declared_owner, member_name) = name.rsplit_once("::")?;
         let info = self.classes.get(declared_owner)?;
-        let related = receiver_owner == declared_owner
+        let related = receiver_owner.as_str() == declared_owner
             || self
                 .classes
                 .get(&receiver_owner)
@@ -9473,13 +9476,13 @@ impl<'src> Analyzer<'src> {
                 Type::String => "String",
                 Type::Symbol => "Symbol",
                 Type::Object => "Object",
+                Type::Array(_) => "Array",
+                Type::Hash(_, _) => "Hash",
                 Type::Any
                 | Type::Anything
                 | Type::Never
                 | Type::Named(_, _)
-                | Type::Array(_)
                 | Type::Tuple(_)
-                | Type::Hash(_, _)
                 | Type::Proc(_, _)
                 | Type::Intersection(_)
                 | Type::Union(_)
