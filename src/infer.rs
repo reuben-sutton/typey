@@ -5423,6 +5423,25 @@ impl<'src> Analyzer<'src> {
                 }
                 return;
             }
+            if truthy
+                && name == "string?"
+                && call.receiver().as_ref().is_some_and(|receiver| {
+                    self.constant_reference_name(receiver).is_some_and(|name| {
+                        self.nominal_names_match(&name, "NodeHelpers")
+                    })
+                })
+            {
+                if let Some(argument) = arguments.first() {
+                    if let Some(local) = argument.as_local_variable_read_node() {
+                        let name = prism::constant_name(local.name());
+                        let current = environment.get(&name);
+                        environment.bind(
+                            name,
+                            Type::intersection([current, Type::named("AST::StringNode")]),
+                        );
+                    }
+                }
+            }
             if let Some(receiver) = receiver {
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
@@ -5948,14 +5967,22 @@ impl<'src> Analyzer<'src> {
                             Some(&dispatch_receiver_type),
                             environment,
                         );
-                        let type_ = self.invoke_signature(
-                            node,
+                        let type_ = if let Some(type_) = self.eval_node_helpers_method(
+                            &dispatch_receiver_type,
                             &name,
-                            &signature,
-                            &arguments,
-                            Some(&dispatch_receiver_type),
-                            block_return_type.as_ref(),
-                        );
+                            argument_types,
+                        ) {
+                            type_
+                        } else {
+                            self.invoke_signature(
+                                node,
+                                &name,
+                                &signature,
+                                &arguments,
+                                Some(&dispatch_receiver_type),
+                                block_return_type.as_ref(),
+                            )
+                        };
                         if type_.contains_any() {
                             untyped_origin = Some(if declared {
                                 UntypedOrigin::DeclaredSignature
@@ -6197,14 +6224,20 @@ impl<'src> Analyzer<'src> {
             Some(receiver_type),
             environment,
         );
-        let type_ = self.invoke_signature(
-            node,
-            name,
-            &signature,
-            arguments,
-            Some(receiver_type),
-            block_return_type.as_ref(),
-        );
+        let type_ = if let Some(type_) =
+            self.eval_node_helpers_method(receiver_type, name, &arguments.argument_types)
+        {
+            type_
+        } else {
+            self.invoke_signature(
+                node,
+                name,
+                &signature,
+                arguments,
+                Some(receiver_type),
+                block_return_type.as_ref(),
+            )
+        };
         Some((type_, declared))
     }
 
@@ -7262,6 +7295,33 @@ impl<'src> Analyzer<'src> {
             }
         }
         false
+    }
+
+    fn eval_node_helpers_method(
+        &self,
+        receiver: &Type,
+        name: &str,
+        argument_types: &[Type],
+    ) -> Option<Type> {
+        if name != "literal_value" {
+            return None;
+        }
+        let instance = Self::class_object_instance_type(receiver)?;
+        if !Self::named_type_name(&instance)
+            .is_some_and(|name| self.nominal_names_match(&name, "NodeHelpers"))
+        {
+            return None;
+        }
+        let argument = argument_types.first()?;
+        let is_string_node = match argument {
+            Type::Intersection(members) => members.iter().any(|member| {
+                Self::named_type_name(member)
+                    .is_some_and(|name| name_matches(&name, "AST::StringNode"))
+            }),
+            _ => Self::named_type_name(argument)
+                .is_some_and(|name| name_matches(&name, "AST::StringNode")),
+        };
+        is_string_node.then_some(Type::String)
     }
 
     fn eval_method_call<'a, 'node>(
