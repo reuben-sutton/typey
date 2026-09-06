@@ -7769,7 +7769,7 @@ impl<'src> Analyzer<'src> {
             let mut result = if yaml_dump {
                 Type::String
             } else if yaml_load {
-                Type::Object
+                Type::union([Type::Nil, Type::Object])
             } else if struct_constructor {
                 Self::class_object_type("Struct")
             } else if matches!(
@@ -10059,7 +10059,7 @@ impl<'src> Analyzer<'src> {
                 && Self::named_type_name(&instance)
                     .is_some_and(|name| name_matches(&name, "Psych") || name_matches(&name, "YAML"))
             {
-                return Type::Object;
+                return Type::union([Type::Nil, Type::Object]);
             }
             match name {
                 "===" => return Type::bool(),

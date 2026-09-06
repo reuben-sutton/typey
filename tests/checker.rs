@@ -1488,6 +1488,10 @@ fn exercises_structural_lattice_operations() {
         Type::Integer
     );
     assert_eq!(
+        Type::union([Type::Nil, Type::Object]),
+        Type::Union(vec![Type::Nil, Type::Object])
+    );
+    assert_eq!(
         Type::intersection([Type::Object, Type::String]),
         Type::String
     );
@@ -2037,22 +2041,6 @@ T.reveal_type(Box.new.value)
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
-        "{:?}",
-        result.diagnostics
-    );
-
-    let result = check(
-        r#"
-T.reveal_type(YAML.load_file("config.yml"))
-"#,
-        CheckerConfig::default(),
-    );
-    assert!(!result.has_errors(), "{:?}", result.diagnostics);
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("Revealed type: `Object`")),
         "{:?}",
         result.diagnostics
     );
@@ -4976,6 +4964,21 @@ T.reveal_type(YAML.dump({"key" => "value"}))
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
+
+    let result = check(
+        r#"
+T.reveal_type(YAML.load_file("config.yml"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(Object)`")),
         "{:?}",
         result.diagnostics
     );

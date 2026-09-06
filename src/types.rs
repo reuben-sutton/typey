@@ -116,10 +116,15 @@ impl Type {
                     // A union is canonical: once a wider member is present,
                     // narrower alternatives are redundant. This is what
                     // makes `join(Integer, Numeric)` equal to `Numeric`.
-                    if members.iter().any(|member| merged.is_subtype_of(member)) {
+                    if members.iter().any(|member| {
+                        !Self::preserves_nilability(member, &merged) && merged.is_subtype_of(member)
+                    }) {
                         continue;
                     }
-                    members.retain(|member| !member.is_subtype_of(&merged));
+                    members.retain(|member| {
+                        Self::preserves_nilability(member, &merged)
+                            || !member.is_subtype_of(&merged)
+                    });
                     members.push(merged);
                 }
             }
@@ -134,6 +139,13 @@ impl Type {
                 Self::Union(members)
             }
         }
+    }
+
+    fn preserves_nilability(left: &Self, right: &Self) -> bool {
+        matches!(
+            (left, right),
+            (Self::Nil, Self::Object) | (Self::Object, Self::Nil)
+        )
     }
 
     fn structural_join(left: &Self, right: &Self) -> Option<Self> {
