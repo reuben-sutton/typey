@@ -221,6 +221,21 @@ enum AccessorKind {
     Writer,
 }
 
+fn attribute_writer_signature(signature: &MethodSig) -> MethodSig {
+    if !signature.params.is_empty()
+        || !signature.keywords.is_empty()
+        || signature.accepts_rest
+        || signature.block.is_some()
+    {
+        return signature.clone();
+    }
+
+    let mut writer = signature.clone();
+    writer.params = vec![signature.return_type.clone()];
+    writer.required_params = 1;
+    writer
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ClassVarKey {
     owner: String,
@@ -1310,7 +1325,17 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                                 registrar.accessors.insert(key.clone(), kind);
                                 let state = signatures.map_or_else(
                                     || MethodState::inferred_accessor(kind),
-                                    |signatures| MethodState::explicit_overloads(signatures),
+                                    |signatures| {
+                                        let signatures = if kind == AccessorKind::Writer {
+                                            signatures
+                                                .iter()
+                                                .map(attribute_writer_signature)
+                                                .collect::<Vec<_>>()
+                                        } else {
+                                            signatures.clone()
+                                        };
+                                        MethodState::explicit_overloads(&signatures)
+                                    },
                                 );
                                 registrar.methods.entry(key).or_insert(state);
                             };
