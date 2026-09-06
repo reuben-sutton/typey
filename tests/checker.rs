@@ -373,6 +373,11 @@ fn narrows_unions_for_equality_predicates() {
 }
 
 #[test]
+fn reports_unreachable_statement_branches() {
+    check_fixture("tests/fixtures/unreachable_control_flow.rb");
+}
+
+#[test]
 fn models_array_intersection_predicates() {
     let result = check_fixture("tests/fixtures/array_intersect_predicate.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| {

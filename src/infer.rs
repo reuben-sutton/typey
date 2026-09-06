@@ -358,6 +358,7 @@ impl CheckResult {
 pub struct Environment {
     locals: BTreeMap<String, Type>,
     predicate_aliases: BTreeMap<String, PredicateAlias>,
+    known_truthiness: BTreeMap<String, bool>,
     self_type: Type,
     method_key: Option<MethodKey>,
 }
@@ -367,6 +368,7 @@ impl Default for Environment {
         Self {
             locals: BTreeMap::new(),
             predicate_aliases: BTreeMap::new(),
+            known_truthiness: BTreeMap::new(),
             self_type: Type::Object,
             method_key: None,
         }
@@ -388,6 +390,7 @@ impl Environment {
         let name = name.into();
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.remove(&name);
+        self.known_truthiness.remove(&name);
     }
 
     fn bind_predicate_alias(
@@ -398,11 +401,20 @@ impl Environment {
     ) {
         let name = name.into();
         self.locals.insert(name.clone(), type_);
-        self.predicate_aliases.insert(name, alias);
+        self.predicate_aliases.insert(name.clone(), alias);
+        self.known_truthiness.remove(&name);
     }
 
     fn predicate_alias(&self, name: &str) -> Option<&PredicateAlias> {
         self.predicate_aliases.get(name)
+    }
+
+    fn set_known_truthiness(&mut self, name: impl Into<String>, truthy: bool) {
+        self.known_truthiness.insert(name.into(), truthy);
+    }
+
+    fn known_truthiness(&self, name: &str) -> Option<bool> {
+        self.known_truthiness.get(name).copied()
     }
 
     /// Join two control-flow environments using the same type lattice as
@@ -413,11 +425,22 @@ impl Environment {
         let lattice = TypeLattice;
         let mut result = Self {
             locals: BTreeMap::new(),
-            predicate_aliases: if self.predicate_aliases == other.predicate_aliases {
-                self.predicate_aliases.clone()
-            } else {
-                BTreeMap::new()
-            },
+            predicate_aliases: self
+                .predicate_aliases
+                .iter()
+                .filter_map(|(name, alias)| {
+                    (other.predicate_aliases.get(name) == Some(alias))
+                        .then(|| (name.clone(), alias.clone()))
+                })
+                .collect(),
+            known_truthiness: self
+                .known_truthiness
+                .iter()
+                .filter_map(|(name, truthy)| {
+                    (other.known_truthiness.get(name) == Some(truthy))
+                        .then(|| (name.clone(), *truthy))
+                })
+                .collect(),
             self_type: self.self_type.clone(),
             method_key: self.method_key.clone(),
         };
@@ -5332,11 +5355,23 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         let predicate = if_node.predicate();
-        self.eval_node(&predicate, environment);
+        let predicate_type = self
+            .eval_node(&predicate, environment)
+            .normal_type
+            .unwrap_or(Type::Never);
+        let (then_reachable, else_reachable) =
+            self.predicate_reachability(&predicate, environment, &predicate_type);
+        let report_unreachable = self.should_report_unreachable_branch(node)
+            && self.predicate_is_precise(&predicate, environment);
 
         let mut then_environment = environment.clone();
         self.narrow_from_predicate(&predicate, &mut then_environment, true);
         let then_result = if let Some(statements) = if_node.statements() {
+            if !then_reachable && report_unreachable {
+                if let Some(first) = statements.body().into_iter().next() {
+                    self.error(&first, "This code is unreachable");
+                }
+            }
             self.eval_statements(&statements, &mut then_environment)
         } else {
             Eval::value(Type::Nil)
@@ -5345,6 +5380,15 @@ impl<'src> Analyzer<'src> {
         let mut else_environment = environment.clone();
         self.narrow_from_predicate(&predicate, &mut else_environment, false);
         let else_result = if let Some(subsequent) = if_node.subsequent() {
+            if !else_reachable && report_unreachable {
+                if let Some(else_clause) = subsequent.as_else_node() {
+                    if let Some(statements) = else_clause.statements() {
+                        if let Some(first) = statements.body().into_iter().next() {
+                            self.error(&first, "This code is unreachable");
+                        }
+                    }
+                }
+            }
             self.eval_alternative(&subsequent, &mut else_environment)
         } else {
             Eval::value(Type::Nil)
@@ -5369,11 +5413,25 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         let predicate = unless.predicate();
-        self.eval_node(&predicate, environment);
+        let predicate_type = self
+            .eval_node(&predicate, environment)
+            .normal_type
+            .unwrap_or(Type::Never);
+        let (predicate_truthy, predicate_falsy) =
+            self.predicate_reachability(&predicate, environment, &predicate_type);
+        let then_reachable = predicate_falsy;
+        let else_reachable = predicate_truthy;
+        let report_unreachable = self.should_report_unreachable_branch(node)
+            && self.predicate_is_precise(&predicate, environment);
 
         let mut then_environment = environment.clone();
         self.narrow_from_predicate(&predicate, &mut then_environment, false);
         let then_result = if let Some(statements) = unless.statements() {
+            if !then_reachable && report_unreachable {
+                if let Some(first) = statements.body().into_iter().next() {
+                    self.error(&first, "This code is unreachable");
+                }
+            }
             self.eval_statements(&statements, &mut then_environment)
         } else {
             Eval::value(Type::Nil)
@@ -5383,6 +5441,11 @@ impl<'src> Analyzer<'src> {
         self.narrow_from_predicate(&predicate, &mut else_environment, true);
         let else_result = if let Some(else_clause) = unless.else_clause() {
             if let Some(statements) = else_clause.statements() {
+                if !else_reachable && report_unreachable {
+                    if let Some(first) = statements.body().into_iter().next() {
+                        self.error(&first, "This code is unreachable");
+                    }
+                }
                 self.eval_statements(&statements, &mut else_environment)
             } else {
                 Eval::value(Type::Nil)
@@ -5401,6 +5464,146 @@ impl<'src> Analyzer<'src> {
         let type_ = self.apply_inline_assertion(node, result.type_.clone());
         result.type_ = self.record(node, type_);
         result
+    }
+
+    fn predicate_reachability<'node>(
+        &self,
+        node: &Node<'node>,
+        environment: &Environment,
+        predicate_type: &Type,
+    ) -> (bool, bool) {
+        if let Some(parentheses) = node.as_parentheses_node() {
+            if let Some(body) = parentheses.body() {
+                return self.predicate_reachability(&body, environment, predicate_type);
+            }
+        }
+        if let Some(local) = node.as_local_variable_read_node() {
+            if let Some(truthy) = environment.known_truthiness(&prism::constant_name(local.name())) {
+                return (truthy, !truthy);
+            }
+        }
+        if let Some(call) = node.as_call_node() {
+            if prism::constant_name(call.name()) == "!" {
+                if let Some(receiver) = call.receiver() {
+                    let can_refine_receiver = receiver.as_local_variable_read_node().is_some()
+                        || receiver.as_parentheses_node().is_some()
+                        || receiver.as_call_node().is_some_and(|call| {
+                            prism::constant_name(call.name()) == "!"
+                        });
+                    if can_refine_receiver {
+                        let (then_reachable, else_reachable) =
+                            self.predicate_reachability(&receiver, environment, predicate_type);
+                        return (else_reachable, then_reachable);
+                    }
+                    if let Some(receiver_type) = self.recorded_node_type(&receiver) {
+                        return (
+                            !receiver_type.falsy_part().is_never(),
+                            !receiver_type.truthy_part().is_never(),
+                        );
+                    }
+                }
+            }
+        }
+        (
+            !predicate_type.truthy_part().is_never(),
+            !predicate_type.falsy_part().is_never(),
+        )
+    }
+
+    fn predicate_is_precise<'node>(
+        &self,
+        node: &Node<'node>,
+        environment: &Environment,
+    ) -> bool {
+        if let Some(parentheses) = node.as_parentheses_node() {
+            return parentheses
+                .body()
+                .is_some_and(|body| self.predicate_is_precise(&body, environment));
+        }
+        if node.as_statements_node().is_some_and(|statements| {
+            statements
+                .body()
+                .into_iter()
+                .last()
+                .is_some_and(|last| self.predicate_is_precise(&last, environment))
+        }) {
+            return true;
+        }
+        if node.as_true_node().is_some()
+            || node.as_false_node().is_some()
+            || node.as_nil_node().is_some()
+            || node.as_integer_node().is_some()
+            || node.as_string_node().is_some()
+        {
+            return true;
+        }
+        if let Some(local) = node.as_local_variable_read_node() {
+            let name = prism::constant_name(local.name());
+            return environment.known_truthiness(&name).is_some()
+                || !environment.get(&name).is_any();
+        }
+        if let Some(and) = node.as_and_node() {
+            return self.predicate_is_precise(&and.left(), environment)
+                && self.predicate_is_precise(&and.right(), environment);
+        }
+        if let Some(or) = node.as_or_node() {
+            return self.predicate_is_precise(&or.left(), environment)
+                && self.predicate_is_precise(&or.right(), environment);
+        }
+        let Some(call) = node.as_call_node() else {
+            return false;
+        };
+        let name = prism::constant_name(call.name());
+        if name == "!" {
+            return call
+                .receiver()
+                .is_some_and(|receiver| self.predicate_is_precise(&receiver, environment));
+        }
+        if let Some(receiver) = call.receiver() {
+            let receiver_type = self
+                .recorded_node_type(&receiver)
+                .or_else(|| receiver.as_local_variable_read_node().map(|local| {
+                    environment.get(&prism::constant_name(local.name()))
+                }));
+            if let Some(receiver_type) = receiver_type {
+                if let Some(key) = self.receiver_method_key(
+                    Some(&receiver),
+                    &receiver_type,
+                    &name,
+                    environment,
+                ) {
+                    return self
+                        .resolve_method_key(&key)
+                        .and_then(|resolved| self.methods.get(&resolved))
+                        .is_some_and(|state| state.explicit);
+                }
+            }
+        } else {
+            let key = self.implicit_method_key(&name, environment);
+            return self
+                .resolve_method_key(&key)
+                .and_then(|resolved| self.methods.get(&resolved))
+                .is_some_and(|state| state.explicit);
+        }
+        false
+    }
+
+    fn recorded_node_type(&self, node: &Node<'_>) -> Option<Type> {
+        let (start, end) = prism::span(node);
+        self.types
+            .iter()
+            .rev()
+            .find(|inferred| inferred.start == start && inferred.end == end)
+            .map(|inferred| inferred.type_.clone())
+    }
+
+    fn should_report_unreachable_branch(&self, node: &Node<'_>) -> bool {
+        let start = prism::span(node).0;
+        self.source[..start]
+            .iter()
+            .rev()
+            .find(|byte| !byte.is_ascii_whitespace())
+            .is_none_or(|byte| *byte != b'=')
     }
 
     fn eval_alternative<'node>(
@@ -5484,7 +5687,7 @@ impl<'src> Analyzer<'src> {
             if let Some(alias) = environment.predicate_alias(&name).cloned() {
                 let source_current = environment.get(&alias.source);
                 let source_truthy = if alias.negated { !truthy } else { truthy };
-                let source_narrowed = if let Some(expected) = alias.expected {
+                let source_narrowed = if let Some(expected) = alias.expected.as_ref() {
                     if source_truthy {
                         source_current.meet(&expected)
                     } else {
@@ -5495,7 +5698,10 @@ impl<'src> Analyzer<'src> {
                 } else {
                     source_current.falsy_part()
                 };
-                environment.bind(alias.source, source_current.meet(&source_narrowed));
+                environment.bind(alias.source.clone(), source_current.meet(&source_narrowed));
+                if alias.expected.is_none() {
+                    environment.set_known_truthiness(alias.source, source_truthy);
+                }
             }
             let current = environment.get(&name);
             let narrowed = if truthy {
@@ -5503,7 +5709,8 @@ impl<'src> Analyzer<'src> {
             } else {
                 current.falsy_part()
             };
-            environment.bind(name, current.meet(&narrowed));
+            environment.bind(name.clone(), current.meet(&narrowed));
+            environment.set_known_truthiness(name, truthy);
             return;
         }
         if let Some(write) = node.as_local_variable_write_node() {
@@ -5514,7 +5721,8 @@ impl<'src> Analyzer<'src> {
             } else {
                 current.falsy_part()
             };
-            environment.bind(name, current.meet(&narrowed));
+            environment.bind(name.clone(), current.meet(&narrowed));
+            environment.set_known_truthiness(name, truthy);
             return;
         }
         if let Some(instance_variable) = node.as_instance_variable_read_node() {
@@ -7120,7 +7328,28 @@ impl<'src> Analyzer<'src> {
         } else if let Type::Named(owner, _) = receiver_type {
             (owner.clone(), false)
         } else {
-            return None;
+            let owner = match receiver_type {
+                Type::Nil => "NilClass",
+                Type::True => "TrueClass",
+                Type::False => "FalseClass",
+                Type::Object => "Object",
+                Type::Any
+                | Type::Never
+                | Type::Named(_, _)
+                | Type::Integer
+                | Type::Float
+                | Type::String
+                | Type::Symbol
+                | Type::Array(_)
+                | Type::Tuple(_)
+                | Type::Hash(_, _)
+                | Type::Proc(_, _)
+                | Type::Intersection(_)
+                | Type::Union(_)
+                | Type::TypeVar(_)
+                | Type::AttachedClass => return None,
+            };
+            (owner.to_owned(), false)
         };
         let singleton = if class_object {
             true
