@@ -324,7 +324,7 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
             .and_then(|attributes| attributes.first())
         {
             if let Some(text) = pending_rbs.take() {
-                if let Some(signature) = parse_rbs_signature(&text) {
+                if let Some(signature) = parse_rbs_attribute_signature(&text) {
                     table
                         .attribute_annotations
                         .entry(*attribute)
@@ -625,6 +625,13 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
         type_parameters,
         block,
         is_void,
+    })
+}
+
+fn parse_rbs_attribute_signature(text: &str) -> Option<MethodSig> {
+    parse_rbs_signature(text).or_else(|| {
+        let type_ = parse_type(strip_comment_tail(text.trim()));
+        (!type_.is_any()).then(|| MethodSig::new(Vec::new(), type_))
     })
 }
 

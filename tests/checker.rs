@@ -130,9 +130,14 @@ fn specializes_namespaced_generic_members_at_dispatch() {
 #[test]
 fn applies_short_rbs_types_to_generated_accessors() {
     let result = check_fixture("tests/fixtures/short_attribute_type_annotations.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.message.contains("Revealed type: `String`")
-    }), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
