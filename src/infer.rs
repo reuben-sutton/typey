@@ -267,6 +267,7 @@ struct ClassInfo {
     includes: Vec<String>,
     prepends: Vec<String>,
     extends: Vec<String>,
+    requires_ancestors: Vec<String>,
     type_members: BTreeMap<String, GenericMember>,
 }
 
@@ -1142,7 +1143,12 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
 
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode<'pr>) {
         let name = self.scope_name(&node.constant_path());
-        self.classes.entry(name.clone()).or_default();
+        let required_ancestors = self.required_ancestors(&node.as_node());
+        self.classes
+            .entry(name.clone())
+            .or_default()
+            .requires_ancestors
+            .extend(required_ancestors);
         self.class_stack.push(name);
         let singleton_stack = std::mem::take(&mut self.singleton_stack);
         ruby_prism::visit_module_node(self, node);
@@ -1366,6 +1372,30 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
 }
 
 impl MethodRegistrar<'_> {
+    fn required_ancestors<'node>(&self, node: &Node<'node>) -> Vec<String> {
+        let start = prism::span(node).0;
+        let prefix = String::from_utf8_lossy(&self.source[..start]);
+        let mut result = Vec::new();
+        for line in prefix.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Some(value) = trimmed.strip_prefix("# @requires_ancestor:") else {
+                if trimmed.starts_with('#') {
+                    continue;
+                }
+                break;
+            };
+            let value = value.trim();
+            if !value.is_empty() {
+                result.push(value.to_owned());
+            }
+        }
+        result.reverse();
+        result
+    }
+
     fn scope_name<'node>(&self, node: &Node<'node>) -> String {
         let raw = prism::text(self.source, node);
         let absolute = raw.starts_with("::");
@@ -6679,6 +6709,9 @@ impl<'src> Analyzer<'src> {
                 }
             }
             if !singleton {
+                for ancestor in info.requires_ancestors.iter().rev() {
+                    self.append_method_candidates(ancestor, name, false, visited, candidates);
+                }
                 for module in info.includes.iter().rev() {
                     self.append_method_candidates(module, name, false, visited, candidates);
                 }
@@ -9195,11 +9228,17 @@ impl<'src> Analyzer<'src> {
                 .iter()
                 .map(|name| self.resolve_name(name, Some(&owner)))
                 .collect();
+            let requires_ancestors = info
+                .requires_ancestors
+                .iter()
+                .map(|name| self.resolve_name(name, Some(&owner)))
+                .collect();
             if let Some(info) = self.classes.get_mut(&owner) {
                 info.superclass = superclass;
                 info.includes = includes;
                 info.prepends = prepends;
                 info.extends = extends;
+                info.requires_ancestors = requires_ancestors;
             }
         }
     }
