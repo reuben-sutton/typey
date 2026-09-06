@@ -9,6 +9,9 @@ use std::fmt;
 pub enum Type {
     /// Sorbet's gradual escape hatch.
     Any,
+    /// Sorbet's static top type: every value can flow to it, but it does not
+    /// permit arbitrary method calls like `T.untyped` does.
+    Anything,
     /// The uninhabited type, used for unreachable expressions.
     Never,
     Nil,
@@ -78,6 +81,7 @@ impl Type {
         while let Some(ty) = pending.pop() {
             match ty {
                 Self::Any => return Self::Any,
+                Self::Anything => return Self::Anything,
                 Self::Never => {}
                 Self::Union(inner) => pending.extend(inner),
                 other => {
@@ -189,6 +193,12 @@ impl Type {
         if self.is_any() {
             return other.clone();
         }
+        if matches!(self, Self::Anything) {
+            return other.clone();
+        }
+        if matches!(other, Self::Anything) {
+            return self.clone();
+        }
         if other.is_any() || self == other {
             return self.clone();
         }
@@ -260,6 +270,7 @@ impl Type {
             match ty {
                 Self::Never => return Self::Never,
                 Self::Any => {}
+                Self::Anything => {}
                 Self::Intersection(inner) => pending.extend(inner),
                 other => {
                     if members
@@ -309,6 +320,7 @@ impl Type {
                 members.iter().any(Self::contains_any)
             }
             Self::Never
+            | Self::Anything
             | Self::Nil
             | Self::True
             | Self::False
@@ -341,6 +353,7 @@ impl Type {
     pub fn without(&self, excluded: &Self) -> Self {
         match self {
             Self::Any => Self::Any,
+            Self::Anything => Self::Anything,
             Self::Union(members) => Self::union(members.iter().filter_map(|member| {
                 if member.is_subtype_of(excluded) {
                     None
@@ -378,6 +391,9 @@ impl Type {
     pub fn is_subtype_of(&self, expected: &Self) -> bool {
         if matches!(self, Self::Never) || matches!(expected, Self::Any) || matches!(self, Self::Any)
         {
+            return true;
+        }
+        if matches!(expected, Self::Anything) {
             return true;
         }
         if self == expected {
@@ -533,6 +549,7 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Any => write!(f, "T.untyped"),
+            Self::Anything => write!(f, "T.anything"),
             Self::Never => write!(f, "T.noreturn"),
             Self::Nil => write!(f, "NilClass"),
             Self::True => write!(f, "TrueClass"),

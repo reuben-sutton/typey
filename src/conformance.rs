@@ -1,7 +1,10 @@
 use crate::diagnostic::Severity;
-use crate::infer::check_with_rbi_ranges;
+use crate::infer::{check_with_rbi_ranges, InferredType};
 use crate::workspace::is_ruby_source;
-use crate::{check, CheckResult, CheckerConfig};
+use crate::{
+    builtin_rbi_paths, check, check_workspace, load_workspace_paths, CheckResult, CheckerConfig,
+    WorkspaceFile,
+};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -94,6 +97,30 @@ pub fn check_fixture(path: &Path, config: CheckerConfig) -> io::Result<FixtureRe
     let expected = expectations(&source);
     let result = if path.extension().and_then(|extension| extension.to_str()) == Some("rbi") {
         check_with_rbi_ranges(&source, config, &[(0, source.len())])
+    } else if let Ok(paths) = builtin_rbi_paths() {
+        let mut files = load_workspace_paths(&paths)?;
+        files.push(WorkspaceFile::new(path.to_owned(), source.clone()));
+        let workspace = check_workspace(&files, config);
+        CheckResult {
+            diagnostics: workspace
+                .diagnostics
+                .into_iter()
+                .filter(|diagnostic| diagnostic.path == path)
+                .map(|diagnostic| diagnostic.diagnostic)
+                .collect(),
+            types: workspace
+                .types
+                .into_iter()
+                .filter(|inferred| inferred.path == path)
+                .map(|inferred| InferredType {
+                    start: inferred.start,
+                    end: inferred.end,
+                    type_: inferred.type_,
+                    untyped_origin: inferred.untyped_origin,
+                    is_send: inferred.is_send,
+                })
+                .collect(),
+        }
     } else {
         check(&source, config)
     };

@@ -77,6 +77,19 @@ fn checks_sorbet_sig_calls() {
 }
 
 #[test]
+fn distinguishes_static_top_from_untyped() {
+    let result = check_fixture("tests/fixtures/static_top.rb");
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `T.anything`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn checks_splat_call_shapes() {
     check_fixture("tests/fixtures/splat_comparison.rb");
 }
@@ -484,6 +497,64 @@ fn reports_unreachable_statement_branches() {
 fn narrows_class_objects_by_subclass_comparisons() {
     let result = check_fixture("tests/fixtures/class_object_subclass_narrowing.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn dispatches_class_object_methods_through_intersections() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "class_object_intersection.rb",
+        r#"# typed: true
+
+module Exportable
+  extend T::Sig
+  sig { returns(Integer) }
+  def export
+    0
+  end
+end
+
+class Base
+  extend T::Sig
+  sig { params(value: String).returns(T.nilable(T.attached_class)) }
+  def self.find(value); end
+end
+
+extend T::Sig
+sig { params(klass: T.class_of(Base)).void }
+def deserialize(klass)
+  if klass < Exportable
+    value = klass.find("foo")
+    T.reveal_type(value)
+    raise unless value
+    T.reveal_type(value)
+    exported = value.export
+    T.reveal_type(exported)
+  end
+end
+"#,
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes.iter().any(|message| message.contains("T.nilable")),
+        "{notes:?}"
+    );
+    assert!(
+        notes.iter().any(|message| message.contains("T.all")),
+        "{notes:?}"
+    );
+    assert!(
+        notes.iter().any(|message| message.contains("Integer")),
+        "{notes:?}"
+    );
 }
 
 #[test]

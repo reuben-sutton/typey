@@ -199,6 +199,7 @@ fn merge_method_signatures(signatures: &[MethodSig]) -> MethodSig {
             .cloned()
             .reduce(|current, block| current.join(&block)),
         is_void: signatures.iter().all(|signature| signature.is_void),
+        is_abstract: signatures.iter().all(|signature| signature.is_abstract),
     }
 }
 
@@ -263,6 +264,8 @@ struct GenericMember {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ClassInfo {
+    is_module: bool,
+    attached_class_member: Option<usize>,
     superclass: Option<String>,
     includes: Vec<String>,
     prepends: Vec<String>,
@@ -811,6 +814,7 @@ struct MethodState {
     accepts_rest: bool,
     accepts_keyword_rest: bool,
     is_void: bool,
+    is_abstract: bool,
     explicit: bool,
     overloads: Vec<MethodSig>,
 }
@@ -851,6 +855,7 @@ impl MethodState {
             accepts_rest: signature.accepts_rest,
             accepts_keyword_rest: signature.accepts_keyword_rest,
             is_void: signature.is_void,
+            is_abstract: signature.is_abstract,
             explicit: true,
             overloads: signatures.to_vec(),
         }
@@ -909,6 +914,7 @@ impl MethodState {
                         || node.as_forwarding_parameter_node().is_some()
                 }),
                 is_void: false,
+                is_abstract: false,
                 explicit: false,
                 overloads: Vec::new(),
             };
@@ -928,6 +934,7 @@ impl MethodState {
             accepts_rest: false,
             accepts_keyword_rest: false,
             is_void: false,
+            is_abstract: false,
             explicit: false,
             overloads: Vec::new(),
         }
@@ -972,6 +979,7 @@ impl MethodState {
             type_parameters: Vec::new(),
             block: self.block.clone(),
             is_void: false,
+            is_abstract: self.is_abstract,
         }
     }
 
@@ -1011,6 +1019,7 @@ impl MethodState {
                 })
             }),
             is_void: self.is_void,
+            is_abstract: self.is_abstract,
         }
     }
 
@@ -1234,11 +1243,9 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode<'pr>) {
         let name = self.scope_name(&node.constant_path());
         let required_ancestors = self.required_ancestors(&node.as_node());
-        self.classes
-            .entry(name.clone())
-            .or_default()
-            .requires_ancestors
-            .extend(required_ancestors);
+        let info = self.classes.entry(name.clone()).or_default();
+        info.is_module = true;
+        info.requires_ancestors.extend(required_ancestors);
         self.class_stack.push(name);
         let singleton_stack = std::mem::take(&mut self.singleton_stack);
         ruby_prism::visit_module_node(self, node);
@@ -1334,6 +1341,24 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                     .map(|argument| self.method_name(&argument))
                     .collect::<Vec<_>>()
             });
+            if name == "has_attached_class!" && arguments.is_none() {
+                if let Some(owner) = self
+                    .singleton_stack
+                    .last()
+                    .cloned()
+                    .or_else(|| self.class_stack.last().cloned())
+                {
+                    let info = self.classes.entry(owner).or_default();
+                    let index = info
+                        .type_members
+                        .get("out")
+                        .map_or_else(|| info.type_members.len(), |member| member.index);
+                    info.type_members
+                        .entry("out".to_owned())
+                        .or_insert_with(|| GenericMember { index, fixed: None });
+                    info.attached_class_member = Some(index);
+                }
+            }
             if let Some(arguments) = arguments {
                 if let Some(module) = arguments.first() {
                     let Some(owner) = self
@@ -1400,6 +1425,28 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                                 );
                             }
                         }
+                    }
+                }
+                if name == "has_attached_class!" {
+                    let owner = self
+                        .singleton_stack
+                        .last()
+                        .cloned()
+                        .or_else(|| self.class_stack.last().cloned());
+                    if let Some(owner) = owner {
+                        let member_name = arguments
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "out".to_owned());
+                        let info = self.classes.entry(owner).or_default();
+                        let index = info
+                            .type_members
+                            .get(&member_name)
+                            .map_or(info.type_members.len(), |member| member.index);
+                        info.type_members
+                            .entry(member_name)
+                            .or_insert_with(|| GenericMember { index, fixed: None });
+                        info.attached_class_member = Some(index);
                     }
                 }
                 if matches!(
@@ -1783,7 +1830,9 @@ impl<'src> Analyzer<'src> {
 
     fn class_object_instance_type(type_: &Type) -> Option<Type> {
         match type_ {
-            Type::Named(name, arguments) if name_matches(name, "Class") => {
+            Type::Named(name, arguments)
+                if name_matches(name, "Class") || name_matches(name, "Module") =>
+            {
                 arguments.first().cloned()
             }
             _ => None,
@@ -1865,6 +1914,9 @@ impl<'src> Analyzer<'src> {
         if let Type::Union(members) = type_ {
             return Type::union(members.iter().map(Self::receiver_instance_type));
         }
+        if let Type::Intersection(members) = type_ {
+            return Type::intersection(members.iter().map(Self::receiver_instance_type));
+        }
         type_.clone()
     }
 
@@ -1886,52 +1938,107 @@ impl<'src> Analyzer<'src> {
         }
     }
 
-    fn substitute_instance_type(type_: &Type, receiver_type: Option<&Type>) -> Type {
+    fn attached_class_type(&self, receiver_type: Option<&Type>) -> Type {
+        let Some(receiver_type) = receiver_type else {
+            return Type::AttachedClass;
+        };
+        if let Some(instance) = Self::class_object_instance_type(receiver_type) {
+            return instance;
+        }
+        match receiver_type {
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|member| self.attached_class_type(Some(member))),
+            ),
+            Type::Intersection(members) => members
+                .iter()
+                .find_map(|member| self.attached_class_member_type(member))
+                .unwrap_or_else(|| Self::receiver_instance_type(receiver_type)),
+            Type::Named(name, arguments) => self
+                .classes
+                .get(name)
+                .and_then(|info| info.attached_class_member)
+                .and_then(|index| arguments.get(index).cloned())
+                .unwrap_or_else(|| Self::receiver_instance_type(receiver_type)),
+            _ => Self::receiver_instance_type(receiver_type),
+        }
+    }
+
+    fn attached_class_member_type(&self, receiver_type: &Type) -> Option<Type> {
+        if let Some(instance) = Self::class_object_instance_type(receiver_type) {
+            return Some(instance);
+        }
+        let Type::Named(name, arguments) = receiver_type else {
+            return None;
+        };
+        let index = self.classes.get(name)?.attached_class_member?;
+        arguments.get(index).cloned()
+    }
+
+    fn substitute_instance_type(
+        type_: &Type,
+        receiver_type: Option<&Type>,
+        attached_class: &Type,
+    ) -> Type {
         match type_ {
             Type::Named(name, arguments) if name == "instance" && arguments.is_empty() => {
                 receiver_type.map_or_else(|| type_.clone(), Self::receiver_instance_type)
             }
-            Type::AttachedClass => {
-                receiver_type.map_or_else(|| Type::AttachedClass, Self::receiver_instance_type)
-            }
+            Type::AttachedClass => attached_class.clone(),
             Type::Named(name, arguments) => Type::Named(
                 name.clone(),
                 arguments
                     .iter()
-                    .map(|argument| Self::substitute_instance_type(argument, receiver_type))
+                    .map(|argument| {
+                        Self::substitute_instance_type(argument, receiver_type, attached_class)
+                    })
                     .collect(),
             ),
             Type::Array(element) => Type::Array(Box::new(Self::substitute_instance_type(
                 element,
                 receiver_type,
+                attached_class,
             ))),
             Type::Hash(key, value) => Type::Hash(
-                Box::new(Self::substitute_instance_type(key, receiver_type)),
-                Box::new(Self::substitute_instance_type(value, receiver_type)),
+                Box::new(Self::substitute_instance_type(
+                    key,
+                    receiver_type,
+                    attached_class,
+                )),
+                Box::new(Self::substitute_instance_type(
+                    value,
+                    receiver_type,
+                    attached_class,
+                )),
             ),
             Type::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
-                    .map(|element| Self::substitute_instance_type(element, receiver_type))
+                    .map(|element| {
+                        Self::substitute_instance_type(element, receiver_type, attached_class)
+                    })
                     .collect(),
             ),
             Type::Proc(parameters, result) => Type::Proc(
                 parameters
                     .iter()
-                    .map(|parameter| Self::substitute_instance_type(parameter, receiver_type))
+                    .map(|parameter| {
+                        Self::substitute_instance_type(parameter, receiver_type, attached_class)
+                    })
                     .collect(),
-                Box::new(Self::substitute_instance_type(result, receiver_type)),
+                Box::new(Self::substitute_instance_type(
+                    result,
+                    receiver_type,
+                    attached_class,
+                )),
             ),
-            Type::Union(members) => Type::union(
-                members
-                    .iter()
-                    .map(|member| Self::substitute_instance_type(member, receiver_type)),
-            ),
-            Type::Intersection(members) => Type::intersection(
-                members
-                    .iter()
-                    .map(|member| Self::substitute_instance_type(member, receiver_type)),
-            ),
+            Type::Union(members) => Type::union(members.iter().map(|member| {
+                Self::substitute_instance_type(member, receiver_type, attached_class)
+            })),
+            Type::Intersection(members) => Type::intersection(members.iter().map(|member| {
+                Self::substitute_instance_type(member, receiver_type, attached_class)
+            })),
             other => other.clone(),
         }
     }
@@ -2483,7 +2590,8 @@ impl<'src> Analyzer<'src> {
         type_parameters: &[String],
     ) -> Type {
         let names = type_parameters.iter().cloned().collect::<BTreeSet<_>>();
-        let type_ = Self::substitute_instance_type(type_, receiver_type);
+        let attached_class = self.attached_class_type(receiver_type);
+        let type_ = Self::substitute_instance_type(type_, receiver_type, &attached_class);
         let type_ = self.substitute_generic_members(&type_, receiver_type, bindings);
         Self::substitute_type_parameters(&type_, bindings, &names)
     }
@@ -5198,7 +5306,7 @@ impl<'src> Analyzer<'src> {
         };
         self.expected_return_type = previous_expected_return;
         let inferred_return = body_result.method_return_type();
-        if state.explicit && !state.is_void && !self.is_rbi_definition(node) {
+        if state.explicit && !state.is_void && !state.is_abstract && !self.is_rbi_definition(node) {
             let expected = self.substitute_method_signature(
                 &state.call_signature(),
                 Some(&method_environment.self_type),
@@ -6114,6 +6222,21 @@ impl<'src> Analyzer<'src> {
         if !self.known_nominal_name(&actual_name) || !self.known_nominal_name(&expected_name) {
             return false;
         }
+        // A Ruby class can include a module (and a module can be mixed into
+        // another module), so two nominal names are not enough to prove that
+        // this refinement is impossible. Sorbet keeps the class-object
+        // intersection in cases such as `klass < Exportable`.
+        if self
+            .classes
+            .get(&actual_name)
+            .is_some_and(|info| info.is_module)
+            || self
+                .classes
+                .get(&expected_name)
+                .is_some_and(|info| info.is_module)
+        {
+            return false;
+        }
         !self.nominal_subtype(&actual_name, &expected_name)
             && !self.nominal_subtype(&expected_name, &actual_name)
     }
@@ -6666,6 +6789,13 @@ impl<'src> Analyzer<'src> {
             let mut result = if matches!(
                 dispatch_receiver_type,
                 Type::Union(_) | Type::Intersection(_)
+            ) || matches!(
+                &dispatch_receiver_type,
+                Type::Named(name, arguments)
+                    if (name_matches(name, "Class") || name_matches(name, "Module"))
+                        && arguments
+                            .first()
+                            .is_some_and(|argument| matches!(argument, Type::Intersection(_)))
             ) {
                 let (type_, fallback_origin) = self.eval_polymorphic_receiver_call(
                     node,
@@ -6813,8 +6943,15 @@ impl<'src> Analyzer<'src> {
                     }
                 }
             } else {
-                let type_ =
-                    self.eval_method_call(&dispatch_receiver_type, &name, &site, environment);
+                let type_ = if dispatch_receiver_type == Type::Anything {
+                    self.error(
+                        node,
+                        format!("Method `{name}` does not exist on `T.anything`"),
+                    );
+                    Type::Any
+                } else {
+                    self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
+                };
                 if type_.contains_any() {
                     untyped_origin = Some(if dispatch_receiver_type.contains_any() {
                         UntypedOrigin::Propagated
@@ -6857,6 +6994,12 @@ impl<'src> Analyzer<'src> {
                 result
             }
         };
+
+        if name == "!" {
+            // Even when a builtin RBI specializes TrueClass#! or FalseClass#!,
+            // Ruby's unary negation is exposed as the boolean protocol.
+            callee_type = Type::bool();
+        }
 
         // Ruby setter calls evaluate to the assigned value, regardless of the
         // setter method's declared return type. Equality and ordering methods
@@ -7008,6 +7151,45 @@ impl<'src> Analyzer<'src> {
                 if result.is_never() { Type::Any } else { result },
                 fallback_origin,
             );
+        }
+
+        // `T.class_of(Foo)[T.all(Foo, M)]` is still a class object whose
+        // singleton methods come from Foo. Look up those methods through the
+        // intersected instance members while retaining the full receiver for
+        // `T.attached_class` substitution.
+        if let Type::Named(class, type_arguments) = receiver_type {
+            if (name_matches(class, "Class") || name_matches(class, "Module"))
+                && type_arguments
+                    .first()
+                    .is_some_and(|argument| matches!(argument, Type::Intersection(_)))
+            {
+                if let Some(Type::Intersection(members)) = type_arguments.first() {
+                    for member in members {
+                        let candidate = Type::Named(class.clone(), vec![member.clone()]);
+                        let Some(key) =
+                            self.receiver_method_key(receiver_node, &candidate, name, environment)
+                        else {
+                            continue;
+                        };
+                        if let Some((type_, declared)) = self.eval_resolved_receiver_call(
+                            node,
+                            name,
+                            &key,
+                            receiver_type,
+                            arguments,
+                            block,
+                            environment,
+                        ) {
+                            let origin = if declared {
+                                UntypedOrigin::DeclaredSignature
+                            } else {
+                                UntypedOrigin::InferredMethod
+                            };
+                            return (type_, origin);
+                        }
+                    }
+                }
+            }
         }
 
         if let Type::Intersection(members) = receiver_type {
@@ -7652,6 +7834,7 @@ impl<'src> Analyzer<'src> {
                 Type::False => "FalseClass",
                 Type::Object => "Object",
                 Type::Any
+                | Type::Anything
                 | Type::Never
                 | Type::Named(_, _)
                 | Type::Integer
@@ -8399,6 +8582,7 @@ impl<'src> Analyzer<'src> {
         if name == "class" {
             return match receiver {
                 Type::Any => Type::Any,
+                Type::Anything => Type::Any,
                 Type::Never => Type::Never,
                 Type::True => Self::class_object_type("TrueClass"),
                 Type::False => Self::class_object_type("FalseClass"),
@@ -8780,7 +8964,7 @@ impl<'src> Analyzer<'src> {
                 }
                 self.eval_common_method(name)
             }
-            Type::Any | Type::Object | Type::TypeVar(_) | Type::AttachedClass => {
+            Type::Any | Type::Anything | Type::Object | Type::TypeVar(_) | Type::AttachedClass => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, &[Type::Any], environment);
                 }

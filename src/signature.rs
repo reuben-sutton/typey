@@ -32,6 +32,9 @@ pub struct MethodSig {
     /// `void` is an effect/contract: calls produce Nil, but the final Ruby
     /// expression in the implementation is not checked as a return value.
     pub is_void: bool,
+    /// Abstract signatures describe an interface and do not require the
+    /// implementation body to satisfy the declared return type.
+    pub is_abstract: bool,
 }
 
 impl MethodSig {
@@ -43,6 +46,7 @@ impl MethodSig {
             rest_index: None,
             accepts_keyword_rest: false,
             is_void: false,
+            is_abstract: false,
             keywords: BTreeMap::new(),
             param_names: Vec::new(),
             params,
@@ -484,18 +488,24 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
     });
 
     let is_void = has_top_level_void(text);
+    let is_abstract = text.contains("abstract");
     let return_type = if is_void {
         Type::Nil
     } else {
         extract_call(text, "returns").map_or(Type::Any, |body| parse_type(&body))
     };
 
-    if text.contains("params") || text.contains("returns") || is_void || !type_parameters.is_empty()
+    if text.contains("params")
+        || text.contains("returns")
+        || is_void
+        || is_abstract
+        || !type_parameters.is_empty()
     {
         let mut signature = MethodSig::new(params, return_type);
         signature.param_names = param_names;
         signature.type_parameters = type_parameters;
         signature.is_void = is_void;
+        signature.is_abstract = is_abstract;
         Some(signature)
     } else {
         None
@@ -668,6 +678,7 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
         type_parameters,
         block,
         is_void,
+        is_abstract: false,
     })
 }
 
@@ -777,7 +788,8 @@ pub fn parse_type(raw: &str) -> Type {
     let normalized = text.trim_start_matches("::");
     let lower = normalized.to_ascii_lowercase();
     match lower.as_str() {
-        "untyped" | "any" | "top" | "t.untyped" | "t.anything" => return Type::Any,
+        "untyped" | "t.untyped" => return Type::Any,
+        "any" | "top" | "t.anything" => return Type::Anything,
         "bot" | "bottom" | "t.noreturn" => return Type::Never,
         "t.attached_class" => return Type::AttachedClass,
         "t.self_type" | "t::self_type" => return Type::named("instance"),
