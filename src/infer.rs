@@ -7339,6 +7339,7 @@ impl<'src> Analyzer<'src> {
                 Type::Hash(Box::new(Type::Any), Box::new(Type::Any))
             }
             "lambda" | "proc" => Type::Proc(Vec::new(), Box::new(Type::Any)),
+            "enum_for" => Type::named("Enumerator"),
             "rand" => Type::Float,
             "sleep" => Type::Integer,
             "include" | "prepend" | "extend" | "alias_method" | "attr_reader" | "attr_writer"
