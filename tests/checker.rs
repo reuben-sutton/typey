@@ -2172,6 +2172,40 @@ T.reveal_type(Finder.new.find { |value| value.length > 0 })
 }
 
 #[test]
+fn infers_generic_block_returns_through_nilable_block_signatures() {
+    let result = check(
+        r#"
+class Mapper
+  sig do
+    type_parameters(:U, :V).params(
+      blk: T.nilable(
+        T.proc.params(arg0: String).returns([
+          T.type_parameter(:U),
+          T.type_parameter(:V)
+        ])
+      )
+    ).returns(T::Hash[T.type_parameter(:U), T.type_parameter(:V)])
+  end
+  def to_h(&blk)
+    {}
+  end
+end
+
+T.reveal_type(Mapper.new.to_h { |value| [value, value.length] })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T::Hash[String, Integer]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn infers_dir_globs_as_string_arrays() {
     let result = check(
         r#"
