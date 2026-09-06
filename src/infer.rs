@@ -7789,9 +7789,28 @@ impl<'src> Analyzer<'src> {
                     Type::Named(class.clone(), Vec::new())
                 }
             }
-            Type::Named(class, _) if name_matches(class, "Set") => match name {
+            Type::Named(class, arguments) if name_matches(class, "Set") => match name {
                 "empty?" | "include?" | "member?" => Type::bool(),
                 "length" | "size" => Type::Integer,
+                "to_a" => Type::Array(Box::new(
+                    arguments.first().cloned().unwrap_or(Type::Any),
+                )),
+                "-" => Type::Named(class.clone(), arguments.clone()),
+                "|" | "&" | "+" => {
+                    let element = arguments.first().cloned().unwrap_or(Type::Any);
+                    let other = site
+                        .argument_types
+                        .first()
+                        .and_then(|argument| match argument {
+                            Type::Named(other_class, other_arguments)
+                                if name_matches(other_class, "Set") => {
+                                    other_arguments.first().cloned()
+                                }
+                            _ => None,
+                        })
+                        .unwrap_or(Type::Any);
+                    Type::Named(class.clone(), vec![element.join(&other)])
+                }
                 _ => self.eval_common_method(name),
             },
             Type::Named(class, _) if name_matches(class, "Regexp") => match name {
