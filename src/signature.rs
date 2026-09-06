@@ -796,7 +796,7 @@ pub fn parse_rbs_type_parameters(text: &str) -> Option<Vec<String>> {
 
 #[must_use]
 pub fn parse_type(raw: &str) -> Type {
-    let mut text = strip_comment_tail(raw.trim()).trim().to_owned();
+    let mut text = strip_type_comments(raw.trim()).trim().to_owned();
     while text.starts_with('(') && text.ends_with(')') {
         if matching_delimiter(&text, 0, '(', ')') == Some(text.len() - 1) {
             text = text[1..text.len() - 1].trim().to_owned();
@@ -878,6 +878,7 @@ pub fn parse_type(raw: &str) -> Type {
                     return Type::union(
                         split_top_level(body, ',')
                             .into_iter()
+                            .filter(|part| !part.trim().is_empty())
                             .map(|part| parse_type(&part)),
                     )
                 }
@@ -885,6 +886,7 @@ pub fn parse_type(raw: &str) -> Type {
                     return Type::intersection(
                         split_top_level(body, ',')
                             .into_iter()
+                            .filter(|part| !part.trim().is_empty())
                             .map(|part| parse_type(&part)),
                     )
                 }
@@ -1158,6 +1160,57 @@ fn line_spans(source: &str) -> Vec<(usize, &str)> {
 
 fn strip_comment_tail(text: &str) -> &str {
     text.split('#').next().unwrap_or(text).trim()
+}
+
+/// Remove Ruby comments from a potentially multiline type expression without
+/// truncating the expression at a comment nested inside its delimiters.
+///
+/// Sorbet signatures commonly format a `T.any` over several lines and put a
+/// comment after one of the members. Keeping newlines and replacing comment
+/// text with spaces preserves delimiter positions while allowing the parser to
+/// see the closing `)`.
+fn strip_type_comments(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut quote = None;
+    let mut escaped = false;
+    let mut comment = false;
+
+    for character in text.chars() {
+        if comment {
+            if character == '\n' {
+                comment = false;
+                result.push(character);
+            } else {
+                result.push(' ');
+            }
+            continue;
+        }
+        if escaped {
+            escaped = false;
+            result.push(character);
+            continue;
+        }
+        if let Some(current_quote) = quote {
+            if character == '\\' {
+                escaped = true;
+            } else if character == current_quote {
+                quote = None;
+            }
+            result.push(character);
+            continue;
+        }
+        if character == '\'' || character == '"' {
+            quote = Some(character);
+            result.push(character);
+        } else if character == '#' {
+            comment = true;
+            result.push(' ');
+        } else {
+            result.push(character);
+        }
+    }
+
+    result
 }
 
 fn extract_call(text: &str, name: &str) -> Option<String> {

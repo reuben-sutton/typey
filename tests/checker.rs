@@ -1519,6 +1519,12 @@ fn parses_the_supported_advanced_sorbet_type_forms() {
         Type::union([Type::Integer, Type::String])
     );
     assert_eq!(
+        typey::signature::parse_type(
+            "T.any(\n  String,\n  Integer, # Numeric values are also accepted.\n  Float,\n)"
+        ),
+        Type::union([Type::String, Type::Integer, Type::Float])
+    );
+    assert_eq!(
         typey::signature::parse_type("T.all(Object, String)"),
         Type::intersection([Type::Object, Type::String])
     );
