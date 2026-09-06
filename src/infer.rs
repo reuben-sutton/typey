@@ -12400,6 +12400,13 @@ impl<'src> Analyzer<'src> {
                     return Type::Array(Box::new(self.flat_map_element_type(block_return_type)));
                 }
             }
+            if name == "to_h" {
+                if let Some(block_return_type) = block_return_type {
+                    if let Some((key, value)) = Self::pair_types(block_return_type) {
+                        return Type::Hash(Box::new(key), Box::new(value));
+                    }
+                }
+            }
             if name == "grep" {
                 if let Some(expected) = arguments
                     .argument_types

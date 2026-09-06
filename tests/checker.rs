@@ -4073,6 +4073,37 @@ end
 }
 
 #[test]
+fn infers_to_h_pairs_through_vendored_rbi() {
+    let source = r#"
+class Entry
+  #: -> String
+  def key
+    "entry"
+  end
+end
+
+entries = [Entry.new]
+T.reveal_type(entries.to_h { |entry| [entry.key, entry] })
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("to_h_pairs.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.diagnostic.severity == Severity::Note
+                && diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Revealed type: `T::Hash[String, Entry]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"
