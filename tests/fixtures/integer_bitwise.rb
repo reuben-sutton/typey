@@ -1,3 +1,3 @@
 # typed: true
 
-T.reveal_type(File::FNM_PATHNAME | File::FNM_EXTGLOB) # note: Integer
+T.reveal_type(1 | 2) # note: Integer
