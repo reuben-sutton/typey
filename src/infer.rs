@@ -7742,7 +7742,14 @@ impl<'src> Analyzer<'src> {
             } else {
                 receiver_type.clone()
             };
-            let mut result = if matches!(
+            let struct_constructor = name == "new"
+                && receiver_node.as_ref().is_some_and(|receiver| {
+                    self.constant_reference_name(receiver)
+                        .is_some_and(|name| name.trim_start_matches("::") == "Struct")
+                });
+            let mut result = if struct_constructor {
+                Self::class_object_type("Struct")
+            } else if matches!(
                 dispatch_receiver_type,
                 Type::Union(_) | Type::Intersection(_)
             ) || matches!(
@@ -7944,7 +7951,8 @@ impl<'src> Analyzer<'src> {
                 &dispatch_receiver_type,
                 environment,
             );
-            if name == "new"
+            if !struct_constructor
+                && name == "new"
                 && (Self::class_object_owner(&receiver_type).is_some()
                     || Self::named_type_name(&receiver_type).is_some())
                 && receiver_node.as_ref().is_some_and(|receiver| {

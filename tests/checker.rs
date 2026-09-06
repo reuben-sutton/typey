@@ -5208,6 +5208,33 @@ T.reveal_type(context.count)
 }
 
 #[test]
+fn models_struct_new_as_a_generated_class() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "struct_constructor.rb",
+        "# typed: true\nT.reveal_type(Struct.new(:name))\n",
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Revealed type: `Class[Struct]`")
+            })
+            .count(),
+        1,
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn infers_array_coercions_from_scalar_types() {
     let result = check(
         r#"
