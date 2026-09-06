@@ -2994,7 +2994,7 @@ impl<'src> Analyzer<'src> {
         type_parameters: &[String],
     ) -> Type {
         let names = type_parameters.iter().cloned().collect::<BTreeSet<_>>();
-        let attached_class = self
+        let attached_class_context = self
             .substitution_context
             .as_ref()
             .filter(|context| context.singleton)
@@ -3003,11 +3003,17 @@ impl<'src> Analyzer<'src> {
                 receiver_type
                     .and_then(Self::class_object_owner)
                     .is_some_and(|receiver_owner| receiver_owner == *owner)
-            })
-            .map_or_else(
-                || self.attached_class_type(receiver_type),
-                |owner| Type::AttachedClassOf(owner.to_owned()),
-            );
+            });
+        let attached_class = match (
+            attached_class_context,
+            self.substitution_context
+                .as_ref()
+                .map(|context| context.name.as_str()),
+        ) {
+            (Some(owner), Some("<class-body>" | "<singleton-body>")) => Type::named(owner),
+            (Some(owner), _) => Type::AttachedClassOf(owner.to_owned()),
+            (None, _) => self.attached_class_type(receiver_type),
+        };
         if let Type::BoundProc {
             receiver,
             parameters,

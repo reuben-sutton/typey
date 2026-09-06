@@ -1800,15 +1800,18 @@ T.reveal_type(values_to_array({"value" => "text"}))
 
 #[test]
 fn keeps_implicit_class_body_new_as_an_instance_type() {
-    let result = check(
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs read");
+    files.push(WorkspaceFile::new(
+        "class_body_new.rb",
         r#"
 class Status
   #: Status
   ALIVE = new
 end
 "#,
-        CheckerConfig::default(),
-    );
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
 }
 
