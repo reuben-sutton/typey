@@ -2604,7 +2604,11 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         match type_ {
             Type::TypeVar(name) if names.contains(name) => {
-                bindings.get(name).cloned().unwrap_or_else(|| type_.clone())
+                // A method type parameter that cannot be inferred is unknown;
+                // leaking the symbolic parameter into the result produces
+                // impossible types such as `Hash[U, V]`.  Keep the unknown
+                // local to the call and model it as Sorbet's untyped value.
+                bindings.get(name).cloned().unwrap_or(Type::Any)
             }
             Type::Named(name, arguments) => Type::Named(
                 name.clone(),

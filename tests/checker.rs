@@ -2034,6 +2034,34 @@ without_block = Hash.new(0)
 }
 
 #[test]
+fn resolves_unbound_generic_results_to_untyped() {
+    let source = r#"
+def normalize(value)
+  properties = Hash[value]
+  T.reveal_type(properties)
+end
+
+normalize(T.untyped)
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("unbound_generic.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.diagnostic.severity == Severity::Note
+                && diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Revealed type: `T::Hash[T.untyped, T.untyped]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_explicit_result_types_through_flat_map_blocks() {
     let result = check(
         r#"
