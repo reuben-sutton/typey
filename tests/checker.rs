@@ -438,6 +438,12 @@ T.reveal_type(File.new("fixture", "r").first)
 }
 
 #[test]
+fn treats_setter_calls_as_the_assigned_value() {
+    let result = check_fixture("tests/fixtures/setter_assignment.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_generic_accessor_types_through_nested_iteration() {
     let result = check_fixture("tests/fixtures/generic_accessor_iteration.rb");
     assert!(

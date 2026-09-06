@@ -6515,7 +6515,7 @@ impl<'src> Analyzer<'src> {
         };
         let block = call.block();
         let mut untyped_origin = None;
-        let callee_type = if receiver_node.as_ref().is_some_and(|receiver| {
+        let mut callee_type = if receiver_node.as_ref().is_some_and(|receiver| {
             self.constant_reference_name(receiver)
                 .is_some_and(|name| name.trim_start_matches("::") == "T")
         }) {
@@ -6857,6 +6857,18 @@ impl<'src> Analyzer<'src> {
                 result
             }
         };
+
+        // Ruby setter calls evaluate to the assigned value, regardless of the
+        // setter method's declared return type. Equality and ordering methods
+        // end in `=` too, but are ordinary predicates/comparators.
+        if name.ends_with('=')
+            && !matches!(name.as_str(), "==" | "!=" | "<=" | ">=" | "===")
+            && (arguments.argument_types.len() == 1 || name == "[]=")
+        {
+            if let Some(type_) = arguments.argument_types.last() {
+                callee_type = type_.clone();
+            }
+        }
 
         if callee_type.contains_any() {
             let (start, end) = prism::span(node);
