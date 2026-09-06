@@ -1103,6 +1103,31 @@ T.reveal_type(Box.new.value)
 }
 
 #[test]
+fn resolves_module_function_definitions_on_module_receivers() {
+    let result = check(
+        r#"
+module Helpers
+  module_function def stringify(value)
+    value.to_s
+  end
+end
+
+T.reveal_type(Helpers.stringify(1))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_hash_calls_in_private_methods() {
     let source = r#"
 class Tree

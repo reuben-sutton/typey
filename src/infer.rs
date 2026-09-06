@@ -1204,6 +1204,35 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                         },
                     );
                 }
+                if name == "module_function" {
+                    let owner = self
+                        .singleton_stack
+                        .last()
+                        .cloned()
+                        .or_else(|| self.class_stack.last().cloned());
+                    if let Some(owner) = owner {
+                        if let Some(nodes) = node.arguments() {
+                            for argument in &nodes.arguments() {
+                                let method_name = argument
+                                    .as_def_node()
+                                    .map(|definition| prism::constant_name(definition.name()))
+                                    .unwrap_or_else(|| self.method_name(&argument));
+                                self.aliases.insert(
+                                    MethodKey {
+                                        owner: Some(owner.clone()),
+                                        name: method_name.clone(),
+                                        singleton: true,
+                                    },
+                                    MethodKey {
+                                        owner: Some(owner.clone()),
+                                        name: method_name,
+                                        singleton: false,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
                 if matches!(
                     name.as_str(),
                     "attr_reader" | "attr_writer" | "attr_accessor"
