@@ -4230,6 +4230,28 @@ T.reveal_type(current_binding)
 }
 
 #[test]
+fn models_kernel_gem_return_type() {
+    let result = check(
+        r#"
+specification = gem("json")
+
+T.reveal_type(specification)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `Gem::Specification`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
