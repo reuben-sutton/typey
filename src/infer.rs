@@ -5026,7 +5026,12 @@ impl<'src> Analyzer<'src> {
         if let Some(ensure) = begin.ensure_clause() {
             if let Some(statements) = ensure.statements() {
                 let prior = result;
-                let ensure_result = self.eval_statements(&statements, environment);
+                // `ensure` runs even when the protected body raises before a
+                // local assignment. Include the entry environment so reads
+                // in the ensure body retain that possible nil path.
+                let mut ensure_environment = environment.join(&entry);
+                let ensure_result = self.eval_statements(&statements, &mut ensure_environment);
+                *environment = ensure_environment;
                 if ensure_result.flow.is_terminated() {
                     result = ensure_result;
                 } else {

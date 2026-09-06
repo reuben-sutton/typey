@@ -2956,6 +2956,27 @@ end
 }
 
 #[test]
+fn preserves_possible_nil_for_locals_read_from_ensure() {
+    let result = check(
+        r#"
+class Client
+  def close; end
+end
+
+def close_after_setup
+  begin
+    client = Client.new
+  ensure
+    client&.close
+  end
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn infers_const_get_class_objects_from_literal_names() {
     let result = check(
         r#"
