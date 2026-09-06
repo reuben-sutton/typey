@@ -2501,6 +2501,30 @@ T.reveal_type(Namespace.const_get("Thing"))
 }
 
 #[test]
+fn infers_array_to_h_key_and_value_types_from_block_pairs() {
+    let result = check(
+        r#"
+class Entry
+  #: -> String
+  def key
+    "entry"
+  end
+end
+
+entries = [Entry.new]
+T.reveal_type(entries.to_h { |entry| [entry.key, entry] })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T::Hash[String, Entry]`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
