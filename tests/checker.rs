@@ -1498,6 +1498,41 @@ T.reveal_type(instances)
 }
 
 #[test]
+fn preserves_explicit_result_types_through_flat_map_blocks() {
+    let result = check(
+        r#"
+class Result
+end
+
+class Validator
+  #: (String) -> Result
+  def call(value)
+    Result.new
+  end
+
+  #: -> Array[Validator]
+  def self.all
+    [Validator.new]
+  end
+end
+
+T.reveal_type(Validator.all.flat_map { |validator| validator.call("value") })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[Result]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn publishes_only_the_final_type_per_expression() {
     let source = "# typed: strict\n\n#: (String command) -> String\ndef exec(command)\n  command.to_s\nend\n";
     let result = check(source, CheckerConfig::default());
