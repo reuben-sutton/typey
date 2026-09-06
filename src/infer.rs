@@ -1161,6 +1161,7 @@ impl MethodState {
 
 struct MethodRegistrar<'a> {
     source: &'a [u8],
+    diagnostics: &'a mut Vec<Diagnostic>,
     methods: &'a mut BTreeMap<MethodKey, MethodState>,
     definitions: &'a mut BTreeMap<usize, MethodKey>,
     parameter_shapes: &'a mut BTreeMap<usize, ParameterShape>,
@@ -1176,6 +1177,39 @@ struct MethodRegistrar<'a> {
     visibility_stack: Vec<Visibility>,
     visibility_overrides: BTreeMap<MethodKey, Visibility>,
     method_depth: usize,
+}
+
+impl MethodRegistrar<'_> {
+    fn has_preceding_annotation(&self, node: &Node<'_>, annotation: &str) -> bool {
+        let start = prism::span(node).0;
+        for line in String::from_utf8_lossy(&self.source[..start]).lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with('#') {
+                if trimmed.contains(annotation) {
+                    return true;
+                }
+                continue;
+            }
+            break;
+        }
+        false
+    }
+
+    fn report_interface_on_class(&mut self, node: &Node<'_>) {
+        if self.has_preceding_annotation(node, "@interface") {
+            let (start, end) = prism::span(node);
+            self.diagnostics.push(Diagnostic::error(
+                self.source,
+                "Classes can't be interfaces. Use `abstract!` instead of `interface!`",
+                start,
+                end,
+            ));
+        }
+    }
+
 }
 
 impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
@@ -1204,6 +1238,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     }
 
     fn visit_class_node(&mut self, node: &ClassNode<'pr>) {
+        self.report_interface_on_class(&node.as_node());
         let name = self.scope_name(&node.constant_path());
         let superclass = node
             .superclass()
@@ -1249,6 +1284,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     }
 
     fn visit_singleton_class_node(&mut self, node: &ruby_prism::SingletonClassNode<'pr>) {
+        self.report_interface_on_class(&node.as_node());
         let owner = if node.expression().as_self_node().is_some() {
             self.class_stack
                 .last()
@@ -3019,6 +3055,7 @@ impl<'src> Analyzer<'src> {
         self.type_aliases = self.annotations.type_aliases.clone();
         let mut registrar = MethodRegistrar {
             source: self.source,
+            diagnostics: &mut self.diagnostics,
             methods: &mut self.methods,
             definitions: &mut self.definitions,
             parameter_shapes: &mut self.parameter_shapes,
