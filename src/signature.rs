@@ -745,12 +745,19 @@ fn parse_rbs_attribute_signature(text: &str) -> Option<MethodSig> {
 }
 
 fn parse_rbs_block_type(text: &str) -> Option<Type> {
-    let text = text.trim().strip_prefix('?').unwrap_or(text).trim();
+    let text = text.trim();
+    let optional = text.starts_with('?');
+    let text = text.strip_prefix('?').unwrap_or(text).trim();
     let close = matching_delimiter(text, 0, '{', '}')?;
     if close + 1 != text.len() {
         return None;
     }
-    parse_rbs_proc_type(&format!("^{}", text[1..close].trim()))
+    let proc = parse_rbs_proc_type(&format!("^{}", text[1..close].trim()))?;
+    Some(if optional {
+        Type::union([Type::Nil, proc])
+    } else {
+        proc
+    })
 }
 
 fn parse_type_parameter_name(raw: &str) -> Option<String> {

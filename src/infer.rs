@@ -5924,13 +5924,13 @@ impl<'src> Analyzer<'src> {
         if let Some(parameters) = definition.parameters() {
             if let Some(block) = parameters.block() {
                 if let Some(name) = block.name() {
-                    method_environment.bind(
-                        prism::constant_name(name),
+                    let block_type = body_signature.block.clone().unwrap_or_else(|| {
                         Type::Proc(
                             state.block_parameters(),
                             Box::new(state.block_result_type()),
-                        ),
-                    );
+                        )
+                    });
+                    method_environment.bind(prism::constant_name(name), block_type);
                 }
             }
         }
@@ -6180,10 +6180,10 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(block) = parameters.block() {
             if let Some(name) = block.name() {
-                environment.bind(
-                    prism::constant_name(name),
-                    Type::Proc(Vec::new(), Box::new(Type::Any)),
-                );
+                let type_ = signature
+                    .and_then(|signature| signature.block.clone())
+                    .unwrap_or_else(|| Type::Proc(Vec::new(), Box::new(Type::Any)));
+                environment.bind(prism::constant_name(name), type_);
             }
         }
     }
@@ -8542,14 +8542,21 @@ impl<'src> Analyzer<'src> {
             arguments,
             receiver_type,
         ));
-        let checked_block_signature = signature.block.as_ref().map(|block| {
-            self.substitute_signature_type(
-                block,
-                receiver_type,
-                &checked_bindings,
-                &signature.type_parameters,
-            )
-        });
+        let checked_block_signature = self
+            .methods
+            .get(&key)
+            .is_some_and(|state| state.explicit)
+            .then(|| {
+                signature.block.as_ref().map(|block| {
+                    self.substitute_signature_type(
+                        block,
+                        receiver_type,
+                        &checked_bindings,
+                        &signature.type_parameters,
+                    )
+                })
+            })
+            .flatten();
         if let Some(actual_block_signature) = passed_block_signature {
             if let Some(expected_block_signature) = checked_block_signature
                 .as_ref()

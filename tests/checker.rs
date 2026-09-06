@@ -580,6 +580,11 @@ fn reports_unreachable_statement_branches() {
 }
 
 #[test]
+fn reports_unreachable_nominal_predicate_next() {
+    check_fixture("tests/fixtures/nominal_predicate_next.rb");
+}
+
+#[test]
 fn narrows_class_objects_by_subclass_comparisons() {
     let result = check_fixture("tests/fixtures/class_object_subclass_narrowing.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
@@ -681,6 +686,11 @@ fn models_array_comparison() {
         "{:?}",
         result.diagnostics
     );
+}
+
+#[test]
+fn checks_array_comparison_return_contracts() {
+    check_fixture("tests/fixtures/array_comparison_contract.rb");
 }
 
 #[test]
@@ -804,6 +814,11 @@ fn narrows_nested_rescue_collection_elements() {
 #[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
+}
+
+#[test]
+fn preserves_optional_rbs_block_parameters() {
+    check_fixture("tests/fixtures/optional_rbs_block.rb");
 }
 
 #[test]
@@ -1908,6 +1923,24 @@ T.reveal_type(Validator.all.flat_map { |validator| validator.call("value") })
         "{:?}",
         result.diagnostics
     );
+}
+
+#[test]
+fn does_not_invent_block_arity_for_inferred_methods() {
+    let result = check(
+        r#"
+module External
+  def self.flat_map(*args, **kwargs, &block)
+    nil
+  end
+end
+
+processor = ->(value) { [value] }
+External.flat_map(["value"], &processor)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
 }
 
 #[test]
@@ -4339,6 +4372,49 @@ fn tracks_optional_and_rest_rbs_parameters_for_calls() {
     assert_eq!(rest.required_params, 1);
     assert!(rest.accepts_rest);
     assert_eq!(rest.rest_index, Some(1));
+}
+
+#[test]
+fn tracks_optional_rbs_blocks() {
+    let signature = typey::signature::parse_rbs_signature(
+        "(String value) ?{ (String value) -> void } -> String",
+    )
+    .unwrap();
+    assert_eq!(
+        signature.block,
+        Some(Type::union([
+            Type::Nil,
+            Type::Proc(vec![Type::String], Box::new(Type::Nil)),
+        ]))
+    );
+}
+
+#[test]
+fn collects_optional_rbs_blocks_on_singleton_methods() {
+    let source = "#: (String value) ?{ (String value) -> void } -> String\ndef self.call(value, &block)\nend\n";
+    let annotations = typey::signature::collect(source);
+    assert_eq!(
+        annotations.methods["call"].block,
+        Some(Type::union([
+            Type::Nil,
+            Type::Proc(vec![Type::String], Box::new(Type::Nil)),
+        ]))
+    );
+}
+
+#[test]
+fn collects_optional_rbs_blocks_by_ast_offset() {
+    let source = "#: (String value) ?{ (String value) -> void } -> String\ndef self.call(value, &block)\nend\n";
+    let parsed = ruby_prism::parse(source.as_bytes());
+    let annotations = typey::signature::collect_for_ast(source, &parsed.node());
+    assert_eq!(annotations.method_annotations.len(), 1);
+    let signature = annotations
+        .method_annotations
+        .values()
+        .next()
+        .and_then(|signatures| signatures.first())
+        .expect("singleton method signature");
+    assert!(signature.block.is_some(), "{signature:?}");
 }
 
 #[test]
