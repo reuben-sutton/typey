@@ -9490,7 +9490,11 @@ impl<'src> Analyzer<'src> {
         } else if let Type::AttachedClassOf(owner) = receiver_type {
             (owner.clone(), false)
         } else if let Type::Named(owner, _) = receiver_type {
-            (owner.clone(), false)
+            let owner = owner
+                .strip_prefix("T::")
+                .filter(|bare| self.classes.contains_key(*bare))
+                .map_or_else(|| owner.clone(), str::to_owned);
+            (owner, false)
         } else {
             let owner = match receiver_type {
                 Type::Nil => "NilClass",
@@ -12986,7 +12990,28 @@ impl<'src> Analyzer<'src> {
             (Type::Named(actual, _), Type::Symbol) if self.nominal_subtype(actual, "Symbol") => {
                 true
             }
+            (actual, Type::Named(expected, arguments))
+                if arguments.is_empty()
+                    && Self::primitive_nominal_name(actual)
+                        .is_some_and(|actual| self.nominal_subtype(actual, expected)) =>
+            {
+                true
+            }
             _ => false,
+        }
+    }
+
+    fn primitive_nominal_name(type_: &Type) -> Option<&'static str> {
+        match type_ {
+            Type::Nil => Some("NilClass"),
+            Type::True => Some("TrueClass"),
+            Type::False => Some("FalseClass"),
+            Type::Integer => Some("Integer"),
+            Type::Float => Some("Float"),
+            Type::String => Some("String"),
+            Type::Symbol => Some("Symbol"),
+            Type::Object => Some("Object"),
+            _ => None,
         }
     }
 

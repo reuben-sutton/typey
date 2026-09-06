@@ -3918,6 +3918,21 @@ lines[..1]
 }
 
 #[test]
+fn dispatches_methods_on_generic_enumerators() {
+    let source = r#"
+values = [1, 2, 3]
+enumerator = values.each
+enumerator.with_index
+enumerator.sort_by { |value| value }
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("generic_enumerator.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"
