@@ -5685,10 +5685,13 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         let predicate = if_node.predicate();
+        let previous_defer_inline_assertions = self.defer_inline_assertions;
+        self.defer_inline_assertions = true;
         let predicate_type = self
             .eval_node(&predicate, environment)
             .normal_type
             .unwrap_or(Type::Never);
+        self.defer_inline_assertions = previous_defer_inline_assertions;
         let (then_reachable, else_reachable) =
             self.predicate_reachability(&predicate, environment, &predicate_type);
         let report_unreachable = self.should_report_unreachable_branch(node)
@@ -5743,10 +5746,13 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         let predicate = unless.predicate();
+        let previous_defer_inline_assertions = self.defer_inline_assertions;
+        self.defer_inline_assertions = true;
         let predicate_type = self
             .eval_node(&predicate, environment)
             .normal_type
             .unwrap_or(Type::Never);
+        self.defer_inline_assertions = previous_defer_inline_assertions;
         let (predicate_truthy, predicate_falsy) =
             self.predicate_reachability(&predicate, environment, &predicate_type);
         let then_reachable = predicate_falsy;
