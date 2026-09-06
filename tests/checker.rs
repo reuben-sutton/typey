@@ -2596,6 +2596,22 @@ T.reveal_type(sorted.to_h)
 }
 
 #[test]
+fn models_string_spaceship_comparison() {
+    let result = check(
+        r#"
+T.reveal_type("a" <=> "b")
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `Integer`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
