@@ -5772,13 +5772,24 @@ impl<'src> Analyzer<'src> {
                 }
             }
             let key = self.implicit_method_key(&name, environment);
+            let receiver_type = environment.self_type.clone();
+            let resolved_owner = self
+                .resolve_method_key(&key)
+                .and_then(|resolved| resolved.owner);
+            let tsort_type = self.eval_tsort_method(
+                &receiver_type,
+                &name,
+                environment,
+                resolved_owner.as_deref(),
+            );
             self.record_method_dependency(&key, environment);
-            if let Some(signature) = self.observe_call(&key, &arguments, block.is_some()) {
+            if let Some(type_) = tsort_type {
+                type_
+            } else if let Some(signature) = self.observe_call(&key, &arguments, block.is_some()) {
                 let declared = self
                     .resolve_method_key(&key)
                     .and_then(|resolved| self.methods.get(&resolved))
                     .is_some_and(|state| state.explicit);
-                let receiver_type = environment.self_type.clone();
                 let block_return_type = self.observe_block_call(
                     &key,
                     block.as_ref(),
@@ -5885,72 +5896,90 @@ impl<'src> Analyzer<'src> {
                 &name,
                 environment,
             ) {
-                self.record_method_dependency(&key, environment);
-                let inferred_accessor = self
+                let resolved_owner = self
                     .resolve_method_key(&key)
-                    .filter(|resolved| {
-                        self.methods
-                            .get(resolved)
-                            .is_some_and(|state| !state.explicit)
-                    })
-                    .and_then(|resolved| {
-                        self.accessors
-                            .get(&resolved)
-                            .copied()
-                            .map(|accessor| (resolved, accessor))
-                    });
-                if let Some((accessor_key, accessor)) = inferred_accessor {
-                    let type_ = self.eval_accessor_call(
-                        &accessor_key,
-                        accessor,
-                        argument_types,
-                        environment,
-                    );
-                    if type_.contains_any() {
-                        untyped_origin = Some(UntypedOrigin::InferredMethod);
-                    }
-                    type_
-                } else if let Some(signature) = self.observe_call(&key, &arguments, block.is_some())
-                {
-                    let declared = self
-                        .resolve_method_key(&key)
-                        .and_then(|resolved| self.methods.get(&resolved))
-                        .is_some_and(|state| state.explicit);
-                    let block_return_type = self.observe_block_call(
-                        &key,
-                        block.as_ref(),
-                        &signature,
-                        &arguments,
-                        Some(&dispatch_receiver_type),
-                        environment,
-                    );
-                    let type_ = self.invoke_signature(
-                        node,
-                        &name,
-                        &signature,
-                        &arguments,
-                        Some(&dispatch_receiver_type),
-                        block_return_type.as_ref(),
-                    );
-                    if type_.contains_any() {
-                        untyped_origin = Some(if declared {
-                            UntypedOrigin::DeclaredSignature
-                        } else {
-                            UntypedOrigin::InferredMethod
-                        });
-                    }
+                    .and_then(|resolved| resolved.owner);
+                let tsort_type = self.eval_tsort_method(
+                    &dispatch_receiver_type,
+                    &name,
+                    environment,
+                    resolved_owner.as_deref(),
+                );
+                self.record_method_dependency(&key, environment);
+                if let Some(type_) = tsort_type {
                     type_
                 } else {
-                    let type_ =
-                        self.eval_method_call(&dispatch_receiver_type, &name, &site, environment);
-                    if type_.contains_any() {
-                        untyped_origin = Some(if dispatch_receiver_type.contains_any() {
-                            UntypedOrigin::Propagated
-                        } else {
-                            UntypedOrigin::FallbackCall
+                    let inferred_accessor = self
+                        .resolve_method_key(&key)
+                        .filter(|resolved| {
+                            self.methods
+                                .get(resolved)
+                                .is_some_and(|state| !state.explicit)
+                        })
+                        .and_then(|resolved| {
+                            self.accessors
+                                .get(&resolved)
+                                .copied()
+                                .map(|accessor| (resolved, accessor))
                         });
+                    if let Some((accessor_key, accessor)) = inferred_accessor {
+                        let type_ = self.eval_accessor_call(
+                            &accessor_key,
+                            accessor,
+                            argument_types,
+                            environment,
+                        );
+                        if type_.contains_any() {
+                            untyped_origin = Some(UntypedOrigin::InferredMethod);
+                        }
+                        type_
+                    } else if let Some(signature) =
+                        self.observe_call(&key, &arguments, block.is_some())
+                    {
+                        let declared = self
+                            .resolve_method_key(&key)
+                            .and_then(|resolved| self.methods.get(&resolved))
+                            .is_some_and(|state| state.explicit);
+                        let block_return_type = self.observe_block_call(
+                            &key,
+                            block.as_ref(),
+                            &signature,
+                            &arguments,
+                            Some(&dispatch_receiver_type),
+                            environment,
+                        );
+                        let type_ = self.invoke_signature(
+                            node,
+                            &name,
+                            &signature,
+                            &arguments,
+                            Some(&dispatch_receiver_type),
+                            block_return_type.as_ref(),
+                        );
+                        if type_.contains_any() {
+                            untyped_origin = Some(if declared {
+                                UntypedOrigin::DeclaredSignature
+                            } else {
+                                UntypedOrigin::InferredMethod
+                            });
+                        }
+                        type_
+                    } else {
+                        let type_ = self.eval_method_call(
+                            &dispatch_receiver_type,
+                            &name,
+                            &site,
+                            environment,
+                        );
+                        if type_.contains_any() {
+                            untyped_origin = Some(if dispatch_receiver_type.contains_any() {
+                                UntypedOrigin::Propagated
+                            } else {
+                                UntypedOrigin::FallbackCall
+                            });
+                        }
+                        type_
                     }
-                    type_
                 }
             } else {
                 let type_ =
@@ -6118,6 +6147,17 @@ impl<'src> Analyzer<'src> {
         block: Option<&Node<'node>>,
         environment: &mut Environment,
     ) -> Option<(Type, bool)> {
+        let resolved_owner = self
+            .resolve_method_key(key)
+            .and_then(|resolved| resolved.owner);
+        if let Some(type_) = self.eval_tsort_method(
+            receiver_type,
+            name,
+            environment,
+            resolved_owner.as_deref(),
+        ) {
+            return Some((type_, false));
+        }
         self.record_method_dependency(key, environment);
         let inferred_accessor = self
             .resolve_method_key(key)
@@ -7158,6 +7198,69 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    fn eval_tsort_method(
+        &mut self,
+        receiver: &Type,
+        name: &str,
+        environment: &Environment,
+        resolved_owner: Option<&str>,
+    ) -> Option<Type> {
+        let Type::Named(owner, _) = receiver else {
+            return None;
+        };
+        if !matches!(
+            name,
+            "strongly_connected_components" | "tsort" | "tsort_each"
+        ) || (!self.receiver_has_mixin(owner, "TSort")
+            && !resolved_owner.is_some_and(|owner| self.nominal_names_match(owner, "TSort")))
+        {
+            return None;
+        }
+
+        let element = self
+            .inferred_accessor_ivar_type(owner, "edges", false, environment)
+            .and_then(|edges| match edges {
+                Type::Hash(_, values) => Some(self.array_element_type(&values)),
+                Type::Named(name, arguments)
+                    if arguments.len() == 2 && name_matches(&name, "Hash") => {
+                    Some(self.array_element_type(&arguments[1]))
+                }
+                _ => None,
+            })
+            .unwrap_or(Type::Any);
+        match name {
+            "strongly_connected_components" => Some(Type::Array(Box::new(Type::Array(
+                Box::new(element),
+            )))),
+            "tsort" => Some(Type::Array(Box::new(element))),
+            "tsort_each" => Some(Type::Nil),
+            _ => None,
+        }
+    }
+
+    fn receiver_has_mixin(&self, owner: &str, mixin: &str) -> bool {
+        let mut pending = vec![owner.to_owned()];
+        let mut visited = BTreeSet::new();
+        while let Some(current) = pending.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            if self.nominal_names_match(&current, mixin) {
+                return true;
+            }
+            let Some(info) = self.classes.get(&current) else {
+                continue;
+            };
+            pending.extend(info.includes.iter().cloned());
+            pending.extend(info.prepends.iter().cloned());
+            pending.extend(info.extends.iter().cloned());
+            if let Some(superclass) = &info.superclass {
+                pending.push(superclass.clone());
+            }
+        }
+        false
+    }
+
     fn eval_method_call<'a, 'node>(
         &mut self,
         receiver: &Type,
@@ -7178,6 +7281,10 @@ impl<'src> Analyzer<'src> {
                 let _ = self.eval_block_node(block, &[Type::Any], environment);
             }
             return Type::Never;
+        }
+
+        if let Some(type_) = self.eval_tsort_method(receiver, name, environment, None) {
+            return type_;
         }
 
         if name == "freeze" {
