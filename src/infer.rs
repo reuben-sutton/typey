@@ -271,6 +271,13 @@ struct ClassInfo {
     type_members: BTreeMap<String, GenericMember>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PredicateAlias {
+    source: String,
+    negated: bool,
+    expected: Option<Type>,
+}
+
 /// How much file-mode metadata the checker should use. Typey is intentionally
 /// permissive for untyped Ruby, while explicit annotations remain checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -350,6 +357,7 @@ impl CheckResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Environment {
     locals: BTreeMap<String, Type>,
+    predicate_aliases: BTreeMap<String, PredicateAlias>,
     self_type: Type,
     method_key: Option<MethodKey>,
 }
@@ -358,6 +366,7 @@ impl Default for Environment {
     fn default() -> Self {
         Self {
             locals: BTreeMap::new(),
+            predicate_aliases: BTreeMap::new(),
             self_type: Type::Object,
             method_key: None,
         }
@@ -376,7 +385,24 @@ impl Environment {
     }
 
     pub fn bind(&mut self, name: impl Into<String>, type_: Type) {
-        self.locals.insert(name.into(), type_);
+        let name = name.into();
+        self.locals.insert(name.clone(), type_);
+        self.predicate_aliases.remove(&name);
+    }
+
+    fn bind_predicate_alias(
+        &mut self,
+        name: impl Into<String>,
+        type_: Type,
+        alias: PredicateAlias,
+    ) {
+        let name = name.into();
+        self.locals.insert(name.clone(), type_);
+        self.predicate_aliases.insert(name, alias);
+    }
+
+    fn predicate_alias(&self, name: &str) -> Option<&PredicateAlias> {
+        self.predicate_aliases.get(name)
     }
 
     /// Join two control-flow environments using the same type lattice as
@@ -387,6 +413,11 @@ impl Environment {
         let lattice = TypeLattice;
         let mut result = Self {
             locals: BTreeMap::new(),
+            predicate_aliases: if self.predicate_aliases == other.predicate_aliases {
+                self.predicate_aliases.clone()
+            } else {
+                BTreeMap::new()
+            },
             self_type: self.self_type.clone(),
             method_key: self.method_key.clone(),
         };
@@ -3509,7 +3540,12 @@ impl<'src> Analyzer<'src> {
             let value_node = write.value();
             let actual = Self::normal_type(self.eval_node(&value_node, environment));
             let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
-            environment.bind(prism::constant_name(write.name()), type_.clone());
+            let name = prism::constant_name(write.name());
+            if let Some(alias) = self.predicate_alias_for_value(&value_node, environment) {
+                environment.bind_predicate_alias(name, type_.clone(), alias);
+            } else {
+                environment.bind(name, type_.clone());
+            }
             return Eval::value(self.record(node, type_));
         }
         if let Some(write) = node.as_local_variable_operator_write_node() {
@@ -5445,6 +5481,22 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(local) = node.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
+            if let Some(alias) = environment.predicate_alias(&name).cloned() {
+                let source_current = environment.get(&alias.source);
+                let source_truthy = if alias.negated { !truthy } else { truthy };
+                let source_narrowed = if let Some(expected) = alias.expected {
+                    if source_truthy {
+                        source_current.meet(&expected)
+                    } else {
+                        source_current.without(&expected)
+                    }
+                } else if source_truthy {
+                    source_current.truthy_part()
+                } else {
+                    source_current.falsy_part()
+                };
+                environment.bind(alias.source, source_current.meet(&source_narrowed));
+            }
             let current = environment.get(&name);
             let narrowed = if truthy {
                 current.truthy_part()
@@ -5596,6 +5648,82 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
+    }
+
+    fn predicate_alias_for_value<'node>(
+        &self,
+        node: &Node<'node>,
+        environment: &Environment,
+    ) -> Option<PredicateAlias> {
+        if let Some(local) = node.as_local_variable_read_node() {
+            let name = prism::constant_name(local.name());
+            return environment
+                .predicate_alias(&name)
+                .cloned()
+                .or(Some(PredicateAlias {
+                    source: name,
+                    negated: false,
+                    expected: None,
+                }));
+        }
+        let call = node.as_call_node()?;
+        let name = prism::constant_name(call.name());
+        if name == "!" {
+            let receiver = call.receiver()?;
+            if let Some(inner_call) = receiver.as_call_node() {
+                let mut alias = self.predicate_alias_from_call(&inner_call, environment)?;
+                alias.negated = !alias.negated;
+                return Some(alias);
+            }
+            let local = receiver.as_local_variable_read_node()?;
+            let name = prism::constant_name(local.name());
+            if let Some(alias) = environment.predicate_alias(&name) {
+                Some(PredicateAlias {
+                    source: alias.source.clone(),
+                    negated: !alias.negated,
+                    expected: alias.expected.clone(),
+                })
+            } else {
+                Some(PredicateAlias {
+                    source: name,
+                    negated: true,
+                    expected: None,
+                })
+            }
+        } else {
+            self.predicate_alias_from_call(&call, environment)
+        }
+    }
+
+    fn predicate_alias_from_call<'node>(
+        &self,
+        call: &CallNode<'node>,
+        environment: &Environment,
+    ) -> Option<PredicateAlias> {
+        let name = prism::constant_name(call.name());
+        if !matches!(name.as_str(), "nil?" | "is_a?" | "kind_of?" | "instance_of?") {
+            return None;
+        }
+        let receiver = call.receiver()?;
+        let local = receiver.as_local_variable_read_node()?;
+        let source = prism::constant_name(local.name());
+        let expected = if name == "nil?" {
+            Type::Nil
+        } else {
+            let arguments = call
+                .arguments()
+                .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
+                .unwrap_or_default();
+            if arguments.is_empty() {
+                return None;
+            }
+            self.predicate_expected_type(&arguments[0], environment)
+        };
+        Some(PredicateAlias {
+            source,
+            negated: false,
+            expected: Some(expected),
+        })
     }
 
     fn equality_predicate_narrowing<'node>(
