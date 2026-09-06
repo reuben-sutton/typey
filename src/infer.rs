@@ -3304,8 +3304,14 @@ impl<'src> Analyzer<'src> {
         if let Some(write) = node.as_instance_variable_write_node() {
             let value_node = write.value();
             let actual = Self::normal_type(self.eval_node(&value_node, environment));
-            let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
             let name = prism::constant_name(write.name());
+            let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
+            let type_ = self.preserve_typed_empty_array_ivar(
+                environment,
+                &name,
+                &value_node,
+                type_,
+            );
             self.observe_ivar(environment, name.clone(), &type_);
             environment.bind(ivar_refinement_key(&name), type_.clone());
             return Eval::value(self.record(node, type_));
@@ -6518,6 +6524,40 @@ impl<'src> Analyzer<'src> {
             self.ivars.insert(key.clone(), next);
             self.changed_shared.insert(SharedKey::Ivar(key));
         }
+    }
+
+    fn preserve_typed_empty_array_ivar<'node>(
+        &self,
+        environment: &Environment,
+        name: &str,
+        value: &Node<'node>,
+        actual: Type,
+    ) -> Type {
+        if !value
+            .as_array_node()
+            .is_some_and(|array| array.elements().is_empty())
+        {
+            return actual;
+        }
+        let Type::Array(element) = actual else {
+            return actual;
+        };
+        if !element.is_any() {
+            return Type::Array(element);
+        }
+        let refinement = ivar_refinement_key(name);
+        let current = if environment.contains(&refinement) {
+            Some(environment.get(&refinement))
+        } else {
+            self.ivar_key(environment, name)
+                .and_then(|key| self.ivars.get(&key).cloned())
+        };
+        if let Some(Type::Array(element)) = current {
+            if !element.is_any() {
+                return Type::Array(element);
+            }
+        }
+        Type::Array(element)
     }
 
     fn ivar_type(&mut self, environment: &Environment, name: &str) -> Type {
