@@ -750,7 +750,7 @@ impl fmt::Display for Type {
             }
             Self::TypeVar(name) => write!(f, "{name}"),
             Self::AttachedClass => write!(f, "T.attached_class"),
-            Self::AttachedClassOf(owner) => write!(f, "T.attached_class (of {owner})"),
+            Self::AttachedClassOf(_) => write!(f, "T.attached_class"),
         }
     }
 }
