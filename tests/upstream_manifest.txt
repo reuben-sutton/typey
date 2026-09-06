@@ -20,6 +20,7 @@ sorbet-upstream/test/testdata/infer/control_flow/normalize_params.rb
 sorbet-upstream/test/testdata/infer/control_flow/truthiness_bug.rb
 sorbet-upstream/test/testdata/infer/call_on_metatype.rb
 sorbet-upstream/test/testdata/infer/call_with_block.rb
+sorbet-upstream/test/testdata/infer/block_pass_splat.rb
 
 sorbet-upstream/test/testdata/infer/blocks2.rb
 sorbet-upstream/test/testdata/infer/boolean.rb

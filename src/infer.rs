@@ -4449,6 +4449,37 @@ impl<'src> Analyzer<'src> {
             let arguments = evaluated.arguments;
             let argument_types = arguments.argument_types.clone();
             let method_key = environment.method_key.clone();
+            let expected_block_parameters = method_key
+                .as_ref()
+                .and_then(|key| self.methods.get(key))
+                .and_then(|state| state.block.as_ref())
+                .and_then(|block| match block {
+                    Type::Proc(parameters, _) => Some(parameters.clone()),
+                    _ => None,
+                });
+            if let Some(expected) = expected_block_parameters {
+                for (index, actual) in argument_types.iter().enumerate() {
+                    if let Some(expected) = expected.get(index) {
+                        if matches!(expected, Type::Named(name, _) if name.starts_with('{'))
+                            && matches!(actual, Type::Hash(_, _))
+                        {
+                            continue;
+                        }
+                        if !self.is_assignable(actual, expected) {
+                            if let Some(argument) = arguments.argument_nodes.get(index) {
+                                let actual_description =
+                                    self.argument_type_description(argument, actual);
+                                self.error(
+                                    argument,
+                                    format!(
+                                        "Expected `{expected}` but found `{actual_description}` for argument `arg{index}`"
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             if let Some(key) = method_key.as_ref() {
                 if let Some(state) = self.methods.get_mut(key) {
                     if state.observe_yield_arguments(&argument_types) {
@@ -7991,19 +8022,50 @@ impl<'src> Analyzer<'src> {
                 _ => None,
             });
         let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
-            let Some(expression_type) = self.passed_block_expression_type(block, environment)
-            else {
-                // `&nil` is Ruby's spelling for omitting a block.
-                return None;
-            };
-            if let Some(signature) = Self::passed_block_signature(&expression_type) {
-                let return_type = match &signature {
-                    Type::Proc(_, result) => (**result).clone(),
-                    _ => Type::Any,
-                };
-                (return_type, Some(signature))
+            if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
+            {
+                if block
+                    .as_block_argument_node()
+                    .and_then(|block| block.expression())
+                    .and_then(|expression| expression.as_symbol_node())
+                    .is_some()
+                {
+                    (
+                        self.eval_symbol_passed_block(block, &expected_signature, environment),
+                        None,
+                    )
+                } else {
+                    let Some(expression_type) =
+                        self.passed_block_expression_type(block, environment)
+                    else {
+                        // `&nil` is Ruby's spelling for omitting a block.
+                        return None;
+                    };
+                    if let Some(signature) = Self::passed_block_signature(&expression_type) {
+                        let return_type = match &signature {
+                            Type::Proc(_, result) => (**result).clone(),
+                            _ => Type::Any,
+                        };
+                        (return_type, Some(signature))
+                    } else {
+                        (Type::Any, None)
+                    }
+                }
             } else {
-                (Type::Any, None)
+                let Some(expression_type) = self.passed_block_expression_type(block, environment)
+                else {
+                    // `&nil` is Ruby's spelling for omitting a block.
+                    return None;
+                };
+                if let Some(signature) = Self::passed_block_signature(&expression_type) {
+                    let return_type = match &signature {
+                        Type::Proc(_, result) => (**result).clone(),
+                        _ => Type::Any,
+                    };
+                    (return_type, Some(signature))
+                } else {
+                    (Type::Any, None)
+                }
             }
         } else {
             (self.eval_block_node(block, &expected, environment), None)
@@ -8062,6 +8124,117 @@ impl<'src> Analyzer<'src> {
             self.changed_methods.insert(key);
         }
         Some(block_type)
+    }
+
+    fn eval_symbol_passed_block<'node>(
+        &mut self,
+        node: &Node<'node>,
+        expected: &Type,
+        environment: &mut Environment,
+    ) -> Type {
+        let Some(symbol) = node
+            .as_block_argument_node()
+            .and_then(|block| block.expression())
+            .and_then(|expression| expression.as_symbol_node())
+        else {
+            return Type::Any;
+        };
+        let name = String::from_utf8_lossy(symbol.unescaped()).into_owned();
+        let Type::Proc(parameters, _) = expected else {
+            return Type::Any;
+        };
+        let Some(receiver) = parameters.first() else {
+            return Type::Any;
+        };
+        let Some(key) = self.receiver_method_key(None, receiver, &name, environment) else {
+            return Type::Any;
+        };
+        self.record_method_dependency(&key, environment);
+        let Some(signature) = self.observe_call(&key, &CallArguments::default(), false) else {
+            return Type::Any;
+        };
+        let owner = self
+            .resolve_method_key(&key)
+            .and_then(|resolved| resolved.owner)
+            .unwrap_or_else(|| receiver.to_string());
+        let method = format!("{owner}#{name}");
+
+        // Symbol#to_proc consumes the first yielded value as the receiver;
+        // all remaining yielded values are passed to the named method.
+        let mut positional = Vec::new();
+        let mut keywords = BTreeMap::<String, Type>::new();
+        for argument in parameters.iter().skip(1) {
+            if let Type::Named(shape, _) = argument {
+                if shape.starts_with('{') && shape.ends_with('}') {
+                    for keyword in signature.keywords.keys() {
+                        if let Some(type_) = signature::parse_inline_record_field(shape, keyword) {
+                            keywords.insert(keyword.clone(), type_);
+                        }
+                    }
+                    if !keywords.is_empty() {
+                        continue;
+                    }
+                }
+            }
+            positional.push(argument.clone());
+        }
+
+        if !signature.accepts_rest && positional.len() > signature.params.len() {
+            self.error(
+                node,
+                format!(
+                    "Too many positional arguments provided for method `{method}`. Expected: `{}`, got: `{}`",
+                    signature.params.len(),
+                    positional.len(),
+                ),
+            );
+        }
+        for (index, actual) in positional.iter().enumerate() {
+            if let Some(expected) = signature.positional_type(index, positional.len()) {
+                if !self.is_assignable(actual, expected) {
+                    self.error(
+                        node,
+                        format!(
+                            "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
+                        ),
+                    );
+                }
+            }
+        }
+        for (name, parameter) in &signature.keywords {
+            let Some(actual) = keywords.get(name) else {
+                if parameter.required {
+                    self.error(
+                        node,
+                        format!("Missing required keyword argument `{name}` for method `{method}`"),
+                    );
+                }
+                continue;
+            };
+            if !self.is_assignable(actual, &parameter.type_) {
+                self.error(
+                    node,
+                    format!(
+                        "Expected `{}` but found `{actual}` for argument `{name}`",
+                        parameter.type_
+                    ),
+                );
+            }
+        }
+        if !signature.accepts_keyword_rest
+            && keywords
+                .keys()
+                .any(|name| !signature.keywords.contains_key(name))
+        {
+            // Inline record parameters are only materialized for keywords
+            // present in the called method's signature above.
+        }
+        self.substitute_signature_type(
+            &signature.return_type,
+            Some(receiver),
+            &BTreeMap::new(),
+            &signature.type_parameters,
+        )
     }
 
     fn select_overload(
@@ -10429,6 +10602,33 @@ impl<'src> Analyzer<'src> {
         }
         description.push_str(&format!(".returns({result})"));
         description
+    }
+
+    fn argument_type_description(&self, node: &Node<'_>, type_: &Type) -> String {
+        let Some(hash) = node.as_keyword_hash_node() else {
+            return type_.to_string();
+        };
+        let fields = hash
+            .elements()
+            .into_iter()
+            .filter_map(|element| {
+                let assoc = element.as_assoc_node()?;
+                let key = assoc.key().as_symbol_node()?;
+                let value = assoc.value();
+                let name = String::from_utf8_lossy(key.unescaped());
+                let value = if value.as_integer_node().is_some() {
+                    format!("Integer({})", prism::text(self.source, &value))
+                } else {
+                    prism::text(self.source, &value)
+                };
+                Some(format!("{name}: {value}"))
+            })
+            .collect::<Vec<_>>();
+        if fields.is_empty() {
+            type_.to_string()
+        } else {
+            format!("{{{}}}", fields.join(", "))
+        }
     }
 
     fn eval_collection_block<'node>(

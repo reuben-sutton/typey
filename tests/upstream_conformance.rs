@@ -7,7 +7,7 @@ use typey::CheckerConfig;
 fn selected_upstream_fixtures_match_when_checkout_is_available() {
     let paths = manifest_paths(Path::new("tests/upstream_manifest.txt"))
         .expect("upstream manifest is readable");
-    assert_eq!(paths.len(), 32, "the selected upstream smoke suite changed");
+    assert_eq!(paths.len(), 33, "the selected upstream smoke suite changed");
 
     let mut checked = 0;
     let mut failures = Vec::new();
