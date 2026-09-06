@@ -7628,6 +7628,7 @@ impl<'src> Analyzer<'src> {
             "match?" => Type::bool(),
             "=~" => Type::union([Type::Nil, Type::Integer]),
             "delete_prefix" | "delete_suffix" | "inspect" | "dump" | "to_str" => Type::String,
+            "+@" => Type::String,
             "index" | "rindex" => Type::union([Type::Nil, Type::Integer]),
             "encode" | "reverse" | "reverse!" | "strip" | "lstrip" | "rstrip" | "upcase"
             | "downcase" | "capitalize" | "swapcase" | "chomp" | "chop" | "succ" | "next"
