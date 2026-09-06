@@ -434,6 +434,14 @@ fn models_string_shellescape() {
 }
 
 #[test]
+fn narrows_rescue_references_to_the_exception_type() {
+    let result = check_fixture("tests/fixtures/rescue_narrowing.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("Revealed type: `Integer`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
