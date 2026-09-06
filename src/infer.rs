@@ -8136,7 +8136,42 @@ impl<'src> Analyzer<'src> {
         element: &Type,
         outer: &mut Environment,
     ) -> Type {
-        if let Some(block) = node.as_block_argument_node() {
+        let previous_expected_return = self.expected_return_type.take();
+        let literal_tuple = node
+            .as_block_node()
+            .and_then(|block| block.body())
+            .and_then(|body| {
+                body.as_array_node().or_else(|| {
+                    body.as_statements_node().and_then(|statements| {
+                        statements
+                            .body()
+                            .into_iter()
+                            .last()
+                            .and_then(|last| last.as_array_node())
+                    })
+                })
+            })
+            .and_then(|array| {
+                array
+                    .elements()
+                    .iter()
+                    .all(|element| element.as_splat_node().is_none())
+                    .then(|| Type::Tuple(vec![Type::Any; array.elements().len()]))
+            });
+        self.expected_return_type = previous_expected_return
+            .as_ref()
+            .and_then(|expected| match expected {
+                Type::Array(element) => Some((**element).clone()),
+                Type::Named(name, arguments)
+                    if arguments.len() == 1 && name_matches(name, "Enumerable") =>
+                {
+                    Some(arguments[0].clone())
+                }
+                _ => None,
+            })
+            .or(literal_tuple);
+
+        let result = if let Some(block) = node.as_block_argument_node() {
             if let Some(symbol) = block
                 .expression()
                 .and_then(|expression| expression.as_symbol_node())
@@ -8146,25 +8181,38 @@ impl<'src> Analyzer<'src> {
                 if let Some(key) = self.receiver_method_key(None, element, &name, outer) {
                     self.record_method_dependency(&key, outer);
                     if let Some(signature) = self.observe_call(&key, &arguments, false) {
-                        return self.invoke_signature(
+                        self.invoke_signature(
                             node,
                             &name,
                             &signature,
                             &arguments,
                             Some(element),
                             None,
-                        );
+                        )
+                    } else {
+                        let site = CallSite {
+                            argument_nodes: &arguments.argument_nodes,
+                            argument_types: &arguments.argument_types,
+                            block: None,
+                        };
+                        self.eval_method_call(element, &name, &site, outer)
                     }
+                } else {
+                    let site = CallSite {
+                        argument_nodes: &arguments.argument_nodes,
+                        argument_types: &arguments.argument_types,
+                        block: None,
+                    };
+                    self.eval_method_call(element, &name, &site, outer)
                 }
-                let site = CallSite {
-                    argument_nodes: &arguments.argument_nodes,
-                    argument_types: &arguments.argument_types,
-                    block: None,
-                };
-                return self.eval_method_call(element, &name, &site, outer);
+            } else {
+                self.eval_block_node(node, std::slice::from_ref(element), outer)
             }
-        }
-        self.eval_block_node(node, std::slice::from_ref(element), outer)
+        } else {
+            self.eval_block_node(node, std::slice::from_ref(element), outer)
+        };
+        self.expected_return_type = previous_expected_return;
+        result
     }
 
     fn inferred_block_signature<'node>(node: &Node<'node>) -> MethodSig {
