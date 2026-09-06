@@ -1830,6 +1830,19 @@ T.reveal_type(instances)
 }
 
 #[test]
+fn does_not_require_inferred_hash_constructor_block() {
+    let source = r#"
+with_block = Hash.new { |key, value| value }
+without_block = Hash.new(0)
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("hash_constructor.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_explicit_result_types_through_flat_map_blocks() {
     let result = check(
         r#"

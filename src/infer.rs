@@ -1982,6 +1982,7 @@ pub(crate) fn check_with_policies(
         substitution_context: None,
         checking_initializer: false,
         initializer_has_block: false,
+        initializer_requires_block: false,
         diagnostics: diagnostics.clone(),
         types: Vec::new(),
         untyped_origins: BTreeMap::new(),
@@ -2039,6 +2040,7 @@ struct Analyzer<'src> {
     substitution_context: Option<MethodKey>,
     checking_initializer: bool,
     initializer_has_block: bool,
+    initializer_requires_block: bool,
     diagnostics: Vec<Diagnostic>,
     types: Vec<InferredType>,
     untyped_origins: BTreeMap<(usize, usize), UntypedOrigin>,
@@ -8653,6 +8655,68 @@ impl<'src> Analyzer<'src> {
         signature: &MethodSig,
         arguments: &CallArguments<'_>,
     ) -> bool {
+        if !self.signature_shape_accepts_arguments(signature, arguments) {
+            return false;
+        }
+        if arguments.forwards_arguments
+            || arguments.has_dynamic_positional_splat
+            || arguments.has_dynamic_keyword_splat
+            || arguments.has_unknown_positional_splat
+            || arguments.has_unknown_keyword_splat
+        {
+            return true;
+        }
+        let keyword_mode = !signature.keywords.is_empty() || signature.accepts_keyword_rest;
+        let positional_types = if keyword_mode {
+            &arguments.positional_types
+        } else {
+            &arguments.argument_types
+        };
+        let type_parameter_bindings =
+            self.infer_type_parameter_bindings(signature, arguments, None);
+        if !positional_types.iter().enumerate().all(|(index, actual)| {
+            let Some(expected) = signature.positional_type(index, positional_types.len()) else {
+                return false;
+            };
+            let expected = self.substitute_signature_type(
+                expected,
+                None,
+                &type_parameter_bindings,
+                &signature.type_parameters,
+            );
+            self.is_assignable(actual, &expected) || matches!(expected, Type::TypeVar(_))
+        }) {
+            return false;
+        }
+        if keyword_mode
+            && !arguments.has_keyword_splat
+            && !arguments.keyword_arguments.iter().all(|argument| {
+                signature
+                    .keywords
+                    .get(&argument.name)
+                    .is_some_and(|expected| {
+                        let expected = self.substitute_signature_type(
+                            &expected.type_,
+                            None,
+                            &type_parameter_bindings,
+                            &signature.type_parameters,
+                        );
+                        self.is_assignable(&argument.type_, &expected)
+                            || matches!(expected, Type::TypeVar(_))
+                    })
+                    || signature.accepts_keyword_rest
+            })
+        {
+            return false;
+        }
+        true
+    }
+
+    fn signature_shape_accepts_arguments(
+        &self,
+        signature: &MethodSig,
+        arguments: &CallArguments<'_>,
+    ) -> bool {
         if arguments.forwards_arguments
             || arguments.has_dynamic_positional_splat
             || arguments.has_dynamic_keyword_splat
@@ -8693,42 +8757,6 @@ impl<'src> Analyzer<'src> {
             {
                 return false;
             }
-        }
-        let type_parameter_bindings =
-            self.infer_type_parameter_bindings(signature, arguments, None);
-        if !positional_types.iter().enumerate().all(|(index, actual)| {
-            let Some(expected) = signature.positional_type(index, positional_types.len()) else {
-                return false;
-            };
-            let expected = self.substitute_signature_type(
-                expected,
-                None,
-                &type_parameter_bindings,
-                &signature.type_parameters,
-            );
-            self.is_assignable(actual, &expected)
-        }) {
-            return false;
-        }
-        if keyword_mode
-            && !arguments.has_keyword_splat
-            && !arguments.keyword_arguments.iter().all(|argument| {
-                signature
-                    .keywords
-                    .get(&argument.name)
-                    .is_some_and(|expected| {
-                        let expected = self.substitute_signature_type(
-                            &expected.type_,
-                            None,
-                            &type_parameter_bindings,
-                            &signature.type_parameters,
-                        );
-                        self.is_assignable(&argument.type_, &expected)
-                    })
-                    || signature.accepts_keyword_rest
-            })
-        {
-            return false;
         }
         true
     }
@@ -8844,12 +8872,18 @@ impl<'src> Analyzer<'src> {
             singleton: false,
         };
         self.record_method_dependency(&key, environment);
-        if let Some(signature) = self.observe_call(&key, arguments, false) {
+        if let Some(signature) = self.observe_call(&key, arguments, has_block) {
             let receiver_type = Type::named(owner.to_owned());
+            let initializer_requires_block = self
+                .resolve_method_key(&key)
+                .and_then(|resolved| self.methods.get(&resolved))
+                .is_some_and(|state| state.explicit);
             let previous_checking_initializer = self.checking_initializer;
             let previous_initializer_has_block = self.initializer_has_block;
+            let previous_initializer_requires_block = self.initializer_requires_block;
             self.checking_initializer = true;
             self.initializer_has_block = has_block;
+            self.initializer_requires_block = initializer_requires_block;
             let _ = self.invoke_signature(
                 node,
                 "initialize",
@@ -8860,6 +8894,7 @@ impl<'src> Analyzer<'src> {
             );
             self.checking_initializer = previous_checking_initializer;
             self.initializer_has_block = previous_initializer_has_block;
+            self.initializer_requires_block = previous_initializer_requires_block;
         }
     }
 
@@ -11500,10 +11535,11 @@ impl<'src> Analyzer<'src> {
                     }
                 }
             }
-            if signature
-                .block
-                .as_ref()
-                .is_some_and(|block| matches!(block, Type::Proc(_, _) | Type::BoundProc { .. }))
+            if self.initializer_requires_block
+                && signature
+                    .block
+                    .as_ref()
+                    .is_some_and(|block| matches!(block, Type::Proc(_, _) | Type::BoundProc { .. }))
                 && !self.initializer_has_block
             {
                 self.error(node, "`initialize` requires a block parameter");
