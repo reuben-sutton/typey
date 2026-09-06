@@ -3763,6 +3763,34 @@ T.reveal_type(ActiveSupport::Inflector.classify("posts"))
 }
 
 #[test]
+fn models_module_registration_calls() {
+    let result = check(
+        r#"
+module Registry
+  VALUE = 1
+
+  def self.configure
+    private_constant :VALUE
+    autoload :Child, "child"
+  end
+end
+
+T.reveal_type(Registry.configure)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `NilClass`")
+                || diagnostic.message.contains("Revealed type: `nil`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_namespaced_classes_that_shadow_primitives() {
     let result = check(
         r#"
