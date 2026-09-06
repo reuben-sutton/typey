@@ -10684,6 +10684,18 @@ impl<'src> Analyzer<'src> {
                     return Type::Any;
                 };
                 let Some(signature) = Self::passed_block_signature(&expression_type) else {
+                    if strictness_rank(self.strictness_at(prism::span(node).0))
+                        >= strictness_rank(Strictness::Strict)
+                    {
+                        let expected = Type::Proc(vec![element.clone()], Box::new(Type::Anything));
+                        self.error(
+                            node,
+                            format!(
+                                "Cannot use a `Proc` with unknown arity as a `{}`",
+                                Self::block_type_description(&expected)
+                            ),
+                        );
+                    }
                     return Type::Any;
                 };
                 let Type::Proc(_, result) = &signature else {
