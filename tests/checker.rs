@@ -90,6 +90,14 @@ fn prefers_direct_class_methods_over_extended_module_methods() {
 }
 
 #[test]
+fn visits_hash_sort_by_blocks() {
+    let result = check_fixture("tests/fixtures/hash_sort_by_block.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `T::Array[[String, Integer]]`")));
+}
+
+#[test]
 fn resolves_method_summaries_across_fixpoint_rounds() {
     let result = check_fixture("tests/fixtures/fixpoint_flow.rb");
     let notes = result
