@@ -82,11 +82,70 @@ fn checks_splat_call_shapes() {
 }
 
 #[test]
+fn dispatches_declared_methods_through_polymorphic_receivers() {
+    let result = check_fixture("tests/fixtures/polymorphic_method_dispatch.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.any(Integer, String)`")),
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `String`"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        1,
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn models_numeric_unary_methods() {
+    let result = check_fixture("tests/fixtures/numeric_unary.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Float`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Integer`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn prefers_direct_class_methods_over_extended_module_methods() {
     let result = check_fixture("tests/fixtures/direct_class_method_precedes_extension.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
-        .message
-        .contains("Revealed type: `String`")));
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
 }
 
 #[test]
