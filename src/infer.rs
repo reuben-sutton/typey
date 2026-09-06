@@ -1653,6 +1653,24 @@ impl<'src> Analyzer<'src> {
         type_.clone()
     }
 
+    fn instance_self_type(&self, owner: &str) -> Type {
+        let hosts = self
+            .classes
+            .iter()
+            .filter_map(|(candidate, info)| {
+                info.includes
+                    .iter()
+                    .any(|included| included == owner || self.nominal_names_match(included, owner))
+                    .then(|| Type::named(candidate.clone()))
+            })
+            .collect::<Vec<_>>();
+        if hosts.is_empty() {
+            Type::named(owner)
+        } else {
+            Type::union(hosts)
+        }
+    }
+
     fn substitute_instance_type(type_: &Type, receiver_type: Option<&Type>) -> Type {
         match type_ {
             Type::Named(name, arguments) if name == "instance" && arguments.is_empty() => {
@@ -4806,7 +4824,7 @@ impl<'src> Analyzer<'src> {
                 if key.singleton {
                     Self::class_object_type(owner)
                 } else {
-                    Type::named(owner.clone())
+                    self.instance_self_type(owner)
                 }
             }),
             method_key: Some(key.clone()),
@@ -6375,8 +6393,13 @@ impl<'src> Analyzer<'src> {
 
     fn implicit_method_key(&self, name: &str, environment: &Environment) -> MethodKey {
         if let Some(current) = &environment.method_key {
+            let owner = if current.singleton {
+                current.owner.clone()
+            } else {
+                Self::named_type_name(&environment.self_type).or_else(|| current.owner.clone())
+            };
             MethodKey {
-                owner: current.owner.clone(),
+                owner,
                 name: name.to_owned(),
                 singleton: current.singleton,
             }
