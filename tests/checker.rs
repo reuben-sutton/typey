@@ -2779,6 +2779,26 @@ T.reveal_type(values.map { |value| value.to_s })
 }
 
 #[test]
+fn infers_each_with_object_array_types_through_prepend() {
+    let result = check(
+        r#"
+values = [1].each_with_object([]) { |value, names| names.prepend(value.to_s) }
+T.reveal_type(values)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `T::Array[String]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
