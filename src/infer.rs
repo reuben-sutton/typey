@@ -7838,6 +7838,13 @@ impl<'src> Analyzer<'src> {
                 receiver
             }
             "+@" | "-@" => receiver,
+            "|" | "&" | "^" | "<<" | ">>" => {
+                if receiver == Type::Integer {
+                    Type::Integer
+                } else {
+                    Type::Any
+                }
+            }
             "+" | "-" | "*" | "%" => {
                 if receiver == Type::Float || argument_types.contains(&Type::Float) {
                     Type::Float
