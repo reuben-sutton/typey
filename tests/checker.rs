@@ -2731,6 +2731,34 @@ T.reveal_type(values.none? { |value| value < 0 })
 }
 
 #[test]
+fn narrows_untyped_values_after_self_class_checks() {
+    let result = check(
+        r#"
+class Package
+  attr_reader :name
+
+  #: (untyped other) -> String
+  def other_name(other)
+    return "" unless other.is_a?(self.class)
+    T.reveal_type(other)
+    other.name
+  end
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `Package`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
