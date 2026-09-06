@@ -480,6 +480,26 @@ T.reveal_type(File.new("fixture", "r").first)
 }
 
 #[test]
+fn infers_generic_hash_types_from_nested_pair_arrays() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "generic_hash_pairs.rb",
+        "# typed: true\nT.reveal_type(Hash[[[1, 2]]])\n",
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .diagnostic
+            .message
+            .contains("Revealed type: `T::Hash[Integer, Integer]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn treats_setter_calls_as_the_assigned_value() {
     let result = check_fixture("tests/fixtures/setter_assignment.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

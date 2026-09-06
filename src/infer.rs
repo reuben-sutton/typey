@@ -2298,13 +2298,24 @@ impl<'src> Analyzer<'src> {
                     );
                 }
             }
-            Type::Tuple(expected_elements) => {
-                if let Type::Tuple(actual_elements) = actual {
+            Type::Tuple(expected_elements) => match actual {
+                Type::Tuple(actual_elements) => {
                     for (expected, actual) in expected_elements.iter().zip(actual_elements) {
                         self.collect_type_parameter_binding(expected, actual, names, bindings);
                     }
                 }
-            }
+                Type::Array(actual_element) => {
+                    for expected in expected_elements {
+                        self.collect_type_parameter_binding(
+                            expected,
+                            actual_element,
+                            names,
+                            bindings,
+                        );
+                    }
+                }
+                _ => {}
+            },
             Type::Proc(expected_parameters, expected_result) => {
                 if let Type::Proc(actual_parameters, actual_result) = actual {
                     for (expected, actual) in expected_parameters.iter().zip(actual_parameters) {
