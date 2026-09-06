@@ -2138,6 +2138,40 @@ T.reveal_type(hash.invert)
 }
 
 #[test]
+fn selects_find_without_fallback_when_optional_argument_is_omitted() {
+    let result = check(
+        r#"
+class Finder
+  sig do
+    type_parameters(:U).params(
+      ifnone: T.proc.returns(T.type_parameter(:U)),
+      blk: T.proc.params(arg0: String).returns(T::Boolean)
+    ).returns(T.any(T.type_parameter(:U), String))
+  end
+  sig do
+    params(blk: T.proc.params(arg0: String).returns(T::Boolean))
+      .returns(T.nilable(String))
+  end
+  def find(ifnone = nil, &blk)
+    "value"
+  end
+end
+
+T.reveal_type(Finder.new.find { |value| value.length > 0 })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(String)`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn infers_dir_globs_as_string_arrays() {
     let result = check(
         r#"
