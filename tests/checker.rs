@@ -2759,6 +2759,26 @@ end
 }
 
 #[test]
+fn infers_typed_enumerator_map_results() {
+    let result = check(
+        r#"
+values = T.let(T.unsafe(nil), T::Enumerator[Integer])
+T.reveal_type(values.map { |value| value.to_s })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `T::Array[String]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
