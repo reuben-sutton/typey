@@ -3872,6 +3872,28 @@ T.reveal_type(Command.new(Files.new).files)
 }
 
 #[test]
+fn preserves_each_with_object_accumulator_types() {
+    let result = check(
+        r#"
+values = [1].each_with_object(["seed"]) do |value, strings|
+  strings << value.to_s
+end
+
+T.reveal_type(values)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_namespaced_classes_that_shadow_primitives() {
     let result = check(
         r#"
