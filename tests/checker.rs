@@ -1574,6 +1574,12 @@ fn uses_attribute_types_for_generated_writers() {
 }
 
 #[test]
+fn preserves_tuple_shape_when_pushing_into_typed_arrays() {
+    let result = check_fixture("tests/fixtures/typed_tuple_array_push.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn resolves_module_function_definitions_on_module_receivers() {
     let result = check(
         r#"
