@@ -7558,6 +7558,10 @@ impl<'src> Analyzer<'src> {
             return type_;
         }
 
+        if name == "to_yaml" {
+            return Type::String;
+        }
+
         if name == "freeze" {
             return receiver.clone();
         }
