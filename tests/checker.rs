@@ -723,6 +723,11 @@ fn checks_array_comparison_return_contracts() {
 }
 
 #[test]
+fn accepts_ranges_with_concrete_integer_endpoints_as_integer_ranges() {
+    check_fixture("tests/fixtures/range_assignability.rb");
+}
+
+#[test]
 fn models_array_inspection_as_string() {
     let result = check(
         r#"

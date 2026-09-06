@@ -12565,6 +12565,19 @@ impl<'src> Analyzer<'src> {
                 true
             }
             (Type::Named(actual_name, actual_args), Type::Named(expected_name, expected_args)) => {
+                if actual_args.len() == 2
+                    && expected_args.len() == 1
+                    && name_matches(actual_name, "Range")
+                    && name_matches(expected_name, "Range")
+                {
+                    // Range literals retain the types of their begin and end
+                    // expressions as two internal arguments. Sorbet's
+                    // `T::Range[Element]` describes the same value by the
+                    // common element type, so both endpoints must satisfy its
+                    // single argument.
+                    return self.is_assignable(&actual_args[0], &expected_args[0])
+                        && self.is_assignable(&actual_args[1], &expected_args[0]);
+                }
                 if self.nominal_names_match(actual_name, expected_name) {
                     expected_args.is_empty()
                         || actual_args.is_empty()
