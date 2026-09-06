@@ -4109,6 +4109,29 @@ T.reveal_type(values)
 }
 
 #[test]
+fn models_env_lookup_as_nilable_string() {
+    let result = check(
+        r#"
+key = "TYPEY_TEST_ENV"
+value = ENV[key]
+
+T.reveal_type(value)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T.nilable(String)`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
