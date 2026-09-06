@@ -216,6 +216,15 @@ fn indexes_inline_record_types() {
 }
 
 #[test]
+fn gives_included_methods_the_host_self_type() {
+    let result = check_fixture("tests/fixtures/mixin_self_dispatch.rb");
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
 fn prefers_direct_class_methods_over_extended_module_methods() {
     let result = check_fixture("tests/fixtures/direct_class_method_precedes_extension.rb");
     assert!(result
