@@ -4276,6 +4276,30 @@ T.reveal_type(entries)
 }
 
 #[test]
+fn preserves_hash_value_types_through_empty_fetch_defaults() {
+    let result = check(
+        r#"
+entries = {} #: Hash[String, Array[String]]
+entries["files"] = ["one.rb"]
+files = entries.fetch("files", [])
+
+T.reveal_type(files)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
