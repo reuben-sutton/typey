@@ -2711,6 +2711,26 @@ T.reveal_type("value".tap { |value| value.length })
 }
 
 #[test]
+fn evaluates_set_predicate_blocks() {
+    let result = check(
+        r#"
+values = T.let(Set.new([1]), T::Set[Integer])
+T.reveal_type(values.any? { |value| value > 0 })
+T.reveal_type(values.all? { |value| value > 0 })
+T.reveal_type(values.none? { |value| value < 0 })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let boolean_reveals = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("Revealed type: `T::Boolean`"))
+        .count();
+    assert_eq!(boolean_reveals, 3, "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
