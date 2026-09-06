@@ -7643,6 +7643,13 @@ impl<'src> Analyzer<'src> {
                 Type::Array(Box::new(element.clone()))
             }
             "to_a" | "to_ary" => Type::Array(Box::new(element.clone())),
+            "to_set" => {
+                let element = site.block.map_or_else(
+                    || element.clone(),
+                    |block| self.eval_block_node(block, std::slice::from_ref(element), environment),
+                );
+                Type::Named("Set".to_owned(), vec![element])
+            }
             _ => Type::Any,
         }
     }
