@@ -3080,6 +3080,25 @@ fn evaluates_collection_callback_variants() {
 }
 
 #[test]
+fn preserves_unmatched_paths_for_literal_case_values() {
+    let source = r#"
+def inspect
+  value = :unhandled
+  case value
+  when :handled
+    return
+  end
+  value.to_s
+end
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_start = source.find("value.to_s").expect("post-case send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + 10
+    }));
+}
+
+#[test]
 fn traverses_blocks_on_unknown_receivers() {
     let source = r#"
 value = T.unsafe([])

@@ -3914,6 +3914,7 @@ impl<'src> Analyzer<'src> {
         let mut branch_environment: Option<Environment> = None;
         let mut result: Option<Eval> = None;
         let mut covered_type = Type::Never;
+        let mut all_conditions_are_type_tests = true;
 
         for condition in &case_node.conditions() {
             let Some(when_node) = condition.as_when_node() else {
@@ -3922,6 +3923,7 @@ impl<'src> Analyzer<'src> {
             let mut when_environment = base.clone();
             let mut condition_type = Type::Never;
             for value in &when_node.conditions() {
+                all_conditions_are_type_tests &= Self::is_case_type_test(&value);
                 let value_type = self.eval_node(&value, &mut when_environment).type_;
                 let value_type = Self::class_object_value_type(&value_type).unwrap_or(value_type);
                 condition_type = condition_type.join(&value_type);
@@ -3966,11 +3968,16 @@ impl<'src> Analyzer<'src> {
             // finite union is covered by the `when` conditions. Preserve its
             // narrowed environment for statements after the case, while
             // avoiding a spurious nil value for exhaustive class switches.
-            let unmatched = predicate_type
-                .as_ref()
-                .map(|candidate| self.case_unmatched_type(candidate, &covered_type));
+            let unmatched = predicate_type.as_ref().map(|candidate| {
+                self.case_unmatched_type(candidate, &covered_type, all_conditions_are_type_tests)
+            });
             if let Some(predicate) = predicate.as_ref() {
-                self.narrow_case_target_without(predicate, &mut else_environment, &covered_type);
+                self.narrow_case_target_without(
+                    predicate,
+                    &mut else_environment,
+                    &covered_type,
+                    all_conditions_are_type_tests,
+                );
             }
             if unmatched.as_ref().is_some_and(Type::is_never) {
                 Eval::from_parts(None, OutcomeTypes::default(), Flow::empty())
@@ -4017,15 +4024,35 @@ impl<'src> Analyzer<'src> {
         predicate: &Node<'node>,
         environment: &mut Environment,
         excluded: &Type,
+        all_conditions_are_type_tests: bool,
     ) {
         if let Some(local) = predicate.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
             let current = environment.get(&name);
-            environment.bind(name, self.case_unmatched_type(&current, excluded));
+            environment.bind(
+                name,
+                self.case_unmatched_type(&current, excluded, all_conditions_are_type_tests),
+            );
         }
     }
 
-    fn case_unmatched_type(&self, candidate: &Type, covered: &Type) -> Type {
+    fn is_case_type_test(node: &Node<'_>) -> bool {
+        node.as_constant_read_node().is_some()
+            || node.as_constant_path_node().is_some()
+            || node.as_true_node().is_some()
+            || node.as_false_node().is_some()
+            || node.as_nil_node().is_some()
+    }
+
+    fn case_unmatched_type(
+        &self,
+        candidate: &Type,
+        covered: &Type,
+        all_conditions_are_type_tests: bool,
+    ) -> Type {
+        if !all_conditions_are_type_tests {
+            return candidate.clone();
+        }
         match candidate {
             Type::Any => Type::Any,
             Type::Union(members) => Type::union(members.iter().filter_map(|member| {
@@ -5350,6 +5377,7 @@ impl<'src> Analyzer<'src> {
                             &name,
                             &arguments.argument_nodes,
                             argument_types,
+                            block.as_ref(),
                             environment,
                         );
                         if type_.contains_any() {
@@ -5363,6 +5391,7 @@ impl<'src> Analyzer<'src> {
                         &name,
                         &arguments.argument_nodes,
                         argument_types,
+                        block.as_ref(),
                         environment,
                     );
                     if type_.contains_any() {
@@ -5376,6 +5405,7 @@ impl<'src> Analyzer<'src> {
                     &name,
                     &arguments.argument_nodes,
                     argument_types,
+                    block.as_ref(),
                     environment,
                 );
                 if type_.contains_any() {
@@ -6262,6 +6292,7 @@ impl<'src> Analyzer<'src> {
         name: &str,
         argument_nodes: &[Node<'node>],
         argument_types: &[Type],
+        block: Option<&Node<'node>>,
         environment: &mut Environment,
     ) -> Type {
         match name {
@@ -6278,7 +6309,13 @@ impl<'src> Analyzer<'src> {
                     _ => Type::Array(Box::new(Type::Any)),
                 },
             ),
-            "Hash" => Type::Hash(Box::new(Type::Any), Box::new(Type::Any)),
+            "Hash" => {
+                if let Some(block) = block {
+                    let hash = Type::Hash(Box::new(Type::Any), Box::new(Type::Any));
+                    let _ = self.eval_block_node(block, &[hash, Type::Any], environment);
+                }
+                Type::Hash(Box::new(Type::Any), Box::new(Type::Any))
+            }
             "lambda" | "proc" => Type::Proc(Vec::new(), Box::new(Type::Any)),
             "rand" => Type::Float,
             "sleep" => Type::Integer,
@@ -6405,6 +6442,14 @@ impl<'src> Analyzer<'src> {
                         },
                     )
                 } else {
+                    if Self::named_type_name(&instance)
+                        .is_some_and(|name| name_matches(&name, "Hash"))
+                    {
+                        if let Some(block) = site.block {
+                            let hash = Type::Hash(Box::new(Type::Any), Box::new(Type::Any));
+                            let _ = self.eval_block_node(block, &[hash, Type::Any], environment);
+                        }
+                    }
                     let _ = arguments;
                     instance
                 }
