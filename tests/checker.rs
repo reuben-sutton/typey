@@ -87,6 +87,11 @@ fn applies_rubys_implicit_object_superclass() {
 }
 
 #[test]
+fn applies_mixed_in_class_methods_to_including_classes() {
+    check_fixture("tests/fixtures/mixes_in_class_methods.rb");
+}
+
+#[test]
 fn distinguishes_static_top_from_untyped() {
     let result = check_fixture("tests/fixtures/static_top.rb");
     assert!(

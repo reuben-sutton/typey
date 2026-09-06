@@ -365,6 +365,7 @@ struct ClassInfo {
     includes: Vec<String>,
     prepends: Vec<String>,
     extends: Vec<String>,
+    class_methods: Vec<String>,
     requires_ancestors: Vec<String>,
     type_members: BTreeMap<String, GenericMember>,
 }
@@ -1590,6 +1591,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                         "include" => info.includes.push(module.clone()),
                         "prepend" => info.prepends.push(module.clone()),
                         "extend" => info.extends.push(module.clone()),
+                        "mixes_in_class_methods" => info.class_methods.push(module.clone()),
                         _ => {}
                     }
                 }
@@ -10039,6 +10041,7 @@ impl<'src> Analyzer<'src> {
             | "private_class_method"
             | "type_member"
             | "type_template"
+            | "mixes_in_class_methods"
             | "each"
             | "include"
             | "prepend"
@@ -12597,6 +12600,11 @@ impl<'src> Analyzer<'src> {
                 .iter()
                 .map(|name| self.resolve_name(name, Some(&owner)))
                 .collect();
+            let class_methods = info
+                .class_methods
+                .iter()
+                .map(|name| self.resolve_name(name, Some(&owner)))
+                .collect();
             let requires_ancestors = info
                 .requires_ancestors
                 .iter()
@@ -12607,7 +12615,32 @@ impl<'src> Analyzer<'src> {
                 info.includes = includes;
                 info.prepends = prepends;
                 info.extends = extends;
+                info.class_methods = class_methods;
                 info.requires_ancestors = requires_ancestors;
+            }
+        }
+
+        let mixins = self
+            .classes
+            .iter()
+            .map(|(owner, info)| (owner.clone(), info.includes.clone()))
+            .collect::<Vec<_>>();
+        for (owner, includes) in mixins {
+            let class_methods = includes
+                .iter()
+                .flat_map(|included| {
+                    self.classes
+                        .get(included)
+                        .into_iter()
+                        .flat_map(|info| info.class_methods.iter().cloned())
+                })
+                .collect::<Vec<_>>();
+            if let Some(info) = self.classes.get_mut(&owner) {
+                for class_method in class_methods {
+                    if !info.extends.contains(&class_method) {
+                        info.extends.push(class_method);
+                    }
+                }
             }
         }
     }
