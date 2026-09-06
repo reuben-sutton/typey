@@ -12,6 +12,22 @@ module Envelope
   T.reveal_type(payload.text) # note: String
 end
 
+module First
+  class Shared
+    sig { returns(String) }
+    def label
+      "first"
+    end
+  end
+
+  value = T.unsafe(nil) #: Shared
+  T.reveal_type(value.label) # note: String
+end
+
+module Second
+  class Shared; end
+end
+
 T.reveal_type("prefix-value".delete_prefix("prefix-")) # note: String
 T.reveal_type("value".inspect) # note: String
 T.reveal_type(+"value") # note: String
