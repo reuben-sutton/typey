@@ -2836,6 +2836,35 @@ end
 }
 
 #[test]
+fn traverses_option_parser_configuration_blocks_with_option_types() {
+    let result = check(
+        r#"
+OptionParser.new do |parser|
+  parser.on("--name", String) { |name| T.reveal_type(name) }
+  parser.on("--names", Array) { |names| T.reveal_type(names) }
+  parser.on("--parallel", TrueClass) { |parallel| T.reveal_type(parallel) }
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    for expected in [
+        "Revealed type: `String`",
+        "Revealed type: `T::Array[String]`",
+        "Revealed type: `T::Boolean`",
+    ] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing {expected} in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"

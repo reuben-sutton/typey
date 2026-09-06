@@ -7594,6 +7594,22 @@ impl<'src> Analyzer<'src> {
         is_string_node.then_some(Type::String)
     }
 
+    fn option_parser_option_type(&self, type_: &Type) -> Option<Type> {
+        let type_ = Self::class_object_value_type(type_).unwrap_or_else(|| type_.clone());
+        match type_ {
+            Type::Named(name, _) if name_matches(&name, "Array") => {
+                Some(Type::Array(Box::new(Type::String)))
+            }
+            Type::String => Some(Type::String),
+            Type::Integer => Some(Type::Integer),
+            Type::Float => Some(Type::Float),
+            Type::True | Type::False => Some(Type::bool()),
+            Type::Named(name, _) if name_matches(&name, "TrueClass") => Some(Type::bool()),
+            Type::Named(name, _) if name_matches(&name, "FalseClass") => Some(Type::bool()),
+            _ => None,
+        }
+    }
+
     fn eval_method_call<'a, 'node>(
         &mut self,
         receiver: &Type,
@@ -7814,6 +7830,17 @@ impl<'src> Analyzer<'src> {
                             let _ = self.eval_block_node(block, &[hash, Type::Any], environment);
                         }
                     }
+                    if Self::named_type_name(&instance)
+                        .is_some_and(|name| name_matches(&name, "OptionParser"))
+                    {
+                        if let Some(block) = site.block {
+                            let _ = self.eval_block_node(
+                                block,
+                                std::slice::from_ref(&instance),
+                                environment,
+                            );
+                        }
+                    }
                     let _ = arguments;
                     instance
                 }
@@ -7893,6 +7920,18 @@ impl<'src> Analyzer<'src> {
                 }
                 _ => self.eval_common_method(name),
             },
+            Type::Named(class, _) if name_matches(class, "OptionParser") && name == "on" => {
+                if let Some(block) = site.block {
+                    let option_type = site
+                        .argument_types
+                        .iter()
+                        .skip(1)
+                        .find_map(|argument| self.option_parser_option_type(argument))
+                        .unwrap_or(Type::Any);
+                    let _ = self.eval_block_node(block, &[option_type], environment);
+                }
+                Type::named("OptionParser")
+            }
             Type::Named(class, arguments) if name_matches(class, "Enumerator") => match name {
                 "map" | "collect" => {
                     if site.block.is_none() {
