@@ -315,6 +315,16 @@ fn preserves_typed_ivar_elements_through_empty_resets() {
 }
 
 #[test]
+fn inherits_typed_ivars_from_superclasses() {
+    let result = check_fixture("tests/fixtures/inherited_typed_ivar.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T::Array[String]`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
