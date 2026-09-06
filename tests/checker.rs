@@ -4152,6 +4152,42 @@ T.reveal_type(path)
 }
 
 #[test]
+fn resolves_methods_from_required_ancestors() {
+    let result = check(
+        r#"
+class Parent
+  #: -> String
+  def value
+    "parent"
+  end
+end
+
+# @requires_ancestor: Parent
+module UsesParent
+  def read_value
+    value
+  end
+end
+
+class Child
+  include UsesParent
+end
+
+T.reveal_type(Child.new.read_value)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `String`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
