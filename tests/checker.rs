@@ -140,6 +140,37 @@ fn models_numeric_unary_methods() {
 }
 
 #[test]
+fn dispatches_short_names_and_structural_builtins() {
+    let result = check_fixture("tests/fixtures/common_builtin_dispatch.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `String`"))
+            .count(),
+        3,
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Array[Integer]`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Hash[String, Integer]`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn prefers_direct_class_methods_over_extended_module_methods() {
     let result = check_fixture("tests/fixtures/direct_class_method_precedes_extension.rb");
     assert!(result
