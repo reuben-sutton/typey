@@ -7577,7 +7577,14 @@ impl<'src> Analyzer<'src> {
                             environment,
                         );
                         if environment.method_key.as_ref().is_some_and(|method| {
-                            method.singleton && method.name != "<bound-block>"
+                            method.singleton
+                                && !matches!(
+                                    method.name.as_str(),
+                                    "<bound-block>"
+                                        | "<class-body>"
+                                        | "<module-body>"
+                                        | "<singleton-body>"
+                                )
                         }) {
                             Type::AttachedClassOf(owner)
                         } else {

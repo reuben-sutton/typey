@@ -1650,6 +1650,20 @@ T.reveal_type(values_to_array({"value" => "text"}))
 }
 
 #[test]
+fn keeps_implicit_class_body_new_as_an_instance_type() {
+    let result = check(
+        r#"
+class Status
+  #: Status
+  ALIVE = new
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn specializes_attached_and_self_types_through_inheritance() {
     let result = check(
         r#"
