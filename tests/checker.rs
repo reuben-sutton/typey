@@ -860,6 +860,11 @@ fn treats_unannotated_block_parameters_as_optional() {
 }
 
 #[test]
+fn does_not_assume_overridable_raising_methods_are_noreturn() {
+    check_fixture("tests/fixtures/overridable_raising_method.rb");
+}
+
+#[test]
 fn maps_arbitrary_and_anonymous_block_parameter_names() {
     let result = check_fixture("tests/fixtures/block_parameter_names.rb");
     assert!(result

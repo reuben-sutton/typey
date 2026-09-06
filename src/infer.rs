@@ -7657,7 +7657,10 @@ impl<'src> Analyzer<'src> {
                 // override) registers a loader and returns nil.  Prefer this
                 // concrete Ruby contract over an untyped external declaration.
                 Type::Nil
-            } else if let Some(signature) = self.observe_call(&key, &arguments, block.is_some()) {
+            } else if let Some(signature) = self
+                .observe_call(&key, &arguments, block.is_some())
+                .map(|signature| self.widen_overridable_noreturn(&key, signature))
+            {
                 let declared = self
                     .resolve_method_key(&key)
                     .and_then(|resolved| self.methods.get(&resolved))
@@ -7930,8 +7933,9 @@ impl<'src> Analyzer<'src> {
                             untyped_origin = Some(UntypedOrigin::InferredMethod);
                         }
                         type_
-                    } else if let Some(signature) =
-                        self.observe_call(&key, &arguments, block.is_some())
+                    } else if let Some(signature) = self
+                        .observe_call(&key, &arguments, block.is_some())
+                        .map(|signature| self.widen_overridable_noreturn(&key, signature))
                     {
                         let declared = self
                             .resolve_method_key(&key)
@@ -8411,6 +8415,7 @@ impl<'src> Analyzer<'src> {
         }
 
         let signature = self.observe_call(key, arguments, block.is_some())?;
+        let signature = self.widen_overridable_noreturn(key, signature);
         let declared = self
             .resolve_method_key(key)
             .and_then(|resolved| self.methods.get(&resolved))
@@ -8438,6 +8443,68 @@ impl<'src> Analyzer<'src> {
             )
         };
         Some((type_, declared))
+    }
+
+    /// An inferred method whose only observed path raises is provisionally
+    /// represented as `T.noreturn`. That is useful for local helper methods,
+    /// but it is not sound for an ordinary Ruby instance method: subclasses
+    /// can override it and return normally. Keep the precise return types of
+    /// known overrides when available, and otherwise use the static top type
+    /// rather than leaking `T.noreturn` into the base implementation.
+    fn widen_overridable_noreturn(&self, key: &MethodKey, mut signature: MethodSig) -> MethodSig {
+        let Some(resolved) = self.resolve_method_key(key) else {
+            return signature;
+        };
+        let Some(state) = self.methods.get(&resolved) else {
+            return signature;
+        };
+        if state.explicit
+            || !state.return_terminates
+            || !state.return_type.as_ref().is_some_and(Type::is_never)
+        {
+            return signature;
+        }
+        let Some(owner) = resolved.owner.as_deref() else {
+            return signature;
+        };
+
+        let mut override_type = Type::Never;
+        let mut found_override = false;
+        for (candidate, candidate_state) in &self.methods {
+            if candidate.singleton != resolved.singleton
+                || candidate.name != resolved.name
+                || candidate.owner.as_deref() == Some(owner)
+            {
+                continue;
+            }
+            let Some(candidate_owner) = candidate.owner.as_deref() else {
+                continue;
+            };
+            if !self.nominal_subtype_names(nominal_name(candidate_owner), nominal_name(owner)) {
+                continue;
+            }
+            found_override = true;
+            let Some(return_type) = candidate_state.return_type.as_ref() else {
+                signature.return_type = Type::union([Type::Nil, Type::Object]);
+                return signature;
+            };
+            if return_type.is_any() {
+                signature.return_type = Type::union([Type::Nil, Type::Object]);
+                return signature;
+            }
+            if !return_type.is_never() {
+                override_type = override_type.join(return_type);
+            }
+        }
+
+        if found_override {
+            signature.return_type = if override_type.is_never() {
+                Type::union([Type::Nil, Type::Object])
+            } else {
+                override_type
+            };
+        }
+        signature
     }
 
     fn private_call_allowed(&self, key: &MethodKey, environment: &Environment) -> bool {
