@@ -8266,7 +8266,18 @@ impl<'src> Analyzer<'src> {
             "[]=" => site.argument_types.last().cloned().unwrap_or(Type::Any),
             "fetch" => {
                 if let Some(default) = site.argument_types.get(1) {
-                    value.join(default)
+                    let empty_default = site.argument_nodes.get(1).is_some_and(|node| {
+                        node.as_array_node()
+                            .is_some_and(|array| array.elements().is_empty())
+                            || node
+                                .as_hash_node()
+                                .is_some_and(|hash| hash.elements().is_empty())
+                    });
+                    if empty_default {
+                        value.clone()
+                    } else {
+                        value.join(default)
+                    }
                 } else if let Some(block) = site.block {
                     let block_type =
                         self.eval_block_node(block, std::slice::from_ref(key), environment);
