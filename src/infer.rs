@@ -5331,6 +5331,15 @@ impl<'src> Analyzer<'src> {
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
                     let current = environment.get(&local_name);
+                    let safe_navigation_non_nil = call.is_safe_navigation()
+                        && (truthy
+                            || self.safe_navigation_method_returns_non_nil(
+                                &receiver,
+                                &current,
+                                &name,
+                                &arguments,
+                                environment,
+                            ));
                     let narrowed = match name.as_str() {
                         "nil?" => {
                             if truthy {
@@ -5348,12 +5357,22 @@ impl<'src> Analyzer<'src> {
                                 current.without(&expected)
                             }
                         }
+                        _ if safe_navigation_non_nil => current.without(&Type::Nil),
                         _ => return,
                     };
                     environment.bind(local_name, narrowed);
                 } else if let Some(instance_variable) = receiver.as_instance_variable_read_node() {
                     let instance_variable_name = prism::constant_name(instance_variable.name());
                     let current = self.ivar_type(environment, &instance_variable_name);
+                    let safe_navigation_non_nil = call.is_safe_navigation()
+                        && (truthy
+                            || self.safe_navigation_method_returns_non_nil(
+                                &receiver,
+                                &current,
+                                &name,
+                                &arguments,
+                                environment,
+                            ));
                     let narrowed = match name.as_str() {
                         "nil?" => {
                             if truthy {
@@ -5371,12 +5390,48 @@ impl<'src> Analyzer<'src> {
                                 current.without(&expected)
                             }
                         }
+                        _ if safe_navigation_non_nil => current.without(&Type::Nil),
                         _ => return,
                     };
                     environment.bind(ivar_refinement_key(&instance_variable_name), narrowed);
                 }
             }
         }
+    }
+
+    fn safe_navigation_method_returns_non_nil<'node>(
+        &mut self,
+        receiver: &Node<'node>,
+        receiver_type: &Type,
+        name: &str,
+        arguments: &[Node<'node>],
+        environment: &mut Environment,
+    ) -> bool {
+        let receiver_type = receiver_type.without(&Type::Nil);
+        if receiver_type.is_any() {
+            return false;
+        }
+        if let Some(key) = self.receiver_method_key(
+            Some(receiver),
+            &receiver_type,
+            name,
+            environment,
+        ) {
+            if let Some(resolved) = self.resolve_method_key(&key) {
+                if let Some(state) = self.methods.get(&resolved) {
+                    let return_type = state.call_signature().return_type;
+                    return !return_type.is_any()
+                        && return_type.without(&Type::Nil) == return_type;
+                }
+            }
+        }
+        let site = CallSite {
+            argument_nodes: arguments,
+            argument_types: &[],
+            block: None,
+        };
+        let return_type = self.eval_method_call(&receiver_type, name, &site, environment);
+        !return_type.is_any() && return_type.without(&Type::Nil) == return_type
     }
 
     fn evaluate_call_arguments<'node>(
