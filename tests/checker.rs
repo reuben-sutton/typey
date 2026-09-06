@@ -4300,6 +4300,28 @@ T.reveal_type(files)
 }
 
 #[test]
+fn models_active_support_inflections() {
+    let result = check(
+        r#"
+inflections = ActiveSupport::Inflector.inflections
+
+T.reveal_type(inflections)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `ActiveSupport::Inflector::Inflections`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
