@@ -3719,6 +3719,7 @@ fn preserves_string_types_through_active_support_inflections() {
 T.reveal_type("file".pluralize)
 T.reveal_type("offense".pluralize)
 T.reveal_type("name".underscore)
+T.reveal_type("posts".classify)
 T.reveal_type("  message  ".squish)
 "#,
         CheckerConfig::default(),
@@ -3732,7 +3733,7 @@ T.reveal_type("  message  ".squish)
                 .message
                 .contains("Revealed type: `String`"))
             .count(),
-        4,
+        5,
         "{:?}",
         result.diagnostics
     );
