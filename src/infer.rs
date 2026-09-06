@@ -7838,15 +7838,17 @@ impl<'src> Analyzer<'src> {
                 .as_block_parameters_node()
                 .and_then(|parameters| parameters.parameters())
             {
+                let expected = Self::destructure_block_parameters(&parameters, expected);
                 self.bind_parameters(
                     Some(parameters),
-                    Some(&MethodSig::new(expected.to_vec(), Type::Any)),
+                    Some(&MethodSig::new(expected, Type::Any)),
                     &mut environment,
                 );
             } else if let Some(parameters) = parameters.as_parameters_node() {
+                let expected = Self::destructure_block_parameters(&parameters, expected);
                 self.bind_parameters(
                     Some(parameters),
-                    Some(&MethodSig::new(expected.to_vec(), Type::Any)),
+                    Some(&MethodSig::new(expected, Type::Any)),
                     &mut environment,
                 );
             } else if parameters.as_it_parameters_node().is_some()
@@ -7874,6 +7876,18 @@ impl<'src> Analyzer<'src> {
         };
         self.propagate_block_locals(outer, &captured, &environment);
         result
+    }
+
+    fn destructure_block_parameters<'node>(
+        parameters: &ParametersNode<'node>,
+        expected: &[Type],
+    ) -> Vec<Type> {
+        if parameters.requireds().len() > 1 {
+            if let [Type::Tuple(elements)] = expected {
+                return elements.clone();
+            }
+        }
+        expected.to_vec()
     }
 
     fn propagate_block_locals(
