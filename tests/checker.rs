@@ -1560,6 +1560,20 @@ T.reveal_type(Box.new.value)
 }
 
 #[test]
+fn uses_attribute_types_for_generated_writers() {
+    let result = check_fixture("tests/fixtures/typed_attribute_writer.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn resolves_module_function_definitions_on_module_receivers() {
     let result = check(
         r#"
