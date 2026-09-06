@@ -789,6 +789,38 @@ pub fn parse_type(raw: &str) -> Type {
     Type::Named(normalized.to_owned(), Vec::new())
 }
 
+/// Resolve one field from an RBS inline record type such as
+/// `{ value: Integer, label: String }`.
+#[must_use]
+pub fn parse_inline_record_field(raw: &str, key_expression: &str) -> Option<Type> {
+    let text = strip_comment_tail(raw.trim()).trim();
+    if !text.starts_with('{') || matching_delimiter(text, 0, '{', '}') != Some(text.len() - 1) {
+        return None;
+    }
+    let key = key_expression
+        .trim()
+        .trim_start_matches(':')
+        .trim_matches(['"', '\'']);
+    if key.is_empty() {
+        return None;
+    }
+    let body = &text[1..text.len() - 1];
+    for field in split_top_level(body, ',') {
+        let Some((field_name, field_type)) = split_top_level_colon(&field) else {
+            continue;
+        };
+        let field_name = field_name
+            .trim()
+            .trim_start_matches('?')
+            .trim_start_matches(':')
+            .trim_matches(['"', '\'']);
+        if field_name == key {
+            return Some(parse_type(field_type));
+        }
+    }
+    None
+}
+
 fn parse_rbs_proc_type(text: &str) -> Option<Type> {
     let text = text.strip_prefix('^')?.trim();
     let arrow = find_top_level_arrow(text)?;

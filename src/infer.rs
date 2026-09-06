@@ -6942,6 +6942,18 @@ impl<'src> Analyzer<'src> {
             return Type::Integer;
         }
 
+        if name == "[]" {
+            if let Type::Named(record, _) = receiver {
+                if let Some(key) = site.argument_nodes.first() {
+                    if let Some(type_) =
+                        signature::parse_inline_record_field(record, &prism::text(self.source, key))
+                    {
+                        return type_;
+                    }
+                }
+            }
+        }
+
         match receiver {
             Type::Array(element) => self.eval_array_method(element, name, site, environment),
             Type::Tuple(elements) => {
