@@ -2546,6 +2546,32 @@ T.reveal_type(left - right)
 }
 
 #[test]
+fn models_parser_source_coordinates_as_integers() {
+    let result = check(
+        r#"
+module Parser
+  module Source
+    class Map
+    end
+  end
+end
+
+location = Parser::Source::Map.new
+T.reveal_type(location.line)
+T.reveal_type(location.column)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let integer_reveals = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("Revealed type: `Integer`"))
+        .count();
+    assert_eq!(integer_reveals, 2, "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
