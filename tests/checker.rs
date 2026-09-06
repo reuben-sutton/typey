@@ -4146,6 +4146,36 @@ T.reveal_type(mapped.to_h)
 }
 
 #[test]
+fn uses_vendored_dynamic_parser_contracts() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "dynamic_parser_contracts.rb",
+        r#"# typed: true
+
+T.reveal_type(JSON.parse("{}"))
+T.reveal_type(YAML.load_file("config.yml"))
+"#,
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T.untyped`"))
+            .count()
+            >= 2,
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn narrows_case_assignments_to_nominal_subclasses() {
     let result = check(
         r#"

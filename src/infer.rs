@@ -8083,12 +8083,6 @@ impl<'src> Analyzer<'src> {
                     self.constant_reference_name(receiver)
                         .is_some_and(|name| name.trim_start_matches("::") == "YAML")
                 });
-            let yaml_load = matches!(name.as_str(), "load" | "load_file")
-                && receiver_node.as_ref().is_some_and(|receiver| {
-                    self.constant_reference_name(receiver).is_some_and(|name| {
-                        matches!(name.trim_start_matches("::"), "YAML" | "Psych")
-                    })
-                });
             let random_formatter_signature = self.random_formatter_signature(
                 receiver_node.as_ref(),
                 &dispatch_receiver_type,
@@ -8096,8 +8090,6 @@ impl<'src> Analyzer<'src> {
             );
             let mut result = if yaml_dump {
                 Type::String
-            } else if yaml_load {
-                Type::union([Type::Nil, Type::Object])
             } else if struct_constructor {
                 Self::class_object_type("Struct")
             } else if let Some(signature) = random_formatter_signature {
