@@ -4898,6 +4898,36 @@ T.reveal_type(Registry.lookup("VALUE"))
 }
 
 #[test]
+fn models_extended_module_autoload_as_nil() {
+    let result = check(
+        r#"
+module ActiveSupport
+  module Autoload
+    def autoload(const_name, path = nil)
+      T.unsafe(nil)
+    end
+  end
+end
+
+module Registry
+  extend ActiveSupport::Autoload
+  T.reveal_type(autoload(:Child, "child"))
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `NilClass`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn narrows_ast_nodes_after_string_predicates() {
     let result = check(
         r#"

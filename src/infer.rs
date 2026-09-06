@@ -7598,6 +7598,13 @@ impl<'src> Analyzer<'src> {
             self.record_method_dependency(&key, environment);
             if let Some(type_) = tsort_type {
                 type_
+            } else if name == "autoload"
+                && Self::class_object_instance_type(&receiver_type).is_some()
+            {
+                // Module#autoload (including ActiveSupport's forwarding
+                // override) registers a loader and returns nil.  Prefer this
+                // concrete Ruby contract over an untyped external declaration.
+                Type::Nil
             } else if let Some(signature) = self.observe_call(&key, &arguments, block.is_some()) {
                 let declared = self
                     .resolve_method_key(&key)
