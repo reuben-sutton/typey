@@ -2612,6 +2612,47 @@ T.reveal_type("a" <=> "b")
 }
 
 #[test]
+fn propagates_namespaced_struct_fields_through_method_returns() {
+    let result = check(
+        r#"
+class Package
+end
+
+module Discovery
+  ConstantContext = Struct.new(:name, :package)
+
+  #: (Package package) -> Discovery::ConstantContext
+  def self.build(package)
+    ConstantContext.new("constant", package)
+  end
+end
+
+T.reveal_type(Discovery.build(Package.new).name)
+T.reveal_type(Discovery.build(Package.new).package)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let messages = result
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Revealed type: `Package`")),
+        "{messages:?}"
+    );
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
