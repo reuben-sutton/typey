@@ -7595,6 +7595,10 @@ impl<'src> Analyzer<'src> {
                 "to_sym" | "intern" => Type::Symbol,
                 _ => self.eval_common_method(name),
             },
+            Type::Named(class, _) if name_matches(class, "ENV") => match name {
+                "[]" | "fetch" => Type::union([Type::Nil, Type::String]),
+                _ => self.eval_common_method(name),
+            },
             Type::Proc(params, result) if matches!(name, "call" | "[]") => {
                 for (index, (argument, expected)) in
                     site.argument_nodes.iter().zip(params).enumerate()
