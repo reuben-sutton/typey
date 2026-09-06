@@ -10544,7 +10544,7 @@ impl<'src> Analyzer<'src> {
                 {
                     Type::union([Type::Nil, element.clone()])
                 } else {
-                    Type::Array(Box::new(element.clone()))
+                    Type::union([Type::Nil, Type::Array(Box::new(element.clone()))])
                 }
             }
             "[]=" => site.argument_types.last().cloned().unwrap_or(Type::Any),

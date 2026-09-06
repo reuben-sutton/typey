@@ -282,6 +282,25 @@ fn models_class_object_methods() {
 }
 
 #[test]
+fn models_array_range_slices_as_nilable() {
+    let result = check(
+        r#"
+values = [1, "text"]
+T.reveal_type(values[1..])
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(T::Array[T.any(Integer, String)])`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn dispatches_short_names_and_structural_builtins() {
     let result = check_fixture("tests/fixtures/common_builtin_dispatch.rb");
     let notes = result
