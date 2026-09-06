@@ -6905,6 +6905,10 @@ impl<'src> Analyzer<'src> {
             return receiver.clone();
         }
 
+        if matches!(name, "dup" | "clone") {
+            return receiver.clone();
+        }
+
         if name == "class" {
             return match receiver {
                 Type::Any => Type::Any,
@@ -6929,7 +6933,7 @@ impl<'src> Analyzer<'src> {
 
         if matches!(
             name,
-            "nil?" | "is_a?" | "kind_of?" | "instance_of?" | "==" | "!=" | "equal?" | "eql?"
+            "nil?" | "is_a?" | "kind_of?" | "instance_of?" | "==" | "!=" | "equal?" | "eql?" | "!"
         ) {
             return Type::bool();
         }
