@@ -1829,6 +1829,35 @@ impl<'src> Analyzer<'src> {
         Some(builtin.unwrap_or(instance))
     }
 
+    fn instantiate_generic_class(&self, type_: Type) -> Type {
+        let Type::Named(name, arguments) = &type_ else {
+            return type_;
+        };
+        if !arguments.is_empty() {
+            return type_;
+        }
+        let Some(info) = self.classes.get(name) else {
+            return type_;
+        };
+        if info.type_members.is_empty() {
+            return type_;
+        }
+        let mut arguments = vec![Type::Any; info.type_members.len()];
+        for member in info.type_members.values() {
+            arguments[member.index] = member.fixed.as_ref().map_or(Type::Any, |fixed| {
+                self.resolve_type_names(fixed, Some(name))
+            });
+        }
+        match name.as_str() {
+            "Array" if arguments.len() == 1 => Type::Array(Box::new(arguments[0].clone())),
+            "Hash" if arguments.len() == 2 => Type::Hash(
+                Box::new(arguments[0].clone()),
+                Box::new(arguments[1].clone()),
+            ),
+            _ => Type::Named(name.clone(), arguments),
+        }
+    }
+
     fn receiver_instance_type(type_: &Type) -> Type {
         if let Some(instance) = Self::class_object_instance_type(type_) {
             return instance;
@@ -2192,7 +2221,11 @@ impl<'src> Analyzer<'src> {
         if !related {
             return None;
         }
-        let member = info.type_members.get(member_name)?;
+        let member = self
+            .classes
+            .get(&receiver_owner)
+            .and_then(|receiver_info| receiver_info.type_members.get(member_name))
+            .or_else(|| info.type_members.get(member_name))?;
         if let Some(fixed) = &member.fixed {
             return Some(self.resolve_type_names(fixed, Some(declared_owner)));
         }
@@ -6747,6 +6780,13 @@ impl<'src> Analyzer<'src> {
                                 block_return_type.as_ref(),
                             )
                         };
+                        let type_ = if name == "new"
+                            && Self::class_object_instance_type(&dispatch_receiver_type).is_some()
+                        {
+                            self.instantiate_generic_class(type_)
+                        } else {
+                            type_
+                        };
                         if type_.contains_any() {
                             untyped_origin = Some(if declared {
                                 UntypedOrigin::DeclaredSignature
@@ -6808,7 +6848,7 @@ impl<'src> Analyzer<'src> {
                 {
                     self.infer_initializer_call(node, &owner, &arguments, environment);
                     self.observe_struct_constructor(&owner, &arguments);
-                    result = Type::named(owner);
+                    result = self.instantiate_generic_class(Type::named(owner));
                 }
             }
             if call.is_safe_navigation() && !receiver_type.is_any() {
@@ -8537,7 +8577,7 @@ impl<'src> Analyzer<'src> {
                         }
                     }
                     let _ = arguments;
-                    instance
+                    self.instantiate_generic_class(instance)
                 }
             }
             Type::Named(class, _) if name == "[]" && name_matches(class, "Class") => {
@@ -8746,6 +8786,7 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Type {
         match name {
+            "new" => Type::Array(Box::new(element.clone())),
             "map" | "collect" | "map!" | "collect!" => {
                 if site.block.is_none() {
                     return Type::named("Enumerator");
@@ -9165,6 +9206,7 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Type {
         match name {
+            "new" => Type::Hash(Box::new(key.clone()), Box::new(value.clone())),
             "[]" | "default" => Type::union([Type::Nil, value.clone()]),
             "dig" => Type::union([Type::Nil, value.clone()]),
             "[]=" => site.argument_types.last().cloned().unwrap_or(Type::Any),

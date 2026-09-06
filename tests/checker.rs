@@ -380,6 +380,64 @@ fn inherits_typed_ivars_from_superclasses() {
 }
 
 #[test]
+fn preserves_generic_types_for_runtime_constructors() {
+    let result = check_fixture("tests/fixtures/generic_runtime_constructors.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Array[Integer]`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Hash[String, Integer]`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn instantiates_builtin_generic_classes_without_erasing_the_element_type() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "builtin_generic_constructors.rb",
+        r#"# typed: true
+
+T.reveal_type(Array.new)
+T.reveal_type(File.new("fixture", "r").first)
+"#,
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Array[T.untyped]`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.nilable(String)`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn preserves_generic_accessor_types_through_nested_iteration() {
     let result = check_fixture("tests/fixtures/generic_accessor_iteration.rb");
     assert!(
