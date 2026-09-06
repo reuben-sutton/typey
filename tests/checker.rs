@@ -2889,6 +2889,25 @@ T.reveal_type(OptionParser.new)
 }
 
 #[test]
+fn infers_option_parser_parse_as_remaining_arguments() {
+    let result = check(
+        r#"
+T.reveal_type(OptionParser.new.parse!(["--name", "value"]))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `T::Array[String]`")),
+        "missing Array[String] reveal in {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"

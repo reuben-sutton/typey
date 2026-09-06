@@ -6028,7 +6028,7 @@ impl<'src> Analyzer<'src> {
                     && Self::class_object_instance_type(&dispatch_receiver_type)
                         .and_then(|instance| Self::named_type_name(&instance))
                         .is_some_and(|class| name_matches(&class, "OptionParser")))
-                    || (name == "on"
+                    || (matches!(name.as_str(), "on" | "parse!")
                         && matches!(
                             &dispatch_receiver_type,
                             Type::Named(class, _) if name_matches(class, "OptionParser")
@@ -7940,18 +7940,22 @@ impl<'src> Analyzer<'src> {
                 }
                 _ => self.eval_common_method(name),
             },
-            Type::Named(class, _) if name_matches(class, "OptionParser") && name == "on" => {
-                if let Some(block) = site.block {
-                    let option_type = site
-                        .argument_types
-                        .iter()
-                        .skip(1)
-                        .find_map(|argument| self.option_parser_option_type(argument))
-                        .unwrap_or(Type::Any);
-                    let _ = self.eval_block_node(block, &[option_type], environment);
+            Type::Named(class, _) if name_matches(class, "OptionParser") => match name {
+                "on" => {
+                    if let Some(block) = site.block {
+                        let option_type = site
+                            .argument_types
+                            .iter()
+                            .skip(1)
+                            .find_map(|argument| self.option_parser_option_type(argument))
+                            .unwrap_or(Type::Any);
+                        let _ = self.eval_block_node(block, &[option_type], environment);
+                    }
+                    Type::named("OptionParser")
                 }
-                Type::named("OptionParser")
-            }
+                "parse!" => Type::Array(Box::new(Type::String)),
+                _ => self.eval_common_method(name),
+            },
             Type::Named(class, arguments) if name_matches(class, "Enumerator") => match name {
                 "map" | "collect" => {
                     if site.block.is_none() {
