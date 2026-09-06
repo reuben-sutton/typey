@@ -2653,6 +2653,26 @@ T.reveal_type(Discovery.build(Package.new).package)
 }
 
 #[test]
+fn models_hash_predicate_blocks() {
+    let result = check(
+        r#"
+values = {"a" => 1}
+T.reveal_type(values.any? { |key, value| key == "a" && value == 1 })
+T.reveal_type(values.all? { |key, value| key == "a" && value == 1 })
+T.reveal_type(values.none? { |key, value| key == "b" && value == 2 })
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let boolean_reveals = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("Revealed type: `T::Boolean`"))
+        .count();
+    assert_eq!(boolean_reveals, 3, "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
