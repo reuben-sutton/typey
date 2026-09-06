@@ -5672,7 +5672,25 @@ impl<'src> Analyzer<'src> {
             } else {
                 receiver_type.clone()
             };
-            let mut result = if let Some(key) = self.receiver_method_key(
+            let mut result = if matches!(
+                dispatch_receiver_type,
+                Type::Union(_) | Type::Intersection(_)
+            ) {
+                let (type_, fallback_origin) = self.eval_polymorphic_receiver_call(
+                    node,
+                    receiver_node.as_ref(),
+                    &dispatch_receiver_type,
+                    &name,
+                    &arguments,
+                    block.as_ref(),
+                    &site,
+                    environment,
+                );
+                if type_.contains_any() {
+                    untyped_origin = Some(fallback_origin);
+                }
+                type_
+            } else if let Some(key) = self.receiver_method_key(
                 receiver_node.as_ref(),
                 &dispatch_receiver_type,
                 &name,
@@ -5802,6 +5820,163 @@ impl<'src> Analyzer<'src> {
             abrupt.join(&callee_abrupt),
             abrupt_flow.union(callee_flow),
         )
+    }
+
+    fn eval_polymorphic_receiver_call<'a, 'node>(
+        &mut self,
+        node: &Node<'node>,
+        receiver_node: Option<&Node<'node>>,
+        receiver_type: &Type,
+        name: &str,
+        arguments: &CallArguments<'node>,
+        block: Option<&Node<'node>>,
+        site: &CallSite<'a, 'node>,
+        environment: &mut Environment,
+    ) -> (Type, UntypedOrigin) {
+        if let Type::Union(members) = receiver_type {
+            let mut result = Type::Never;
+            let mut fallback_origin = UntypedOrigin::FallbackCall;
+            for member in members {
+                let (member_type, member_origin) = self.eval_polymorphic_receiver_call(
+                    node,
+                    receiver_node,
+                    member,
+                    name,
+                    arguments,
+                    block,
+                    site,
+                    environment,
+                );
+                if member_type.contains_any() {
+                    fallback_origin = member_origin;
+                }
+                result = result.join(&member_type);
+            }
+            return (
+                if result.is_never() { Type::Any } else { result },
+                fallback_origin,
+            );
+        }
+
+        if let Type::Intersection(members) = receiver_type {
+            for member in members {
+                let Some(key) = self.receiver_method_key(receiver_node, member, name, environment)
+                else {
+                    continue;
+                };
+                if let Some((type_, declared)) = self.eval_resolved_receiver_call(
+                    node,
+                    name,
+                    &key,
+                    member,
+                    arguments,
+                    block,
+                    environment,
+                ) {
+                    let origin = if declared {
+                        UntypedOrigin::DeclaredSignature
+                    } else {
+                        UntypedOrigin::InferredMethod
+                    };
+                    return (type_, origin);
+                }
+            }
+            let type_ = self.eval_method_call(receiver_type, name, site, environment);
+            let origin = if receiver_type.contains_any() {
+                UntypedOrigin::Propagated
+            } else {
+                UntypedOrigin::FallbackCall
+            };
+            return (type_, origin);
+        }
+
+        if let Some(key) = self.receiver_method_key(receiver_node, receiver_type, name, environment)
+        {
+            if let Some((type_, declared)) = self.eval_resolved_receiver_call(
+                node,
+                name,
+                &key,
+                receiver_type,
+                arguments,
+                block,
+                environment,
+            ) {
+                let origin = if declared {
+                    UntypedOrigin::DeclaredSignature
+                } else {
+                    UntypedOrigin::InferredMethod
+                };
+                return (type_, origin);
+            }
+        }
+
+        let type_ = self.eval_method_call(receiver_type, name, site, environment);
+        let origin = if receiver_type.contains_any() {
+            UntypedOrigin::Propagated
+        } else {
+            UntypedOrigin::FallbackCall
+        };
+        (type_, origin)
+    }
+
+    fn eval_resolved_receiver_call<'node>(
+        &mut self,
+        node: &Node<'node>,
+        name: &str,
+        key: &MethodKey,
+        receiver_type: &Type,
+        arguments: &CallArguments<'node>,
+        block: Option<&Node<'node>>,
+        environment: &mut Environment,
+    ) -> Option<(Type, bool)> {
+        self.record_method_dependency(key, environment);
+        let inferred_accessor = self
+            .resolve_method_key(key)
+            .filter(|resolved| {
+                self.methods
+                    .get(resolved)
+                    .is_some_and(|state| !state.explicit)
+            })
+            .and_then(|resolved| {
+                self.accessors
+                    .get(&resolved)
+                    .copied()
+                    .map(|accessor| (resolved, accessor))
+            });
+        if let Some((accessor_key, accessor)) = inferred_accessor {
+            return Some((
+                self.eval_accessor_call(
+                    &accessor_key,
+                    accessor,
+                    &arguments.argument_types,
+                    environment,
+                ),
+                false,
+            ));
+        }
+
+        let signature = self.observe_call(key, arguments, block.is_some())?;
+        let declared = self
+            .resolve_method_key(key)
+            .and_then(|resolved| self.methods.get(&resolved))
+            .is_some_and(|state| state.explicit);
+        let block_return_type = self.observe_block_call(
+            key,
+            block,
+            &signature,
+            arguments,
+            Some(receiver_type),
+            environment,
+        );
+        let type_ = self.invoke_signature(
+            node,
+            name,
+            &signature,
+            arguments,
+            Some(receiver_type),
+            block_return_type.as_ref(),
+        );
+        Some((type_, declared))
     }
 
     fn call_terminates<'node>(
@@ -7488,6 +7663,7 @@ impl<'src> Analyzer<'src> {
                 let _ = self.eval_block_node(block, std::slice::from_ref(&receiver), environment);
                 receiver
             }
+            "+@" | "-@" => receiver,
             "+" | "-" | "*" | "%" => {
                 if receiver == Type::Float || argument_types.contains(&Type::Float) {
                     Type::Float
