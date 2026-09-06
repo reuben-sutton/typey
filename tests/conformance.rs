@@ -33,9 +33,10 @@ fn parses_inline_expectations_with_reveal_compatibility() {
          T.reveal_type(value) # error: Revealed type: `Integer`\n\
          T.reveal_type(value) # error: `Integer`\n\
          other = 2 # note: a note\n\
+         #             ^ error: caret-style expectation\n\
          ignored = 3 # error:\n",
     );
-    assert_eq!(parsed.len(), 4);
+    assert_eq!(parsed.len(), 5);
     assert_eq!(parsed[0].severity, Severity::Error);
     assert_eq!(parsed[0].line, 1);
     assert_eq!(parsed[1].severity, Severity::Note);
@@ -44,6 +45,8 @@ fn parses_inline_expectations_with_reveal_compatibility() {
     assert_eq!(parsed[2].message, "`Integer`");
     assert_eq!(parsed[3].severity, Severity::Note);
     assert_eq!(parsed[3].message, "a note");
+    assert_eq!(parsed[4].severity, Severity::Error);
+    assert_eq!(parsed[4].message, "caret-style expectation");
 }
 
 #[test]

@@ -38,8 +38,11 @@ impl FixtureReport {
 pub fn expectations(source: &str) -> Vec<InlineExpectation> {
     let mut result = Vec::new();
     for (index, line) in source.lines().enumerate() {
-        for (severity, marker) in [(Severity::Error, "# error:"), (Severity::Note, "# note:")] {
-            if let Some((prefix, message)) = line.split_once(marker) {
+        let Some((prefix, comment)) = line.split_once('#') else {
+            continue;
+        };
+        for (severity, marker) in [(Severity::Error, "error:"), (Severity::Note, "note:")] {
+            if let Some((_, message)) = comment.split_once(marker) {
                 let message = message.trim();
                 if !message.is_empty() {
                     // Sorbet renders `T.reveal_type` as an error diagnostic in

@@ -8480,6 +8480,42 @@ impl<'src> Analyzer<'src> {
                 .unwrap_or(Type::Any)
                 .without(&Type::Nil),
             "unsafe" => Type::Any,
+            "attached_class" => {
+                let owner = environment
+                    .method_key
+                    .as_ref()
+                    .and_then(|key| key.owner.as_deref());
+                let is_singleton = environment
+                    .method_key
+                    .as_ref()
+                    .is_some_and(|key| key.singleton);
+                let is_module = owner
+                    .and_then(|owner| self.classes.get(owner))
+                    .is_some_and(|info| info.is_module);
+                let has_attached_class = owner
+                    .and_then(|owner| self.classes.get(owner))
+                    .is_some_and(|info| info.attached_class_member.is_some());
+                if is_singleton && is_module {
+                    self.error(
+                        node,
+                        "`T.attached_class` cannot be used in singleton methods on modules, because modules cannot be instantiated",
+                    );
+                } else if !is_singleton && is_module && !has_attached_class {
+                    self.error(
+                        node,
+                        format!(
+                            "`{}` must declare `has_attached_class!` before module instance methods can use `T.attached_class`",
+                            owner.unwrap_or("the module")
+                        ),
+                    );
+                } else if !is_singleton && !is_module {
+                    self.error(
+                        node,
+                        "`T.attached_class` may only be used in singleton methods on classes or instance methods on `has_attached_class!` modules",
+                    );
+                }
+                Type::AttachedClass
+            }
             "absurd" => {
                 let actual = argument_types.first().cloned().unwrap_or(Type::Any);
                 if !actual.is_never() {
