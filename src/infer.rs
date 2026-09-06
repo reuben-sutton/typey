@@ -1,5 +1,5 @@
 use crate::diagnostic::Diagnostic;
-use crate::directives::{is_typed_ignore, typed_mode, TypedMode};
+use crate::directives::{effective_typed_mode, is_typed_ignore, typed_mode, TypedMode};
 use crate::prism;
 use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
 use crate::types::{Type, TypeLattice};
@@ -2001,10 +2001,10 @@ pub(crate) fn check_with_policies(
 }
 
 fn source_strictness_ranges(source: &str) -> Vec<(usize, usize, Strictness)> {
-    let strictness = match typed_mode(source) {
-        Some(TypedMode::Strict) => Strictness::Strict,
-        Some(TypedMode::Strong) => Strictness::Strong,
-        _ => return Vec::new(),
+    let strictness = match effective_typed_mode(source) {
+        TypedMode::Strict => Strictness::Strict,
+        TypedMode::Strong => Strictness::Strong,
+        TypedMode::True | TypedMode::False | TypedMode::Ignore => return Vec::new(),
     };
     vec![(0, source.len(), strictness)]
 }

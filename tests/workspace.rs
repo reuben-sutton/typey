@@ -177,6 +177,29 @@ fn typed_false_files_keep_declarations_but_suppress_local_diagnostics() {
 }
 
 #[test]
+fn unsigiled_workspace_files_default_to_typed_true() {
+    let files = vec![
+        WorkspaceFile::new(
+            "api.rb",
+            "class Api\n  extend T::Sig\n\n  sig { params(value: Integer).void }\n  def self.accept(value); end\nend\n",
+        ),
+        WorkspaceFile::new("caller.rb", "Api.accept(\"wrong\")\n"),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == Path::new("caller.rb")
+                && diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Expected `Integer`, but found `String`")
+        }),
+        "unexpected workspace diagnostics: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn strict_files_accept_cross_file_inference() {
     let files = vec![
         WorkspaceFile::new(

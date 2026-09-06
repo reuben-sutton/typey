@@ -4567,6 +4567,29 @@ fn typed_false_suppresses_type_errors_but_keeps_syntax_errors() {
 }
 
 #[test]
+fn unsigiled_sources_default_to_typed_true() {
+    let result = check(
+        "def opaque(value)\n  value\nend\nT.let(\"wrong\", Integer)\n",
+        CheckerConfig::default(),
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("Expected `Integer`, but found `String`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(!result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("insufficient inferred type information")
+    }));
+}
+
+#[test]
 fn strict_mode_accepts_methods_with_concrete_inferred_types() {
     let result = check(
         r#"# typed: strict

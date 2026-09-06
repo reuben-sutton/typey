@@ -30,6 +30,13 @@ pub fn typed_mode(source: &str) -> Option<TypedMode> {
     }
 }
 
+/// Return the effective Sorbet file-level mode, defaulting unsigiled sources
+/// to `typed: true`.
+#[must_use]
+pub fn effective_typed_mode(source: &str) -> TypedMode {
+    typed_mode(source).unwrap_or(TypedMode::True)
+}
+
 /// Return whether a source buffer has Sorbet's file-level `typed: ignore`
 /// sigil in its leading comment area.
 #[must_use]
@@ -39,7 +46,7 @@ pub fn is_typed_ignore(source: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_typed_ignore, typed_mode, TypedMode};
+    use super::{effective_typed_mode, is_typed_ignore, typed_mode, TypedMode};
 
     #[test]
     fn recognizes_ignore_sigils_in_the_leading_comment_area() {
@@ -76,5 +83,17 @@ mod tests {
         assert_eq!(typed_mode("# typed: maybe\n# typed: strict\n"), None);
         let late = format!("{}\n# typed: true\n", "\n".repeat(20));
         assert_eq!(typed_mode(&late), None);
+    }
+
+    #[test]
+    fn defaults_unsigiled_sources_to_true() {
+        assert_eq!(
+            effective_typed_mode("class Example; end\n"),
+            TypedMode::True
+        );
+        assert_eq!(
+            effective_typed_mode("# typed: false\nclass Example; end\n"),
+            TypedMode::False
+        );
     }
 }

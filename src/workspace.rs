@@ -8,7 +8,7 @@
 //! original files before they are returned.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::directives::{is_typed_ignore, typed_mode, TypedMode};
+use crate::directives::{effective_typed_mode, is_typed_ignore, typed_mode, TypedMode};
 use crate::infer::{check_with_policies, CheckerConfig, Strictness, UntypedOrigin};
 use crate::types::Type;
 use std::fs;
@@ -190,10 +190,10 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
         combined.push_str(&file.source);
         let end = combined.len();
         ranges.push(SourceRange { start, end });
-        let strictness = match typed_mode(&file.source) {
-            Some(TypedMode::Strict) => Some(Strictness::Strict),
-            Some(TypedMode::Strong) => Some(Strictness::Strong),
-            _ => None,
+        let strictness = match effective_typed_mode(&file.source) {
+            TypedMode::Strict => Some(Strictness::Strict),
+            TypedMode::Strong => Some(Strictness::Strong),
+            TypedMode::True | TypedMode::False | TypedMode::Ignore => None,
         };
         if let Some(strictness) = strictness {
             strictness_ranges.push((start, end, strictness));
