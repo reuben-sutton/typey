@@ -7335,7 +7335,9 @@ impl<'src> Analyzer<'src> {
                 return environment.self_type.clone();
             }
         }
-        match signature::parse_type(&prism::text(self.source, node)) {
+        let type_ = signature::parse_type(&prism::text(self.source, node));
+        let owner = self.lexical_owner(environment);
+        match self.resolve_type_names(&type_, owner.as_deref()) {
             Type::Named(name, arguments)
                 if arguments.is_empty()
                     && (name_matches(&name, "Class") || name_matches(&name, "Module")) =>

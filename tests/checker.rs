@@ -112,6 +112,19 @@ fn narrows_basic_object_after_class_case_equality() {
 }
 
 #[test]
+fn resolves_predicate_types_lexically() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs read");
+    files.push(WorkspaceFile::new(
+        "tests/fixtures/lexical_predicate_type.rb",
+        std::fs::read_to_string("tests/fixtures/lexical_predicate_type.rb")
+            .expect("fixture exists"),
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn applies_rubys_implicit_object_superclass() {
     check_fixture("tests/fixtures/default_object_inheritance.rb");
 }
