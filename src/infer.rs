@@ -2495,6 +2495,7 @@ impl<'src> Analyzer<'src> {
         self.eval_node(root, &mut environment);
 
         self.report_inference_gaps();
+        let types = Self::deduplicate_types(std::mem::take(&mut self.types));
         self.diagnostics.sort_by(|left, right| {
             left.start
                 .cmp(&right.start)
@@ -2504,12 +2505,12 @@ impl<'src> Analyzer<'src> {
             eprintln!(
                 "[typey] complete: {} diagnostics, {} recorded types",
                 self.diagnostics.len(),
-                self.types.len()
+                types.len()
             );
         }
         CheckResult {
             diagnostics: self.diagnostics,
-            types: self.types,
+            types,
         }
     }
 
@@ -2680,6 +2681,21 @@ impl<'src> Analyzer<'src> {
             is_send: Self::is_send_node(node),
         });
         type_
+    }
+
+    fn deduplicate_types(types: Vec<InferredType>) -> Vec<InferredType> {
+        let mut by_span = BTreeMap::<(usize, usize), InferredType>::new();
+        for inferred in types {
+            let key = (inferred.start, inferred.end);
+            if let Some(previous) = by_span.get_mut(&key) {
+                let is_send = previous.is_send || inferred.is_send;
+                *previous = inferred;
+                previous.is_send = is_send;
+            } else {
+                by_span.insert(key, inferred);
+            }
+        }
+        by_span.into_values().collect()
     }
 
     fn error<'node>(&mut self, node: &Node<'node>, message: impl Into<String>) {

@@ -1481,6 +1481,7 @@ fn publishes_only_the_final_type_per_expression() {
         .collect::<Vec<_>>();
     assert_eq!(types.len(), 1, "duplicate final types: {types:?}");
     assert_eq!(types[0].type_, Type::String, "unexpected final type: {types:?}");
+    assert!(types[0].is_send, "send metadata was lost: {types:?}");
 }
 
 #[test]
