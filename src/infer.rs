@@ -9192,6 +9192,22 @@ impl<'src> Analyzer<'src> {
                 &mut BTreeSet::new(),
                 &mut candidates,
             );
+            // A class object dispatches first to the receiver's singleton
+            // class, then to the instance methods of Class/Module.  The
+            // receiver key only stores the former owner, so add the latter
+            // lookup explicitly when a singleton call did not resolve there.
+            // This is what makes APIs such as Module#const_get and
+            // Module#class_eval visible on `SomeClass`, without accepting an
+            // arbitrary missing singleton method.
+            if key.singleton {
+                self.append_method_candidates(
+                    "Class",
+                    &key.name,
+                    false,
+                    &mut BTreeSet::new(),
+                    &mut candidates,
+                );
+            }
         } else {
             candidates.push(key.clone());
         }

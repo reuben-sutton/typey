@@ -3141,6 +3141,28 @@ T.reveal_type(Namespace.const_get("Thing"))
 }
 
 #[test]
+fn resolves_class_object_calls_through_class_and_module() {
+    let result = check(
+        r#"
+class Module
+  def inherited_module_method
+  end
+end
+
+class Class < Module
+end
+
+class Example
+end
+
+Example.inherited_module_method
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn infers_array_to_h_key_and_value_types_from_block_pairs() {
     let result = check(
         r#"
