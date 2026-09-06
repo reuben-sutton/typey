@@ -6564,12 +6564,31 @@ impl<'src> Analyzer<'src> {
         let Some(key) = self.ivar_key(environment, name) else {
             return Type::Any;
         };
-        self.record_shared_read(SharedKey::Ivar(key.clone()), environment);
         let refinement = ivar_refinement_key(name);
         if environment.contains(&refinement) {
             return environment.get(&refinement);
         }
-        self.ivars.get(&key).cloned().unwrap_or(Type::Any)
+        let mut owner = Some(key.owner.clone());
+        let mut visited = BTreeSet::new();
+        while let Some(owner_name) = owner {
+            if !visited.insert(owner_name.clone()) {
+                break;
+            }
+            let candidate = IvarKey {
+                owner: owner_name.clone(),
+                singleton: key.singleton,
+                name: key.name.clone(),
+            };
+            if let Some(type_) = self.ivars.get(&candidate).cloned() {
+                self.record_shared_read(SharedKey::Ivar(candidate), environment);
+                return type_;
+            }
+            owner = self
+                .classes
+                .get(&owner_name)
+                .and_then(|info| info.superclass.clone());
+        }
+        Type::Any
     }
 
     fn inferred_accessor_ivar_type(
