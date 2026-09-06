@@ -168,6 +168,28 @@ fn dispatches_short_names_and_structural_builtins() {
             .any(|message| message.contains("Revealed type: `T::Hash[String, Integer]`")),
         "{notes:?}"
     );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Boolean`")),
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T::Array[Integer]`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T::Hash[String, Integer]`"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
 }
 
 #[test]
