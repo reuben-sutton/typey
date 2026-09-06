@@ -4252,6 +4252,30 @@ T.reveal_type(specification)
 }
 
 #[test]
+fn infers_empty_each_with_object_hash_accumulators() {
+    let result = check(
+        r#"
+entries = [1].each_with_object({}) do |value, output|
+  output[value.to_s] = value
+end
+
+T.reveal_type(entries)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Hash[String, Integer]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
