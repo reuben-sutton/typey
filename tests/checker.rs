@@ -107,6 +107,18 @@ fn enforces_private_class_method_visibility() {
 }
 
 #[test]
+fn infers_the_static_top_for_bare_class_annotations() {
+    let result = check_fixture("tests/fixtures/bare_class_generic.rb");
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `Class[T.anything]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn checks_splat_call_shapes() {
     check_fixture("tests/fixtures/splat_comparison.rb");
 }

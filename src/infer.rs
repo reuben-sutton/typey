@@ -6522,7 +6522,7 @@ impl<'src> Analyzer<'src> {
                 if arguments.is_empty()
                     && (name_matches(&name, "Class") || name_matches(&name, "Module")) =>
             {
-                Type::Named(name, vec![Type::Any])
+                Type::Named(name, vec![Type::Anything])
             }
             type_ => type_,
         }
@@ -10413,8 +10413,11 @@ impl<'src> Analyzer<'src> {
                 } else {
                     self.resolve_name(name, owner)
                 };
-                Type::Named(
-                    resolved,
+                let arguments = if arguments.is_empty()
+                    && (name_matches(&resolved, "Class") || name_matches(&resolved, "Module"))
+                {
+                    vec![Type::Anything]
+                } else {
                     arguments
                         .iter()
                         .map(|argument| {
@@ -10424,8 +10427,9 @@ impl<'src> Analyzer<'src> {
                                 local_type_parameters,
                             )
                         })
-                        .collect(),
-                )
+                        .collect()
+                };
+                Type::Named(resolved, arguments)
             }
             Type::Array(element) => Type::Array(Box::new(self.resolve_type_names_with_locals(
                 element,
