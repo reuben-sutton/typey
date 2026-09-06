@@ -7965,9 +7965,23 @@ impl<'src> Analyzer<'src> {
                 .and_then(|expression| expression.as_symbol_node())
             {
                 let name = String::from_utf8_lossy(symbol.unescaped()).into_owned();
+                let arguments = CallArguments::default();
+                if let Some(key) = self.receiver_method_key(None, element, &name, outer) {
+                    self.record_method_dependency(&key, outer);
+                    if let Some(signature) = self.observe_call(&key, &arguments, false) {
+                        return self.invoke_signature(
+                            node,
+                            &name,
+                            &signature,
+                            &arguments,
+                            Some(element),
+                            None,
+                        );
+                    }
+                }
                 let site = CallSite {
-                    argument_nodes: &[],
-                    argument_types: &[],
+                    argument_nodes: &arguments.argument_nodes,
+                    argument_types: &arguments.argument_types,
                     block: None,
                 };
                 return self.eval_method_call(element, &name, &site, outer);
