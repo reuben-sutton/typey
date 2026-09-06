@@ -7596,6 +7596,31 @@ impl<'src> Analyzer<'src> {
         }
 
         if let Some(instance) = Self::class_object_instance_type(receiver) {
+            if name == "const_get" {
+                let constant_name = site.argument_nodes.first().and_then(|node| {
+                    node.as_string_node()
+                        .map(|string| String::from_utf8_lossy(string.unescaped()).into_owned())
+                        .or_else(|| {
+                            node.as_symbol_node().map(|symbol| {
+                                String::from_utf8_lossy(symbol.unescaped()).into_owned()
+                            })
+                        })
+                });
+                if let (Some(owner), Some(constant_name)) =
+                    (Self::named_type_name(&instance), constant_name)
+                {
+                    let resolved = self.resolve_name(
+                        &constant_name,
+                        (!constant_name.starts_with("::")).then_some(owner.as_str()),
+                    );
+                    if self.classes.contains_key(&resolved) {
+                        return Self::class_object_type(&resolved);
+                    }
+                    if let Some(type_) = self.constants.get(&resolved).cloned() {
+                        return self.resolve_type_names(&type_, Some(&owner));
+                    }
+                }
+            }
             if Self::named_type_name(&instance)
                 .is_some_and(|name| name_matches(&name, "ActiveSupport::Inflector"))
             {
