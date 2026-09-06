@@ -1469,14 +1469,19 @@ T.reveal_type(instances)
 
 #[test]
 fn publishes_only_the_final_type_per_expression() {
-    let source = "# typed: strict\n\n#: (String command) -> String\ndef exec(command)\n  command.to_s\nend\n";
-    let result = check(source, CheckerConfig::default());
-    let start = source.find("command.to_s").expect("call span");
+    let source = "# typed: strict\n\n#: (String command) -> String\ndef exec(command)\n  command.shellescape\nend\n";
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("app.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    let start = source.find("command.shellescape").expect("call span");
     let types = result
         .types
         .iter()
         .filter(|inferred| {
-            inferred.start == start && inferred.end == start + "command.to_s".len()
+            inferred.path.ends_with("app.rb")
+                && inferred.start == start
+                && inferred.end == start + "command.shellescape".len()
         })
         .collect::<Vec<_>>();
     assert_eq!(types.len(), 1, "duplicate final types: {types:?}");
