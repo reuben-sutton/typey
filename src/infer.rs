@@ -10937,6 +10937,15 @@ impl<'src> Analyzer<'src> {
                 });
                 Type::Array(Box::new(self.flat_map_element_type(&block_type)))
             }
+            "grep" | "grep_v" => {
+                let filtered = site
+                    .argument_types
+                    .first()
+                    .and_then(Self::class_object_value_type)
+                    .map(|expected| self.meet_predicate_type(element, &expected))
+                    .unwrap_or_else(|| element.clone());
+                Type::Array(Box::new(filtered))
+            }
             "to_h" => {
                 let pair_type = site.block.map_or_else(
                     || element.clone(),

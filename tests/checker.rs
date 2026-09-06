@@ -3802,6 +3802,32 @@ T.reveal_type(hash.fetch("answer") { |key| key.length })
 }
 
 #[test]
+fn narrows_array_grep_to_class_argument() {
+    let result = check(
+        r#"
+class Base; end
+class Child < Base; end
+
+values = [] #: Array[Base]
+filtered = values.grep(Child)
+T.reveal_type(filtered)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic
+                    .message
+                    .contains("Revealed type: `T::Array[Child]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"
