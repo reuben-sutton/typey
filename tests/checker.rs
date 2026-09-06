@@ -153,7 +153,7 @@ fn dispatches_short_names_and_structural_builtins() {
             .iter()
             .filter(|message| message.contains("Revealed type: `String`"))
             .count(),
-        4,
+        5,
         "{notes:?}"
     );
     assert!(
