@@ -1861,15 +1861,17 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
-        if let (Some(Type::Proc(_, expected_return)), Some(actual_return)) =
-            (signature.block.as_ref(), block_return_type)
-        {
-            self.collect_type_parameter_binding(
-                expected_return,
-                actual_return,
-                &names,
-                &mut bindings,
-            );
+        if let Some(block) = signature.block.as_ref().and_then(optional_proc_type) {
+            if let (Type::Proc(_, expected_return), Some(actual_return)) =
+                (&block, block_return_type)
+            {
+                self.collect_type_parameter_binding(
+                    expected_return,
+                    actual_return,
+                    &names,
+                    &mut bindings,
+                );
+            }
         }
         bindings
     }
@@ -6291,8 +6293,9 @@ impl<'src> Analyzer<'src> {
         });
         let expected = block_signature
             .as_ref()
+            .and_then(optional_proc_type)
             .and_then(|block| match block {
-                Type::Proc(parameters, _) => Some(parameters.clone()),
+                Type::Proc(parameters, _) => Some(parameters),
                 _ => None,
             })
             .unwrap_or_else(|| {
@@ -6300,7 +6303,16 @@ impl<'src> Analyzer<'src> {
                     .get(&key)
                     .map_or_else(Vec::new, MethodState::block_parameters)
             });
+        let previous_expected_return = self.expected_return_type.take();
+        self.expected_return_type = block_signature
+            .as_ref()
+            .and_then(optional_proc_type)
+            .and_then(|block| match block {
+                Type::Proc(_, result) => Some(*result),
+                _ => None,
+            });
         let block_type = self.eval_block_node(block, &expected, environment);
+        self.expected_return_type = previous_expected_return;
         let mut checked_bindings =
             self.infer_type_parameter_bindings(signature, arguments, Some(&block_type));
         checked_bindings.extend(self.infer_generic_member_bindings(
@@ -6316,12 +6328,17 @@ impl<'src> Analyzer<'src> {
                 &signature.type_parameters,
             )
         });
-        if let Some(Type::Proc(_, expected_return)) = checked_block_signature.as_ref() {
-            if !expected_return.is_any()
-                && !expected_return.is_nil()
-                && !self.is_assignable(&block_type, expected_return)
-            {
-                self.check_assignable(block, &block_type, expected_return);
+        if let Some(block_signature) = checked_block_signature
+            .as_ref()
+            .and_then(optional_proc_type)
+        {
+            if let Type::Proc(_, expected_return) = block_signature {
+                if !expected_return.is_any()
+                    && !expected_return.is_nil()
+                    && !self.is_assignable(&block_type, &expected_return)
+                {
+                    self.check_assignable(block, &block_type, &expected_return);
+                }
             }
         }
         if self.methods.get(&key).is_some_and(|state| !state.explicit)
