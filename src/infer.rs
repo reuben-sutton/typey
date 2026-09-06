@@ -6024,6 +6024,26 @@ impl<'src> Analyzer<'src> {
                         untyped_origin = Some(UntypedOrigin::FallbackCall);
                     }
                     type_
+                } else if (name == "new"
+                    && Self::class_object_instance_type(&dispatch_receiver_type)
+                        .and_then(|instance| Self::named_type_name(&instance))
+                        .is_some_and(|class| name_matches(&class, "OptionParser")))
+                    || (name == "on"
+                        && matches!(
+                            &dispatch_receiver_type,
+                            Type::Named(class, _) if name_matches(class, "OptionParser")
+                        ))
+                {
+                    let type_ = self.eval_method_call(
+                        &dispatch_receiver_type,
+                        &name,
+                        &site,
+                        environment,
+                    );
+                    if type_.contains_any() {
+                        untyped_origin = Some(UntypedOrigin::FallbackCall);
+                    }
+                    type_
                 } else {
                     let inferred_accessor = self
                         .resolve_method_key(&key)

@@ -2866,6 +2866,7 @@ OptionParser.new do |parser|
   parser.on("--names", Array) { |names| T.reveal_type(names) }
   parser.on("--parallel", TrueClass) { |parallel| T.reveal_type(parallel) }
 end
+T.reveal_type(OptionParser.new)
 "#,
         CheckerConfig::default(),
     );
@@ -2874,6 +2875,7 @@ end
         "Revealed type: `String`",
         "Revealed type: `T::Array[String]`",
         "Revealed type: `T::Boolean`",
+        "Revealed type: `OptionParser`",
     ] {
         assert!(
             result
