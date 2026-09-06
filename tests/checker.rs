@@ -375,6 +375,16 @@ fn models_array_intersection_predicates() {
 }
 
 #[test]
+fn models_array_comparison() {
+    let result = check_fixture("tests/fixtures/array_comparison.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(Integer)`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
