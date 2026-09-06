@@ -4104,6 +4104,26 @@ T.reveal_type(entries.to_h { |entry| [entry.key, entry] })
 }
 
 #[test]
+fn narrows_case_assignments_to_nominal_subclasses() {
+    let result = check(
+        r#"
+class Base; end
+class Child < Base
+  def child_only; end
+end
+
+format = Base.new
+case (format = Base.new)
+when Child
+  format.child_only
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"

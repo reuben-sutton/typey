@@ -5442,8 +5442,7 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
         condition_type: &Type,
     ) {
-        if let Some(local) = predicate.as_local_variable_read_node() {
-            let name = prism::constant_name(local.name());
+        if let Some(name) = Self::case_target_name(predicate) {
             let current = environment.get(&name);
             environment.bind(name, self.meet_predicate_type(&current, condition_type));
         }
@@ -5456,8 +5455,7 @@ impl<'src> Analyzer<'src> {
         excluded: &Type,
         all_conditions_are_type_tests: bool,
     ) {
-        if let Some(local) = predicate.as_local_variable_read_node() {
-            let name = prism::constant_name(local.name());
+        if let Some(name) = Self::case_target_name(predicate) {
             let current = environment.get(&name);
             environment.bind(
                 name,
@@ -5472,11 +5470,31 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
         excluded: &Type,
     ) {
-        if let Some(local) = predicate.as_local_variable_read_node() {
-            let name = prism::constant_name(local.name());
+        if let Some(name) = Self::case_target_name(predicate) {
             let current = environment.get(&name);
             environment.bind(name, current.without(excluded));
         }
+    }
+
+    fn case_target_name(node: &Node<'_>) -> Option<String> {
+        if let Some(parentheses) = node.as_parentheses_node() {
+            return parentheses
+                .body()
+                .and_then(|body| Self::case_target_name(&body));
+        }
+        if let Some(statements) = node.as_statements_node() {
+            return statements
+                .body()
+                .into_iter()
+                .last()
+                .and_then(|body| Self::case_target_name(&body));
+        }
+        node.as_local_variable_read_node()
+            .map(|local| prism::constant_name(local.name()))
+            .or_else(|| {
+                node.as_local_variable_write_node()
+                    .map(|write| prism::constant_name(write.name()))
+            })
     }
 
     fn is_case_type_test(node: &Node<'_>, value_type: &Type) -> bool {
