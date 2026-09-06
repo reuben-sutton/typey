@@ -7169,7 +7169,7 @@ impl<'src> Analyzer<'src> {
             "sleep" => Type::Integer,
             "include" | "prepend" | "extend" | "alias_method" | "attr_reader" | "attr_writer"
             | "attr_accessor" | "private" | "protected" | "public" | "module_function"
-            | "refine" => Type::Nil,
+            | "autoload" | "private_constant" | "public_constant" | "refine" => Type::Nil,
             "id" | "object_id" | "hash" => Type::Integer,
             _ => {
                 let _ = (node, argument_nodes, environment);
