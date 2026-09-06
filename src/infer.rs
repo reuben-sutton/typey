@@ -157,8 +157,11 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
         let is_block_parameter =
             shape.has_block && (shape.block_name.as_deref() == Some(name.as_str()) || name == "&");
         if is_block_parameter {
-            if let Some(proc_type) = optional_proc_type(type_) {
-                block = Some(proc_type);
+            if optional_proc_type(type_).is_some() {
+                // Preserve nilability here. It distinguishes Ruby's
+                // optional `&blk` parameters from Sorbet's required block
+                // parameters when constructor calls are checked.
+                block = Some(type_.clone());
                 continue;
             }
         }
@@ -1976,6 +1979,9 @@ pub(crate) fn check_with_policies(
         debug_nodes: 0,
         defer_inline_assertions: false,
         expected_return_type: None,
+        substitution_context: None,
+        checking_initializer: false,
+        initializer_has_block: false,
         diagnostics: diagnostics.clone(),
         types: Vec::new(),
         untyped_origins: BTreeMap::new(),
@@ -2030,6 +2036,9 @@ struct Analyzer<'src> {
     debug_nodes: usize,
     defer_inline_assertions: bool,
     expected_return_type: Option<Type>,
+    substitution_context: Option<MethodKey>,
+    checking_initializer: bool,
+    initializer_has_block: bool,
     diagnostics: Vec<Diagnostic>,
     types: Vec<InferredType>,
     untyped_origins: BTreeMap<(usize, usize), UntypedOrigin>,
@@ -2920,7 +2929,20 @@ impl<'src> Analyzer<'src> {
         type_parameters: &[String],
     ) -> Type {
         let names = type_parameters.iter().cloned().collect::<BTreeSet<_>>();
-        let attached_class = self.attached_class_type(receiver_type);
+        let attached_class = self
+            .substitution_context
+            .as_ref()
+            .filter(|context| context.singleton)
+            .and_then(|context| context.owner.as_deref())
+            .filter(|owner| {
+                receiver_type
+                    .and_then(Self::class_object_owner)
+                    .is_some_and(|receiver_owner| receiver_owner == *owner)
+            })
+            .map_or_else(
+                || self.attached_class_type(receiver_type),
+                |owner| Type::AttachedClassOf(owner.to_owned()),
+            );
         if let Type::BoundProc {
             receiver,
             parameters,
@@ -3852,12 +3874,16 @@ impl<'src> Analyzer<'src> {
             if let Some(body) = class.body() {
                 let mut class_environment = environment.clone();
                 class_environment.self_type = Self::class_object_type(&class_name);
-                class_environment.method_key = Some(MethodKey {
+                let class_body_key = MethodKey {
                     owner: Some(class_name),
                     name: "<class-body>".to_owned(),
                     singleton: true,
-                });
+                };
+                class_environment.method_key = Some(class_body_key.clone());
+                let previous_substitution_context =
+                    self.substitution_context.replace(class_body_key);
                 self.eval_node(&body, &mut class_environment);
+                self.substitution_context = previous_substitution_context;
             }
             return Eval::value(self.record(node, Type::Nil));
         }
@@ -3874,12 +3900,16 @@ impl<'src> Analyzer<'src> {
             if let Some(body) = module.body() {
                 let mut module_environment = environment.clone();
                 module_environment.self_type = Self::class_object_type(&module_name);
-                module_environment.method_key = Some(MethodKey {
+                let module_body_key = MethodKey {
                     owner: Some(module_name),
                     name: "<module-body>".to_owned(),
                     singleton: true,
-                });
+                };
+                module_environment.method_key = Some(module_body_key.clone());
+                let previous_substitution_context =
+                    self.substitution_context.replace(module_body_key);
                 self.eval_node(&body, &mut module_environment);
+                self.substitution_context = previous_substitution_context;
             }
             return Eval::value(self.record(node, Type::Nil));
         }
@@ -3900,12 +3930,16 @@ impl<'src> Analyzer<'src> {
             if let Some(body) = singleton.body() {
                 let mut singleton_environment = environment.clone();
                 singleton_environment.self_type = expression_type;
-                singleton_environment.method_key = Some(MethodKey {
+                let singleton_body_key = MethodKey {
                     owner,
                     name: "<singleton-body>".to_owned(),
                     singleton: true,
-                });
+                };
+                singleton_environment.method_key = Some(singleton_body_key.clone());
+                let previous_substitution_context =
+                    self.substitution_context.replace(singleton_body_key);
                 self.eval_node(&body, &mut singleton_environment);
+                self.substitution_context = previous_substitution_context;
             }
             return Eval::value(self.record(node, Type::Nil));
         }
@@ -5816,6 +5850,7 @@ impl<'src> Analyzer<'src> {
             return Eval::value(Type::Nil);
         }
         self.begin_method_evaluation(&key);
+        let previous_substitution_context = self.substitution_context.replace(key.clone());
         let state = self
             .methods
             .get(&key)
@@ -5904,6 +5939,7 @@ impl<'src> Analyzer<'src> {
                 body_result.flow == Flow::abrupt(FlowKind::Raise),
             );
         }
+        self.substitution_context = previous_substitution_context;
         let _ = outer;
         Eval::value(self.record(node, Type::Nil))
     }
@@ -7494,7 +7530,13 @@ impl<'src> Analyzer<'src> {
             } else if key.singleton {
                 if let Some(owner) = key.owner.clone() {
                     if name == "new" {
-                        self.infer_initializer_call(node, &owner, &arguments, environment);
+                        self.infer_initializer_call(
+                            node,
+                            &owner,
+                            &arguments,
+                            block.is_some(),
+                            environment,
+                        );
                         if environment.method_key.as_ref().is_some_and(|method| {
                             method.singleton && method.name != "<bound-block>"
                         }) {
@@ -7796,16 +7838,46 @@ impl<'src> Analyzer<'src> {
                 environment,
             );
             if name == "new"
-                && receiver_node
-                    .as_ref()
-                    .is_some_and(|receiver| self.constant_reference_name(receiver).is_some())
+                && (Self::class_object_owner(&receiver_type).is_some()
+                    || Self::named_type_name(&receiver_type).is_some())
+                && receiver_node.as_ref().is_some_and(|receiver| {
+                    receiver.as_self_node().is_some()
+                        || self.constant_reference_name(receiver).is_some()
+                })
             {
                 if let Some(owner) = Self::class_object_owner(&receiver_type)
                     .or_else(|| Self::named_type_name(&receiver_type))
                 {
-                    self.infer_initializer_call(node, &owner, &arguments, environment);
-                    self.observe_struct_constructor(&owner, &arguments);
-                    result = self.instantiate_generic_class(Type::named(owner));
+                    let has_explicit_new = self
+                        .receiver_method_key(
+                            receiver_node.as_ref(),
+                            &receiver_type,
+                            &name,
+                            environment,
+                        )
+                        .and_then(|key| self.resolve_method_key(&key))
+                        .is_some();
+                    if !has_explicit_new {
+                        self.infer_initializer_call(
+                            node,
+                            &owner,
+                            &arguments,
+                            block.is_some(),
+                            environment,
+                        );
+                        self.observe_struct_constructor(&owner, &arguments);
+                        result = if self
+                            .substitution_context
+                            .as_ref()
+                            .filter(|context| context.singleton)
+                            .and_then(|context| context.owner.as_deref())
+                            .is_some_and(|context_owner| context_owner == owner)
+                        {
+                            Type::AttachedClassOf(owner)
+                        } else {
+                            self.instantiate_generic_class(Type::named(owner))
+                        };
+                    }
                 }
             }
             if call.is_safe_navigation() && !receiver_type.is_any() {
@@ -8763,6 +8835,7 @@ impl<'src> Analyzer<'src> {
         node: &Node<'node>,
         owner: &str,
         arguments: &CallArguments<'node>,
+        has_block: bool,
         environment: &Environment,
     ) {
         let key = MethodKey {
@@ -8773,6 +8846,10 @@ impl<'src> Analyzer<'src> {
         self.record_method_dependency(&key, environment);
         if let Some(signature) = self.observe_call(&key, arguments, false) {
             let receiver_type = Type::named(owner.to_owned());
+            let previous_checking_initializer = self.checking_initializer;
+            let previous_initializer_has_block = self.initializer_has_block;
+            self.checking_initializer = true;
+            self.initializer_has_block = has_block;
             let _ = self.invoke_signature(
                 node,
                 "initialize",
@@ -8781,6 +8858,8 @@ impl<'src> Analyzer<'src> {
                 Some(&receiver_type),
                 None,
             );
+            self.checking_initializer = previous_checking_initializer;
+            self.initializer_has_block = previous_initializer_has_block;
         }
     }
 
@@ -9900,7 +9979,20 @@ impl<'src> Analyzer<'src> {
                         }
                     }
                     let _ = arguments;
-                    self.instantiate_generic_class(instance)
+                    let result = self.instantiate_generic_class(instance);
+                    if self
+                        .substitution_context
+                        .as_ref()
+                        .filter(|context| context.singleton)
+                        .and_then(|context| context.owner.as_deref())
+                        .is_some_and(|owner| {
+                            Self::class_object_owner(receiver).as_deref() == Some(owner)
+                        })
+                    {
+                        Self::class_object_owner(receiver).map_or(result, Type::AttachedClassOf)
+                    } else {
+                        result
+                    }
                 }
             }
             Type::Named(class, _) if name == "[]" && name_matches(class, "Class") => {
@@ -11395,7 +11487,40 @@ impl<'src> Analyzer<'src> {
                 .iter()
                 .any(|argument| !signature.keywords.contains_key(&argument.name));
 
-        if positional_error || missing_keywords || unknown_keyword {
+        if self.checking_initializer {
+            if argument_types.len() < signature.required_params {
+                self.error(node, "Not enough arguments provided");
+            } else if !signature.accepts_rest && argument_types.len() > signature.params.len() {
+                self.error(node, "Too many arguments provided");
+            }
+            if missing_keywords {
+                for (name, parameter) in &signature.keywords {
+                    if parameter.required && !provided_keywords.contains(name.as_str()) {
+                        self.error(node, format!("Missing required keyword argument `{name}`"));
+                    }
+                }
+            }
+            if signature
+                .block
+                .as_ref()
+                .is_some_and(|block| matches!(block, Type::Proc(_, _) | Type::BoundProc { .. }))
+                && !self.initializer_has_block
+            {
+                self.error(node, "`initialize` requires a block parameter");
+            }
+        } else if name == "new"
+            && positional_error
+            && argument_types.len() < signature.required_params
+        {
+            if let Some(owner) = receiver_type.and_then(Self::class_object_owner) {
+                self.error(
+                    node,
+                    format!("Not enough arguments provided for method `{owner}.new`"),
+                );
+            } else {
+                self.error(node, "Wrong number of arguments for `new`");
+            }
+        } else if positional_error || missing_keywords || unknown_keyword {
             let expected = if keyword_mode {
                 let required_keywords = signature
                     .keywords

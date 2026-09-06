@@ -25,6 +25,7 @@ sorbet-upstream/test/testdata/infer/attached_class.rb
 sorbet-upstream/test/testdata/infer/attached_class_params.rb
 sorbet-upstream/test/testdata/infer/attached_class_module.rb
 sorbet-upstream/test/testdata/infer/attached_class_intrinsic.rb
+sorbet-upstream/test/testdata/infer/attached_class_self_new.rb
 sorbet-upstream/test/testdata/resolver/bind_class_of.rb
 sorbet-upstream/test/testdata/resolver/bind_self_type.rb
 
