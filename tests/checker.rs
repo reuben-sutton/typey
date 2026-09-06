@@ -325,6 +325,14 @@ fn inherits_typed_ivars_from_superclasses() {
 }
 
 #[test]
+fn preserves_generic_accessor_types_through_nested_iteration() {
+    let result = check_fixture("tests/fixtures/generic_accessor_iteration.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("Revealed type: `Integer`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn maps_nullable_proc_parameters_to_blocks() {
     check_fixture("tests/fixtures/nullable_block_signature.rb");
 }
