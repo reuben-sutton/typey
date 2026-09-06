@@ -413,11 +413,16 @@ fn models_string_bang_methods() {
 #[test]
 fn models_symbol_to_proc_collection_blocks() {
     let result = check_fixture("tests/fixtures/symbol_to_proc_map.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .message
-            .contains("Revealed type: `T::Array[String]`")
-    }), "{:?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `T::Array[String]`"))
+            .count(),
+        2,
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
