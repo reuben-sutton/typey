@@ -1968,6 +1968,27 @@ fn preserves_tuple_shape_when_pushing_into_typed_arrays() {
 }
 
 #[test]
+fn widens_empty_local_array_accumulators_across_writes() {
+    let result = check(
+        r#"
+values = []
+values << "text"
+values << 1
+T.reveal_type(values)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T::Array[T.any(Integer, String)]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn treats_t_namespaced_enumerables_as_nominal_types() {
     let result = check_fixture("tests/fixtures/set_enumerable_assignability.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

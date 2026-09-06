@@ -491,6 +491,7 @@ impl CheckResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Environment {
     locals: BTreeMap<String, Type>,
+    open_array_locals: BTreeSet<String>,
     predicate_aliases: BTreeMap<String, PredicateAlias>,
     known_truthiness: BTreeMap<String, bool>,
     self_type: Type,
@@ -501,6 +502,7 @@ impl Default for Environment {
     fn default() -> Self {
         Self {
             locals: BTreeMap::new(),
+            open_array_locals: BTreeSet::new(),
             predicate_aliases: BTreeMap::new(),
             known_truthiness: BTreeMap::new(),
             self_type: Type::Object,
@@ -522,6 +524,7 @@ impl Environment {
 
     pub fn bind(&mut self, name: impl Into<String>, type_: Type) {
         let name = name.into();
+        self.open_array_locals.remove(&name);
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.remove(&name);
         self.known_truthiness.remove(&name);
@@ -534,6 +537,7 @@ impl Environment {
         alias: PredicateAlias,
     ) {
         let name = name.into();
+        self.open_array_locals.remove(&name);
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.insert(name.clone(), alias);
         self.known_truthiness.remove(&name);
@@ -559,6 +563,11 @@ impl Environment {
         let lattice = TypeLattice;
         let mut result = Self {
             locals: BTreeMap::new(),
+            open_array_locals: self
+                .open_array_locals
+                .intersection(&other.open_array_locals)
+                .cloned()
+                .collect(),
             predicate_aliases: self
                 .predicate_aliases
                 .iter()
@@ -4303,6 +4312,15 @@ impl<'src> Analyzer<'src> {
             } else {
                 environment.bind(name, type_.clone());
             }
+            if value_node
+                .as_array_node()
+                .is_some_and(|array| array.elements().is_empty())
+                && matches!(&type_, Type::Array(element) if element.is_any())
+            {
+                environment
+                    .open_array_locals
+                    .insert(prism::constant_name(write.name()));
+            }
             return Eval::value(self.record(node, type_));
         }
         if let Some(write) = node.as_local_variable_operator_write_node() {
@@ -7371,7 +7389,7 @@ impl<'src> Analyzer<'src> {
         let mut abrupt_flow = evaluated.abrupt_flow;
         let mut all_normal = evaluated.all_normal;
         let receiver_node = call.receiver();
-        let receiver_type = if let Some(receiver) = receiver_node.as_ref() {
+        let mut receiver_type = if let Some(receiver) = receiver_node.as_ref() {
             let result = self.eval_node(receiver, environment);
             abrupt = abrupt.join(&result.abrupt);
             abrupt_flow = abrupt_flow.union(result.flow.without(FlowKind::Normal));
@@ -7380,6 +7398,25 @@ impl<'src> Analyzer<'src> {
         } else {
             Type::Object
         };
+        let array_write_receiver_type = receiver_type.clone();
+        if matches!(name.as_str(), "push" | "<<" | "prepend") {
+            if let Some(local) = receiver_node
+                .as_ref()
+                .and_then(Node::as_local_variable_read_node)
+            {
+                let local_name = prism::constant_name(local.name());
+                if environment.open_array_locals.contains(&local_name) {
+                    if let Type::Array(element) = &receiver_type {
+                        let widened = argument_types
+                            .iter()
+                            .fold(element.as_ref().clone(), |current, actual| {
+                                current.join(actual)
+                            });
+                        receiver_type = Type::Array(Box::new(widened));
+                    }
+                }
+            }
+        }
         let static_type_receiver = receiver_node
             .as_ref()
             .is_some_and(|receiver| self.static_type_value(receiver));
@@ -7829,7 +7866,7 @@ impl<'src> Analyzer<'src> {
                 receiver_node.as_ref(),
                 &name,
                 argument_types,
-                &dispatch_receiver_type,
+                &array_write_receiver_type,
                 environment,
             );
             self.refine_local_hash_write(
@@ -7954,9 +7991,12 @@ impl<'src> Analyzer<'src> {
         let Type::Array(element) = receiver_type else {
             return;
         };
+        let open_array = environment
+            .open_array_locals
+            .contains(&prism::constant_name(local.name()));
         let mut refined_element = element.as_ref().clone();
         for actual in argument_types {
-            if !self.is_assignable(actual, element) {
+            if !open_array && !self.is_assignable(actual, element) {
                 continue;
             }
             if refined_element.is_any() && !actual.is_any() {
@@ -7970,6 +8010,11 @@ impl<'src> Analyzer<'src> {
                 prism::constant_name(local.name()),
                 Type::Array(Box::new(refined_element)),
             );
+            if open_array {
+                environment
+                    .open_array_locals
+                    .insert(prism::constant_name(local.name()));
+            }
         }
     }
 
