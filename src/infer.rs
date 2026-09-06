@@ -7340,7 +7340,7 @@ impl<'src> Analyzer<'src> {
                     return Type::named("Enumerator");
                 }
                 let block_type = site.block.map_or(Type::Any, |block| {
-                    self.eval_block_node(block, std::slice::from_ref(element), environment)
+                    self.eval_collection_block(block, element, environment)
                 });
                 Type::Array(Box::new(block_type))
             }
@@ -7349,7 +7349,7 @@ impl<'src> Analyzer<'src> {
                     return Type::named("Enumerator");
                 }
                 let block_type = site.block.map_or(Type::Any, |block| {
-                    self.eval_block_node(block, std::slice::from_ref(element), environment)
+                    self.eval_collection_block(block, element, environment)
                 });
                 Type::Array(Box::new(self.array_element_type(&block_type)))
             }
@@ -7368,7 +7368,7 @@ impl<'src> Analyzer<'src> {
                     return Type::named("Enumerator");
                 }
                 let block_type = site.block.map_or(Type::Any, |block| {
-                    self.eval_block_node(block, std::slice::from_ref(element), environment)
+                    self.eval_collection_block(block, element, environment)
                 });
                 Type::Array(Box::new(block_type.truthy_part()))
             }
@@ -7926,7 +7926,7 @@ impl<'src> Analyzer<'src> {
 
     fn eval_common_method(&self, name: &str) -> Type {
         match name {
-            "to_s" => Type::String,
+            "to_s" | "inspect" => Type::String,
             "id" | "object_id" | "hash" => Type::Integer,
             "respond_to?" | "frozen?" => Type::bool(),
             "nil?" | "to_a" => {
@@ -7951,6 +7951,29 @@ impl<'src> Analyzer<'src> {
         };
         let result = self.eval_block(&block, expected, outer);
         Self::block_value_type(&result)
+    }
+
+    fn eval_collection_block<'node>(
+        &mut self,
+        node: &Node<'node>,
+        element: &Type,
+        outer: &mut Environment,
+    ) -> Type {
+        if let Some(block) = node.as_block_argument_node() {
+            if let Some(symbol) = block
+                .expression()
+                .and_then(|expression| expression.as_symbol_node())
+            {
+                let name = String::from_utf8_lossy(symbol.unescaped()).into_owned();
+                let site = CallSite {
+                    argument_nodes: &[],
+                    argument_types: &[],
+                    block: None,
+                };
+                return self.eval_method_call(element, &name, &site, outer);
+            }
+        }
+        self.eval_block_node(node, std::slice::from_ref(element), outer)
     }
 
     fn inferred_block_signature<'node>(node: &Node<'node>) -> MethodSig {
