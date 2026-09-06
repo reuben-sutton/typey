@@ -10173,6 +10173,7 @@ impl<'src> Analyzer<'src> {
             }
             Type::Symbol => match name {
                 "to_sym" | "intern" => Type::Symbol,
+                "name" => Type::String,
                 _ => self.eval_common_method(name),
             },
             Type::Named(class, _) if name_matches(class, "ENV") => match name {
