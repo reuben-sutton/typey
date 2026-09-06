@@ -7813,6 +7813,17 @@ impl<'src> Analyzer<'src> {
                 }
                 _ => self.eval_common_method(name),
             },
+            Type::Named(class, _) if name_matches(class, "Parser::Source::Map")
+                || name_matches(class, "Parser::Source::Range") => match name
+            {
+                "line" | "column" | "first_line" | "first_column" | "last_line"
+                | "last_column" => Type::Integer,
+                _ => self.eval_common_method(name),
+            },
+            Type::Named(class, _) if name_matches(class, "Parser::AST::Node") => match name {
+                "location" | "loc" => Type::named("Parser::Source::Map"),
+                _ => self.eval_common_method(name),
+            },
             Type::Named(class, _) if name_matches(class, "Regexp") => match name {
                 "match" => Type::union([Type::Nil, Type::named("MatchData")]),
                 "match?" | "===" => Type::bool(),
