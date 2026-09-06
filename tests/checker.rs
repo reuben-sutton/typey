@@ -3905,6 +3905,19 @@ T.reveal_type(filtered)
 }
 
 #[test]
+fn accepts_open_ended_ranges_for_indexing() {
+    let result = check(
+        r#"
+lines = ["first", "second"]
+lines[1..]
+lines[..1]
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"

@@ -12951,10 +12951,12 @@ impl<'src> Analyzer<'src> {
                     // Range literals retain the types of their begin and end
                     // expressions as two internal arguments. Sorbet's
                     // `T::Range[Element]` describes the same value by the
-                    // common element type, so both endpoints must satisfy its
-                    // single argument.
-                    return self.is_assignable(&actual_args[0], &expected_args[0])
-                        && self.is_assignable(&actual_args[1], &expected_args[0]);
+                    // common element type. A beginless or endless range has
+                    // NilClass for its missing endpoint, which is still a
+                    // valid range of the other endpoint's element type.
+                    return actual_args.iter().all(|actual| {
+                        actual.is_nil() || self.is_assignable(actual, &expected_args[0])
+                    });
                 }
                 if self.nominal_names_match(actual_name, expected_name) {
                     expected_args.is_empty()
