@@ -191,9 +191,10 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
         let end = combined.len();
         ranges.push(SourceRange { start, end });
         let strictness = match effective_typed_mode(&file.source) {
+            TypedMode::True => Some(Strictness::True),
             TypedMode::Strict => Some(Strictness::Strict),
             TypedMode::Strong => Some(Strictness::Strong),
-            TypedMode::True | TypedMode::False | TypedMode::Ignore => None,
+            TypedMode::False | TypedMode::Ignore => None,
         };
         if let Some(strictness) = strictness {
             strictness_ranges.push((start, end, strictness));

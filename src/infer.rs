@@ -417,6 +417,10 @@ impl<'pr> Visit<'pr> for LocalWriteCollector {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Strictness {
     Ignore,
+    /// Sorbet's `typed: true` mode: report calls to APIs that cannot be
+    /// resolved, but do not require every method to have a fully inferred
+    /// signature.
+    True,
     Strict,
     Strong,
 }
@@ -441,8 +445,9 @@ impl Default for CheckerConfig {
 fn strictness_rank(strictness: Strictness) -> u8 {
     match strictness {
         Strictness::Ignore => 0,
-        Strictness::Strict => 1,
-        Strictness::Strong => 2,
+        Strictness::True => 1,
+        Strictness::Strict => 2,
+        Strictness::Strong => 3,
     }
 }
 
@@ -2031,9 +2036,10 @@ pub(crate) fn check_with_policies(
 
 fn source_strictness_ranges(source: &str) -> Vec<(usize, usize, Strictness)> {
     let strictness = match effective_typed_mode(source) {
+        TypedMode::True => Strictness::True,
         TypedMode::Strict => Strictness::Strict,
         TypedMode::Strong => Strictness::Strong,
-        TypedMode::True | TypedMode::False | TypedMode::Ignore => return Vec::new(),
+        TypedMode::False | TypedMode::Ignore => return Vec::new(),
     };
     vec![(0, source.len(), strictness)]
 }
@@ -3284,7 +3290,7 @@ impl<'src> Analyzer<'src> {
             .iter()
             .filter_map(|(offset, key)| {
                 let strictness = self.strictness_at(*offset);
-                if strictness == Strictness::Ignore {
+                if strictness_rank(strictness) < strictness_rank(Strictness::Strict) {
                     return None;
                 }
                 let state = self.methods.get(key)?;
@@ -3332,6 +3338,34 @@ impl<'src> Analyzer<'src> {
             }
         }
         strictness
+    }
+
+    fn reports_missing_api<'node>(&self, node: &Node<'node>) -> bool {
+        let (start, _) = prism::span(node);
+        strictness_rank(self.strictness_at(start)) >= strictness_rank(Strictness::True)
+            && !self.is_rbi_definition(node)
+    }
+
+    fn report_missing_method_if_needed<'node>(
+        &mut self,
+        node: &Node<'node>,
+        receiver: &Type,
+        name: &str,
+        resolved: bool,
+    ) {
+        if resolved
+            || !self.reports_missing_api(node)
+            || receiver.is_any()
+            || receiver.contains_any()
+            || receiver.is_never()
+            || matches!(receiver, Type::Anything)
+        {
+            return;
+        }
+        self.error(
+            node,
+            format!("Method `{name}` does not exist on `{receiver}`"),
+        );
     }
 
     fn validate_rbs_parameter_kinds(
@@ -7638,6 +7672,7 @@ impl<'src> Analyzer<'src> {
             }
             let key = self.implicit_method_key(&name, environment);
             let receiver_type = environment.self_type.clone();
+            let method_resolved = self.resolve_method_key(&key).is_some();
             let random_formatter_signature =
                 self.random_formatter_signature(None, &receiver_type, &name);
             let resolved_owner = self
@@ -7737,6 +7772,19 @@ impl<'src> Analyzer<'src> {
                             untyped_origin = Some(UntypedOrigin::FallbackCall);
                         }
                         if type_.is_any()
+                            && !environment
+                                .method_key
+                                .as_ref()
+                                .is_some_and(|method| method.name == "<bound-block>")
+                        {
+                            self.report_missing_method_if_needed(
+                                node,
+                                &receiver_type,
+                                &name,
+                                method_resolved,
+                            );
+                        }
+                        if type_.is_any()
                             && environment
                                 .method_key
                                 .as_ref()
@@ -7763,6 +7811,19 @@ impl<'src> Analyzer<'src> {
                     );
                     if type_.contains_any() {
                         untyped_origin = Some(UntypedOrigin::FallbackCall);
+                    }
+                    if type_.is_any()
+                        && !environment
+                            .method_key
+                            .as_ref()
+                            .is_some_and(|method| method.name == "<bound-block>")
+                    {
+                        self.report_missing_method_if_needed(
+                            node,
+                            &receiver_type,
+                            &name,
+                            method_resolved,
+                        );
                     }
                     type_
                 }
@@ -7799,6 +7860,19 @@ impl<'src> Analyzer<'src> {
                                 "Method `{name}` does not exist on `{}`",
                                 Self::sorbet_type_description(&environment.self_type)
                             ),
+                        );
+                    }
+                    if type_.is_any()
+                        && !environment
+                            .method_key
+                            .as_ref()
+                            .is_some_and(|method| method.name == "<bound-block>")
+                    {
+                        self.report_missing_method_if_needed(
+                            node,
+                            &receiver_type,
+                            &name,
+                            method_resolved,
                         );
                     }
                     type_
@@ -7883,6 +7957,7 @@ impl<'src> Analyzer<'src> {
                 &name,
                 environment,
             ) {
+                let method_resolved = self.resolve_method_key(&key).is_some();
                 let resolved_owner = self
                     .resolve_method_key(&key)
                     .and_then(|resolved| resolved.owner);
@@ -8019,6 +8094,14 @@ impl<'src> Analyzer<'src> {
                                 UntypedOrigin::FallbackCall
                             });
                         }
+                        if type_.is_any() {
+                            self.report_missing_method_if_needed(
+                                node,
+                                &dispatch_receiver_type,
+                                &name,
+                                method_resolved,
+                            );
+                        }
                         type_
                     }
                 }
@@ -8038,6 +8121,14 @@ impl<'src> Analyzer<'src> {
                     } else {
                         UntypedOrigin::FallbackCall
                     });
+                }
+                if type_.is_any() {
+                    self.report_missing_method_if_needed(
+                        node,
+                        &dispatch_receiver_type,
+                        &name,
+                        false,
+                    );
                 }
                 type_
             };
@@ -9922,9 +10013,32 @@ impl<'src> Analyzer<'src> {
             "gem" => Type::named("Gem::Specification"),
             "rand" => Type::Float,
             "sleep" => Type::Integer,
-            "include" | "prepend" | "extend" | "alias_method" | "attr_reader" | "attr_writer"
-            | "attr_accessor" | "private" | "protected" | "public" | "module_function"
-            | "autoload" | "private_constant" | "public_constant" | "refine" => Type::Nil,
+            "const_get" => Type::Object,
+            // Sorbet's declaration DSL is intentionally executable Ruby.  It
+            // is not an application method that needs a user definition, but
+            // it still has to be recognized in `typed: true` files so that
+            // missing-method checking does not mistake declarations for API
+            // typos.
+            "sig"
+            | "private_class_method"
+            | "type_member"
+            | "type_template"
+            | "each"
+            | "include"
+            | "prepend"
+            | "extend"
+            | "alias_method"
+            | "attr_reader"
+            | "attr_writer"
+            | "attr_accessor"
+            | "private"
+            | "protected"
+            | "public"
+            | "module_function"
+            | "autoload"
+            | "private_constant"
+            | "public_constant"
+            | "refine" => Type::Nil,
             "id" | "object_id" | "hash" => Type::Integer,
             _ => {
                 let _ = (node, argument_nodes, environment);

@@ -77,6 +77,11 @@ fn checks_sorbet_sig_calls() {
 }
 
 #[test]
+fn reports_missing_methods_in_typed_true_files() {
+    check_fixture("tests/fixtures/typed_true_missing_api.rb");
+}
+
+#[test]
 fn distinguishes_static_top_from_untyped() {
     let result = check_fixture("tests/fixtures/static_top.rb");
     assert!(
