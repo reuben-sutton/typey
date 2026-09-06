@@ -3740,6 +3740,29 @@ T.reveal_type("  message  ".squish)
 }
 
 #[test]
+fn preserves_inflector_classify_return_type() {
+    let result = check(
+        r#"
+module ActiveSupport
+  module Inflector
+  end
+end
+
+T.reveal_type(ActiveSupport::Inflector.classify("posts"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `String`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_namespaced_classes_that_shadow_primitives() {
     let result = check(
         r#"
