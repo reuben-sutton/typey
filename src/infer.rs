@@ -2483,6 +2483,15 @@ impl<'src> Analyzer<'src> {
         names: &BTreeSet<String>,
         bindings: &mut BTreeMap<String, Type>,
     ) {
+        if actual.is_any() {
+            for name in names {
+                let name_set = BTreeSet::from([name.clone()]);
+                if Self::contains_type_parameter(expected, &name_set) {
+                    bindings.entry(name.clone()).or_insert(Type::Any);
+                }
+            }
+            return;
+        }
         match expected {
             Type::TypeVar(name) if names.contains(name) => {
                 bindings
@@ -2604,11 +2613,7 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         match type_ {
             Type::TypeVar(name) if names.contains(name) => {
-                // A method type parameter that cannot be inferred is unknown;
-                // leaking the symbolic parameter into the result produces
-                // impossible types such as `Hash[U, V]`.  Keep the unknown
-                // local to the call and model it as Sorbet's untyped value.
-                bindings.get(name).cloned().unwrap_or(Type::Any)
+                bindings.get(name).cloned().unwrap_or_else(|| type_.clone())
             }
             Type::Named(name, arguments) => Type::Named(
                 name.clone(),
@@ -6021,11 +6026,10 @@ impl<'src> Analyzer<'src> {
             .get(&prism::span(node).0)
             .cloned()
             .unwrap_or_else(|| MethodKey::top_level(name.clone()));
-        let key = if registered_key.owner.is_none()
-            && outer
-                .method_key
-                .as_ref()
-                .is_some_and(|method| method.name == "<bound-block>")
+        let key = if outer
+            .method_key
+            .as_ref()
+            .is_some_and(|method| method.name == "<bound-block>")
         {
             Self::class_object_owner(&outer.self_type).map_or(registered_key.clone(), |owner| {
                 MethodKey {
