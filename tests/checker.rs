@@ -2673,6 +2673,25 @@ T.reveal_type(values.none? { |key, value| key == "b" && value == 2 })
 }
 
 #[test]
+fn models_yaml_serialization_as_string() {
+    let result = check(
+        r#"
+T.reveal_type({"a" => 1}.to_yaml)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
