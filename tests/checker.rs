@@ -367,6 +367,12 @@ fn narrows_nilable_locals_after_safe_navigation_guards() {
 }
 
 #[test]
+fn narrows_unions_for_equality_predicates() {
+    let result = check_fixture("tests/fixtures/equality_predicate_narrowing.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_array_intersection_predicates() {
     let result = check_fixture("tests/fixtures/array_intersect_predicate.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| {

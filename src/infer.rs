@@ -5512,6 +5512,16 @@ impl<'src> Analyzer<'src> {
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
                     let current = environment.get(&local_name);
+                    if let Some(narrowed) = self.equality_predicate_narrowing(
+                        &name,
+                        &current,
+                        &arguments,
+                        truthy,
+                        environment,
+                    ) {
+                        environment.bind(local_name, narrowed);
+                        return;
+                    }
                     let safe_navigation_non_nil = call.is_safe_navigation()
                         && (truthy
                             || self.safe_navigation_method_returns_non_nil(
@@ -5544,6 +5554,16 @@ impl<'src> Analyzer<'src> {
                 } else if let Some(instance_variable) = receiver.as_instance_variable_read_node() {
                     let instance_variable_name = prism::constant_name(instance_variable.name());
                     let current = self.ivar_type(environment, &instance_variable_name);
+                    if let Some(narrowed) = self.equality_predicate_narrowing(
+                        &name,
+                        &current,
+                        &arguments,
+                        truthy,
+                        environment,
+                    ) {
+                        environment.bind(ivar_refinement_key(&instance_variable_name), narrowed);
+                        return;
+                    }
                     let safe_navigation_non_nil = call.is_safe_navigation()
                         && (truthy
                             || self.safe_navigation_method_returns_non_nil(
@@ -5576,6 +5596,31 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
+    }
+
+    fn equality_predicate_narrowing<'node>(
+        &mut self,
+        name: &str,
+        current: &Type,
+        arguments: &[Node<'node>],
+        truthy: bool,
+        environment: &Environment,
+    ) -> Option<Type> {
+        if !matches!(name, "==" | "!=" | "equal?" | "eql?") || arguments.len() != 1 {
+            return None;
+        }
+        let argument_type = self.node_type(&arguments[0], environment);
+        let singleton = matches!(argument_type, Type::Nil | Type::True | Type::False);
+        Some(match (name, truthy) {
+            ("==" | "equal?" | "eql?", true) | ("!=", false) => {
+                current.meet(&argument_type)
+            }
+            ("==" | "equal?" | "eql?", false) | ("!=", true) if singleton => {
+                current.without(&argument_type)
+            }
+            ("==" | "equal?" | "eql?", false) | ("!=", true) => current.clone(),
+            _ => current.clone(),
+        })
     }
 
     fn predicate_expected_type<'node>(
