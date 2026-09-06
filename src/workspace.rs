@@ -183,6 +183,7 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
     let mut combined = String::new();
     let mut ranges = Vec::with_capacity(files.len());
     let mut rbi_ranges = Vec::new();
+    let mut builtin_rbi_ranges = Vec::new();
     let mut strictness_ranges = Vec::new();
     for file in &files {
         let start = combined.len();
@@ -199,6 +200,9 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
         }
         if is_rbi_path(&file.path) {
             rbi_ranges.push((start, end));
+            if is_builtin_rbi_path(&file.path) {
+                builtin_rbi_ranges.push((start, end));
+            }
         }
 
         // A non-comment boundary clears a pending `#:` signature from the
@@ -213,8 +217,13 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
             combined.len()
         );
     }
-    let (result, parse_diagnostics) =
-        check_with_policies(&combined, config, &rbi_ranges, &strictness_ranges);
+    let (result, parse_diagnostics) = check_with_policies(
+        &combined,
+        config,
+        &rbi_ranges,
+        &builtin_rbi_ranges,
+        &strictness_ranges,
+    );
     let diagnostics = result
         .diagnostics
         .iter()
@@ -243,6 +252,11 @@ fn is_rbi_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension == "rbi")
+}
+
+fn is_builtin_rbi_path(path: &Path) -> bool {
+    path.starts_with(Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor/sorbet/rbi"))
+        || path.starts_with(Path::new("vendor/sorbet/rbi"))
 }
 
 #[derive(Clone, Copy, Debug)]

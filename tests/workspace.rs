@@ -47,6 +47,30 @@ fn discovers_files_using_sorbet_ignore_options() {
 }
 
 #[test]
+fn project_rbis_override_vendored_builtin_rbis() {
+    let files = vec![
+        WorkspaceFile::new(
+            "vendor/sorbet/rbi/core/sample.rbi",
+            "class Sample\n  sig {returns(String)}\n  def value; end\nend\n",
+        ),
+        WorkspaceFile::new(
+            "sorbet/rbi/sample.rbi",
+            "class Sample\n  sig {returns(Integer)}\n  def value; end\nend\n",
+        ),
+        WorkspaceFile::new("app.rb", "T.reveal_type(Sample.new.value)\n"),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.diagnostic.message.contains("`Integer`")),
+        "unexpected diagnostics: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn directory_cli_reports_original_file_paths() {
     let output = Command::new(env!("CARGO_BIN_EXE_typey"))
         .arg(FIXTURE_ROOT)

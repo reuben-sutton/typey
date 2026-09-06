@@ -1338,7 +1338,7 @@ impl MethodRegistrar<'_> {
 pub fn check(source: &str, config: CheckerConfig) -> CheckResult {
     let strictness_ranges = source_strictness_ranges(source);
     let (mut result, parse_diagnostics) =
-        check_with_policies(source, config, &[], &strictness_ranges);
+        check_with_policies(source, config, &[], &[], &strictness_ranges);
     if typed_mode(source) == Some(TypedMode::False) {
         result
             .diagnostics
@@ -1353,13 +1353,14 @@ pub(crate) fn check_with_rbi_ranges(
     rbi_ranges: &[(usize, usize)],
 ) -> CheckResult {
     let strictness_ranges = source_strictness_ranges(source);
-    check_with_policies(source, config, rbi_ranges, &strictness_ranges).0
+    check_with_policies(source, config, rbi_ranges, &[], &strictness_ranges).0
 }
 
 pub(crate) fn check_with_policies(
     source: &str,
     config: CheckerConfig,
     rbi_ranges: &[(usize, usize)],
+    builtin_rbi_ranges: &[(usize, usize)],
     strictness_ranges: &[(usize, usize, Strictness)],
 ) -> (CheckResult, Vec<Diagnostic>) {
     if is_typed_ignore(source) {
@@ -1408,6 +1409,7 @@ pub(crate) fn check_with_policies(
         report: true,
         seed_calls: false,
         rbi_ranges: rbi_ranges.to_vec(),
+        builtin_rbi_ranges: builtin_rbi_ranges.to_vec(),
         strictness_ranges: strictness_ranges.to_vec(),
         filter_method_bodies: false,
         active_methods: BTreeSet::new(),
@@ -1459,6 +1461,7 @@ struct Analyzer<'src> {
     report: bool,
     seed_calls: bool,
     rbi_ranges: Vec<(usize, usize)>,
+    builtin_rbi_ranges: Vec<(usize, usize)>,
     strictness_ranges: Vec<(usize, usize, Strictness)>,
     filter_method_bodies: bool,
     active_methods: BTreeSet<MethodKey>,
@@ -2444,6 +2447,7 @@ impl<'src> Analyzer<'src> {
         // same-named method elsewhere in a workspace.
         let mut source_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
+        let mut builtin_rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         for (offset, signatures) in &self.annotations.method_annotations {
             let Some(key) = self.definitions.get(offset) else {
                 continue;
@@ -2458,23 +2462,31 @@ impl<'src> Analyzer<'src> {
                     self.resolve_signature_names(&signature, key.owner.as_deref())
                 })
                 .collect::<Vec<_>>();
-            if self
+            let target = if self
+                .builtin_rbi_ranges
+                .iter()
+                .any(|(start, end)| *offset >= *start && *offset < *end)
+            {
+                &mut builtin_rbi_signatures
+            } else if self
                 .rbi_ranges
                 .iter()
                 .any(|(start, end)| *offset >= *start && *offset < *end)
             {
-                rbi_signatures
-                    .entry(key.clone())
-                    .or_default()
-                    .extend(signatures);
+                &mut rbi_signatures
             } else {
-                source_signatures
-                    .entry(key.clone())
-                    .or_default()
-                    .extend(signatures);
-            }
+                &mut source_signatures
+            };
+            target.entry(key.clone()).or_default().extend(signatures);
         }
         for (key, signatures) in source_signatures.into_iter().chain(rbi_signatures) {
+            if let Some(state) = self.methods.get_mut(&key) {
+                if !state.explicit {
+                    *state = MethodState::explicit_overloads(&signatures);
+                }
+            }
+        }
+        for (key, signatures) in builtin_rbi_signatures {
             if let Some(state) = self.methods.get_mut(&key) {
                 if !state.explicit {
                     *state = MethodState::explicit_overloads(&signatures);
