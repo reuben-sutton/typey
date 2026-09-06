@@ -7296,10 +7296,7 @@ impl<'src> Analyzer<'src> {
             "Symbol" => Type::Symbol,
             "Array" => argument_types.first().map_or_else(
                 || Type::Array(Box::new(Type::Any)),
-                |type_| match type_ {
-                    Type::Array(_) => type_.clone(),
-                    _ => Type::Array(Box::new(Type::Any)),
-                },
+                |type_| Type::Array(Box::new(self.array_coercion_element_type(type_))),
             ),
             "Hash" => {
                 if let Some(block) = block {
@@ -7319,6 +7316,22 @@ impl<'src> Analyzer<'src> {
                 let _ = (node, argument_nodes, environment);
                 Type::Any
             }
+        }
+    }
+
+    fn array_coercion_element_type(&self, type_: &Type) -> Type {
+        match type_ {
+            Type::Array(element) => element.as_ref().clone(),
+            Type::Tuple(elements) => elements
+                .iter()
+                .fold(Type::Never, |current, element| current.join(element)),
+            Type::Union(members) => members
+                .iter()
+                .filter(|member| !matches!(member, Type::Nil))
+                .map(|member| self.array_coercion_element_type(member))
+                .fold(Type::Never, |current, element| current.join(&element)),
+            Type::Nil => Type::Never,
+            other => other.clone(),
         }
     }
 
