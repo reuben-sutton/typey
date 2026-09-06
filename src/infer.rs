@@ -7292,7 +7292,7 @@ impl<'src> Analyzer<'src> {
             "raise" | "fail" | "abort" | "exit" | "exit!" => Type::Never,
             "Integer" => Type::Integer,
             "Float" => Type::Float,
-            "String" => Type::String,
+            "String" | "__dir__" => Type::String,
             "Symbol" => Type::Symbol,
             "Array" => argument_types.first().map_or_else(
                 || Type::Array(Box::new(Type::Any)),
