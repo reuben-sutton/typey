@@ -2572,6 +2572,30 @@ T.reveal_type(location.column)
 }
 
 #[test]
+fn preserves_hash_pair_types_through_sort_and_to_h() {
+    let result = check(
+        r#"
+values = {"a" => 1, "b" => 2}
+sorted = values.sort
+T.reveal_type(sorted)
+T.reveal_type(sorted.to_h)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T::Array[[String, Integer]]`")
+    }), "{:?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T::Hash[String, Integer]`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
