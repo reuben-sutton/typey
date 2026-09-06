@@ -82,6 +82,11 @@ fn reports_missing_methods_in_typed_true_files() {
 }
 
 #[test]
+fn applies_rubys_implicit_object_superclass() {
+    check_fixture("tests/fixtures/default_object_inheritance.rb");
+}
+
+#[test]
 fn distinguishes_static_top_from_untyped() {
     let result = check_fixture("tests/fixtures/static_top.rb");
     assert!(

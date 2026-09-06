@@ -9386,15 +9386,15 @@ impl<'src> Analyzer<'src> {
                 Type::Nil => "NilClass",
                 Type::True => "TrueClass",
                 Type::False => "FalseClass",
+                Type::Integer => "Integer",
+                Type::Float => "Float",
+                Type::String => "String",
+                Type::Symbol => "Symbol",
                 Type::Object => "Object",
                 Type::Any
                 | Type::Anything
                 | Type::Never
                 | Type::Named(_, _)
-                | Type::Integer
-                | Type::Float
-                | Type::String
-                | Type::Symbol
                 | Type::Array(_)
                 | Type::Tuple(_)
                 | Type::Hash(_, _)
@@ -12573,7 +12573,15 @@ impl<'src> Analyzer<'src> {
             let superclass = info
                 .superclass
                 .as_deref()
-                .map(|name| self.resolve_name(name, Some(&owner)));
+                .map(|name| self.resolve_name(name, Some(&owner)))
+                .or_else(|| {
+                    // Ruby classes without an explicit superclass inherit
+                    // from Object.  Keeping that implicit edge matters for
+                    // ordinary Kernel/Object APIs such as `block_given?`,
+                    // `send`, and `singleton_class`.
+                    (!info.is_module && !matches!(owner.as_str(), "Object" | "BasicObject"))
+                        .then(|| "Object".to_owned())
+                });
             let includes = info
                 .includes
                 .iter()
