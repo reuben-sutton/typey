@@ -5,5 +5,6 @@ end
 
 sig { params("&": T.proc.params(value: Integer).void).void }
 def anonymous_callback(&)
-  yield "wrong" # error: Expected `Integer`, but found `String`
 end
+
+anonymous_callback { |value| value + "suffix" } # error: Expected `Integer`, but found `String`
