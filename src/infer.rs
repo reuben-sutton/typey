@@ -4124,6 +4124,7 @@ impl<'src> Analyzer<'src> {
         let mut branch_environment: Option<Environment> = None;
         let mut result: Option<Eval> = None;
         let mut covered_type = Type::Never;
+        let mut terminating_type = Type::Never;
         let mut all_conditions_are_type_tests = true;
 
         for condition in &case_node.conditions() {
@@ -4132,8 +4133,11 @@ impl<'src> Analyzer<'src> {
             };
             let mut when_environment = base.clone();
             let mut condition_type = Type::Never;
+            let mut condition_is_type_test = true;
             for value in &when_node.conditions() {
-                all_conditions_are_type_tests &= Self::is_case_type_test(&value);
+                let is_type_test = Self::is_case_type_test(&value);
+                all_conditions_are_type_tests &= is_type_test;
+                condition_is_type_test &= is_type_test;
                 let value_type = self.eval_node(&value, &mut when_environment).type_;
                 let value_type = Self::class_object_value_type(&value_type).unwrap_or(value_type);
                 condition_type = condition_type.join(&value_type);
@@ -4147,6 +4151,9 @@ impl<'src> Analyzer<'src> {
             } else {
                 Eval::value(Type::Nil)
             };
+            if condition_is_type_test && !when_result.flow.contains(FlowKind::Normal) {
+                terminating_type = terminating_type.join(&condition_type);
+            }
             let previous_flow = result
                 .as_ref()
                 .map_or_else(Flow::empty, |result| result.flow);
@@ -4167,6 +4174,15 @@ impl<'src> Analyzer<'src> {
         }
 
         let mut else_environment = base.clone();
+        if !terminating_type.is_never() {
+            if let Some(predicate) = predicate.as_ref() {
+                self.narrow_case_target_excluding(
+                    predicate,
+                    &mut else_environment,
+                    &terminating_type,
+                );
+            }
+        }
         let else_result = if let Some(else_clause) = case_node.else_clause() {
             if let Some(statements) = else_clause.statements() {
                 self.eval_statements(&statements, &mut else_environment)
@@ -4243,6 +4259,19 @@ impl<'src> Analyzer<'src> {
                 name,
                 self.case_unmatched_type(&current, excluded, all_conditions_are_type_tests),
             );
+        }
+    }
+
+    fn narrow_case_target_excluding<'node>(
+        &self,
+        predicate: &Node<'node>,
+        environment: &mut Environment,
+        excluded: &Type,
+    ) {
+        if let Some(local) = predicate.as_local_variable_read_node() {
+            let name = prism::constant_name(local.name());
+            let current = environment.get(&name);
+            environment.bind(name, current.without(excluded));
         }
     }
 
