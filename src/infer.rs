@@ -3234,6 +3234,9 @@ impl<'src> Analyzer<'src> {
                     }
                 }
             }
+            for signature in &signatures {
+                self.validate_attached_class_signature(*offset, &key, signature);
+            }
             let target = if self
                 .builtin_rbi_ranges
                 .iter()
@@ -3265,6 +3268,99 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
+    }
+
+    fn contains_attached_class_type(type_: &Type) -> bool {
+        match type_ {
+            Type::AttachedClass => true,
+            Type::Named(_, arguments) => arguments.iter().any(Self::contains_attached_class_type),
+            Type::Array(element) => Self::contains_attached_class_type(element),
+            Type::Hash(key, value) => {
+                Self::contains_attached_class_type(key) || Self::contains_attached_class_type(value)
+            }
+            Type::Tuple(elements) | Type::Union(elements) | Type::Intersection(elements) => {
+                elements.iter().any(Self::contains_attached_class_type)
+            }
+            Type::Proc(parameters, result) => {
+                parameters.iter().any(Self::contains_attached_class_type)
+                    || Self::contains_attached_class_type(result)
+            }
+            _ => false,
+        }
+    }
+
+    fn attached_class_context_is_valid(&self, key: &MethodKey) -> bool {
+        let Some(owner) = key.owner.as_deref() else {
+            return false;
+        };
+        let Some(info) = self.classes.get(owner) else {
+            return false;
+        };
+        (key.singleton && !info.is_module)
+            || (!key.singleton && info.is_module && info.attached_class_member.is_some())
+    }
+
+    fn validate_attached_class_signature(
+        &mut self,
+        offset: usize,
+        key: &MethodKey,
+        signature: &MethodSig,
+    ) {
+        let has_in_parameters = signature
+            .params
+            .iter()
+            .any(Self::contains_attached_class_type)
+            || signature
+                .keywords
+                .values()
+                .any(|parameter| Self::contains_attached_class_type(&parameter.type_));
+        let has_in_return = Self::contains_attached_class_type(&signature.return_type);
+        let has_in_block = signature
+            .block
+            .as_ref()
+            .is_some_and(Self::contains_attached_class_type);
+        if !has_in_parameters && !has_in_return && !has_in_block {
+            return;
+        }
+
+        let owner = key.owner.as_deref().unwrap_or("the module");
+        let info = self.classes.get(owner);
+        let is_module = info.is_some_and(|info| info.is_module);
+        let has_attached_class = info.is_some_and(|info| info.attached_class_member.is_some());
+        let message = if key.singleton && is_module {
+            Some(
+                "`T.attached_class` cannot be used in singleton methods on modules, because modules cannot be instantiated"
+                    .to_owned(),
+            )
+        } else if !key.singleton && is_module && !has_attached_class {
+            Some(format!(
+                "`{owner}` must declare `has_attached_class!` before module instance methods can use `T.attached_class`"
+            ))
+        } else if !key.singleton && !is_module {
+            Some(
+                "`T.attached_class` may only be used in singleton methods on classes or instance methods on `has_attached_class!` modules"
+                    .to_owned(),
+            )
+        } else if has_in_parameters {
+            Some("`T.attached_class` may only be used in an `:out` context".to_owned())
+        } else {
+            None
+        };
+        let Some(message) = message else {
+            return;
+        };
+        let needle = b"T.attached_class";
+        let prefix = &self.source[..offset.min(self.source.len())];
+        let start = prefix
+            .windows(needle.len())
+            .rposition(|window| window == needle)
+            .unwrap_or(offset.min(self.source.len()));
+        self.diagnostics.push(Diagnostic::error(
+            self.source,
+            message,
+            start,
+            start + needle.len(),
+        ));
     }
 
     fn record<'node>(&mut self, node: &Node<'node>, type_: Type) -> Type {
@@ -5634,7 +5730,16 @@ impl<'src> Analyzer<'src> {
                 &state.call_signature(),
                 Some(&method_environment.self_type),
             );
-            if !inferred_return.is_never()
+            let raw_signature = state.call_signature();
+            let invalid_attached_class_context =
+                (Self::contains_attached_class_type(&raw_signature.return_type)
+                    || raw_signature
+                        .params
+                        .iter()
+                        .any(Self::contains_attached_class_type))
+                    && !self.attached_class_context_is_valid(&key);
+            if !invalid_attached_class_context
+                && !inferred_return.is_never()
                 && !self.is_assignable(&inferred_return, &expected.return_type)
             {
                 self.error(
