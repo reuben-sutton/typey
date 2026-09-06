@@ -7733,7 +7733,8 @@ impl<'src> Analyzer<'src> {
             }
             "push" | "<<" => {
                 for (argument, actual) in site.argument_nodes.iter().zip(site.argument_types) {
-                    self.check_assignable(argument, actual, element);
+                    let actual = self.tuple_literal_argument_type(argument, actual, element);
+                    self.check_assignable(argument, &actual, element);
                 }
                 Type::Array(Box::new(element.clone()))
             }
@@ -7747,6 +7748,53 @@ impl<'src> Analyzer<'src> {
             }
             _ => Type::Any,
         }
+    }
+
+    fn tuple_literal_argument_type<'node>(
+        &self,
+        node: &Node<'node>,
+        actual: &Type,
+        expected: &Type,
+    ) -> Type {
+        let Type::Tuple(expected_elements) = expected else {
+            return actual.clone();
+        };
+        let Some(array) = node.as_array_node() else {
+            return actual.clone();
+        };
+        let elements = array.elements();
+        if elements.len() != expected_elements.len()
+            || elements
+                .iter()
+                .any(|element| element.as_splat_node().is_some())
+        {
+            return actual.clone();
+        }
+
+        let mut inferred = Vec::with_capacity(elements.len());
+        for element in &elements {
+            let span = prism::span(&element);
+            let type_ = self
+                .types
+                .iter()
+                .rev()
+                .find(|inferred| {
+                    inferred.start == span.0
+                        && inferred.end == span.1
+                        && !inferred.type_.contains_any()
+                })
+                .or_else(|| {
+                    self.types.iter().rev().find(|inferred| {
+                        inferred.start == span.0 && inferred.end == span.1
+                    })
+                })
+                .map(|inferred| inferred.type_.clone());
+            let Some(type_) = type_ else {
+                return actual.clone();
+            };
+            inferred.push(type_);
+        }
+        Type::Tuple(inferred)
     }
 
     fn eval_hash_method<'a, 'node>(
