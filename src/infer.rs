@@ -7662,6 +7662,17 @@ impl<'src> Analyzer<'src> {
                 });
                 Type::Array(Box::new(self.flat_map_element_type(&block_type)))
             }
+            "each_with_object" => {
+                if site.block.is_none() {
+                    return Type::named("Enumerator");
+                }
+                let object = site.argument_types.first().cloned().unwrap_or(Type::Any);
+                if let Some(block) = site.block {
+                    let expected = vec![element.clone(), object.clone()];
+                    let _ = self.eval_block_node(block, &expected, environment);
+                }
+                object
+            }
             "each_with_index" => {
                 if site.block.is_none() {
                     return Type::named("Enumerator");
