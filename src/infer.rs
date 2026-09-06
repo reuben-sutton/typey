@@ -7089,6 +7089,25 @@ impl<'src> Analyzer<'src> {
             return Type::bool();
         }
 
+        if let Some(instance) = Self::class_object_instance_type(receiver) {
+            match name {
+                "===" => return Type::bool(),
+                "const_source_location" => {
+                    return Type::union([
+                        Type::Nil,
+                        Type::Tuple(vec![Type::String, Type::Integer]),
+                    ]);
+                }
+                "abort" | "exit" | "exit!" | "fail" | "raise"
+                    if Self::named_type_name(&instance)
+                        .is_some_and(|name| name_matches(&name, "Kernel")) =>
+                {
+                    return Type::Never;
+                }
+                _ => {}
+            }
+        }
+
         if matches!(name, "id" | "object_id" | "hash") {
             return Type::Integer;
         }
