@@ -78,12 +78,11 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     let mut keywords = result.keywords.clone();
     let mut block = result.block.clone();
     for (name, type_) in signature.param_names.iter().zip(&signature.params) {
-        if shape.has_block
-            && matches!(type_, Type::Proc(_, _))
-            && matches!(name.as_str(), "blk" | "block")
-        {
-            block = Some(type_.clone());
-            continue;
+        if shape.has_block && matches!(name.as_str(), "blk" | "block") {
+            if let Some(proc_type) = optional_proc_type(type_) {
+                block = Some(proc_type);
+                continue;
+            }
         }
         if let Some(required) = shape.keywords.get(name) {
             keywords.insert(
@@ -93,9 +92,9 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
                     required: *required,
                 },
             );
-        } else {
-            params.push(type_.clone());
+            continue;
         }
+        params.push(type_.clone());
     }
     result.params = params;
     result.param_names.clear();
@@ -106,6 +105,22 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     result.keywords = keywords;
     result.block = block;
     result
+}
+
+fn optional_proc_type(type_: &Type) -> Option<Type> {
+    match type_ {
+        Type::Proc(_, _) => Some(type_.clone()),
+        Type::Union(members)
+            if members
+                .iter()
+                .all(|member| member.is_nil() || matches!(member, Type::Proc(_, _))) =>
+        {
+            members
+                .iter()
+                .find_map(|member| matches!(member, Type::Proc(_, _)).then(|| member.clone()))
+        }
+        _ => None,
+    }
 }
 
 fn merge_method_signatures(signatures: &[MethodSig]) -> MethodSig {

@@ -98,6 +98,11 @@ fn visits_hash_sort_by_blocks() {
 }
 
 #[test]
+fn maps_nullable_proc_parameters_to_blocks() {
+    check_fixture("tests/fixtures/nullable_block_signature.rb");
+}
+
+#[test]
 fn resolves_method_summaries_across_fixpoint_rounds() {
     let result = check_fixture("tests/fixtures/fixpoint_flow.rb");
     let notes = result
