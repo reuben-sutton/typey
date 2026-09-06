@@ -2883,6 +2883,79 @@ T.reveal_type(Base.name)
 }
 
 #[test]
+fn narrows_nilable_local_after_replacing_it_in_unless() {
+    let result = check(
+        r#"
+#: (String?) -> String?
+def maybe_text(value)
+  value
+end
+
+#: (String, String) -> void
+def consume(first, second); end
+
+first = maybe_text(nil)
+unless first
+  first = "fallback"
+end
+consume(first, "value")
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn keeps_non_exhaustive_integer_case_fallthrough_reachable() {
+    let result = check(
+        r#"
+class Result
+  #: () -> Integer
+  def code
+    0
+  end
+end
+
+#: (Result) -> Integer
+def code_after_cases(result)
+  case result.code
+  when 1
+    raise "one"
+  when 2
+    raise "two"
+  end
+  result.code
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn does_not_treat_integer_constants_as_case_type_tests() {
+    let result = check(
+        r#"
+FIRST = 1
+SECOND = 2
+
+#: (Integer) -> Integer
+def after_status(code)
+  case code
+  when FIRST
+    raise "first"
+  when SECOND
+    raise "second"
+  end
+  code
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn infers_const_get_class_objects_from_literal_names() {
     let result = check(
         r#"

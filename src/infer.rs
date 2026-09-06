@@ -5178,10 +5178,10 @@ impl<'src> Analyzer<'src> {
             let mut condition_type = Type::Never;
             let mut condition_is_type_test = true;
             for value in &when_node.conditions() {
-                let is_type_test = Self::is_case_type_test(&value);
+                let value_type = self.eval_node(&value, &mut when_environment).type_;
+                let is_type_test = Self::is_case_type_test(&value, &value_type);
                 all_conditions_are_type_tests &= is_type_test;
                 condition_is_type_test &= is_type_test;
-                let value_type = self.eval_node(&value, &mut when_environment).type_;
                 let value_type = Self::class_object_value_type(&value_type).unwrap_or(value_type);
                 condition_type = condition_type.join(&value_type);
             }
@@ -5318,9 +5318,8 @@ impl<'src> Analyzer<'src> {
         }
     }
 
-    fn is_case_type_test(node: &Node<'_>) -> bool {
-        node.as_constant_read_node().is_some()
-            || node.as_constant_path_node().is_some()
+    fn is_case_type_test(node: &Node<'_>, value_type: &Type) -> bool {
+        Self::class_object_instance_type(value_type).is_some()
             || node.as_true_node().is_some()
             || node.as_false_node().is_some()
             || node.as_nil_node().is_some()
