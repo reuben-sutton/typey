@@ -2525,6 +2525,27 @@ T.reveal_type(entries.to_h { |entry| [entry.key, entry] })
 }
 
 #[test]
+fn preserves_set_element_types_through_set_difference() {
+    let result = check(
+        r#"
+class Set
+end
+
+left = T.let(Set.new, T::Set[String])
+right = T.let(Set.new, T::Set[String])
+T.reveal_type(left - right)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T::Set[String]`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_remaining_literal_expression_types() {
     let result = check(
         r#"
