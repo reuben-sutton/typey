@@ -2808,7 +2808,7 @@ result = values.each_with_object([]) do |(package, dependencies), invalid_packag
     dependency_values = dependencies #: as Array[Object]
     dependency_values.filter { |path| path.nil? }
   else
-    []
+    [] #: as Array[Object]
   end
   T.reveal_type(package)
   T.reveal_type(dependencies)
