@@ -6282,8 +6282,9 @@ impl<'src> Analyzer<'src> {
         }
         let mut candidates = Vec::new();
         if let Some(owner) = &key.owner {
+            let owner = self.resolve_global_name(owner);
             self.append_method_candidates(
-                owner,
+                &owner,
                 &key.name,
                 key.singleton,
                 &mut BTreeSet::new(),
@@ -6898,6 +6899,10 @@ impl<'src> Analyzer<'src> {
                 let _ = self.eval_block_node(block, &[Type::Any], environment);
             }
             return Type::Never;
+        }
+
+        if name == "freeze" {
+            return receiver.clone();
         }
 
         if name == "class" {
@@ -7618,6 +7623,7 @@ impl<'src> Analyzer<'src> {
             "match" => Type::union([Type::Nil, Type::named("MatchData")]),
             "match?" => Type::bool(),
             "=~" => Type::union([Type::Nil, Type::Integer]),
+            "delete_prefix" | "delete_suffix" | "inspect" | "dump" | "to_str" => Type::String,
             "index" | "rindex" => Type::union([Type::Nil, Type::Integer]),
             "encode" | "reverse" | "reverse!" | "strip" | "lstrip" | "rstrip" | "upcase"
             | "downcase" | "capitalize" | "swapcase" | "chomp" | "chop" | "succ" | "next"
