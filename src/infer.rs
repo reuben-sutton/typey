@@ -7244,6 +7244,11 @@ impl<'src> Analyzer<'src> {
                     Type::Named(class.clone(), Vec::new())
                 }
             }
+            Type::Named(class, _) if name_matches(class, "Set") => match name {
+                "empty?" | "include?" | "member?" => Type::bool(),
+                "length" | "size" => Type::Integer,
+                _ => self.eval_common_method(name),
+            },
             Type::Named(class, _) if name_matches(class, "Regexp") => match name {
                 "match" => Type::union([Type::Nil, Type::named("MatchData")]),
                 "match?" | "===" => Type::bool(),
