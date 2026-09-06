@@ -1611,6 +1611,51 @@ fn prefers_builtin_rbi_signatures_over_untyped_gem_declarations() {
 }
 
 #[test]
+fn specializes_tsort_results_from_the_graph_edge_type() {
+    let source = r#"
+class TypedGraph
+  include TSort
+
+  #: (T::Hash[String, T::Array[String]] edges) -> void
+  def initialize(edges)
+    @edges = edges
+  end
+
+  #: () ?{ (String node) -> void } -> void
+  def tsort_each_node(&block)
+    @edges.each_key(&block)
+  end
+
+  #: (String node) ?{ (String child) -> void } -> void
+  def tsort_each_child(node, &block)
+    (@edges[node] || []).each(&block)
+  end
+
+  def cycles
+    strongly_connected_components.reject { |component| component.length == 1 }
+  end
+end
+
+graph = TypedGraph.new({"a" => ["b"], "b" => ["a"]})
+T.reveal_type(graph.cycles)
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().unwrap()).unwrap();
+    files.push(WorkspaceFile::new("tsort_graph.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .diagnostic
+                .message
+                .contains("Revealed type: `T::Array[T::Array[String]]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn resolves_module_function_definitions_on_module_receivers() {
     let result = check(
         r#"
