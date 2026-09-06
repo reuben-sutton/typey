@@ -4056,6 +4056,38 @@ end
 }
 
 #[test]
+fn infers_struct_new_field_types() {
+    let result = check(
+        r#"
+Context = Struct.new(:name, :count)
+context = Context.new("ready", 3)
+
+T.reveal_type(context.name)
+T.reveal_type(context.count)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let messages = result
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Revealed type: `Integer`")),
+        "{messages:?}"
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
