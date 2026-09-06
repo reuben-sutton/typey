@@ -6341,18 +6341,35 @@ impl<'src> Analyzer<'src> {
         arguments: &CallArguments<'_>,
         has_block: bool,
     ) -> Option<MethodSig> {
-        overloads
+        let matching = overloads
             .iter()
-            .find(|signature| {
-                (!has_block || signature.block.is_some())
-                    && self.signature_accepts_arguments(signature, arguments)
+            .enumerate()
+            .filter(|(_, signature)| self.signature_accepts_arguments(signature, arguments))
+            .collect::<Vec<_>>();
+        let block_preference = |signature: &MethodSig| {
+            if has_block == signature.block.is_some() {
+                0
+            } else {
+                1
+            }
+        };
+        matching
+            .into_iter()
+            .min_by_key(|(index, signature)| {
+                let positional_count = if !signature.keywords.is_empty()
+                    || signature.accepts_keyword_rest
+                {
+                    arguments.positional_types.len()
+                } else {
+                    arguments.argument_types.len()
+                };
+                (
+                    block_preference(signature),
+                    signature.params.len().saturating_sub(positional_count),
+                    *index,
+                )
             })
-            .or_else(|| {
-                overloads
-                    .iter()
-                    .find(|signature| self.signature_accepts_arguments(signature, arguments))
-            })
-            .cloned()
+            .map(|(_, signature)| signature.clone())
     }
 
     fn signature_accepts_arguments(
