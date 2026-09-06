@@ -252,6 +252,7 @@ enum SharedKey {
     Constant(String),
     ClassVar(ClassVarKey),
     Global(String),
+    StructField(String, String),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1550,6 +1551,8 @@ pub(crate) fn check_with_policies(
         type_aliases: BTreeMap::new(),
         ivars: BTreeMap::new(),
         constants: BTreeMap::new(),
+        struct_fields: BTreeMap::new(),
+        struct_field_types: BTreeMap::new(),
         class_vars: BTreeMap::new(),
         globals: BTreeMap::new(),
         report: true,
@@ -1602,6 +1605,8 @@ struct Analyzer<'src> {
     type_aliases: BTreeMap<String, Type>,
     ivars: BTreeMap<IvarKey, Type>,
     constants: BTreeMap<String, Type>,
+    struct_fields: BTreeMap<String, Vec<String>>,
+    struct_field_types: BTreeMap<(String, String), Type>,
     class_vars: BTreeMap<ClassVarKey, Type>,
     globals: BTreeMap<String, Type>,
     report: bool,
@@ -6032,8 +6037,11 @@ impl<'src> Analyzer<'src> {
                     .as_ref()
                     .is_some_and(|receiver| self.constant_reference_name(receiver).is_some())
             {
-                if let Some(owner) = Self::class_object_owner(&receiver_type) {
+                if let Some(owner) = Self::class_object_owner(&receiver_type)
+                    .or_else(|| Self::named_type_name(&receiver_type))
+                {
                     self.infer_initializer_call(node, &owner, &arguments, environment);
+                    self.observe_struct_constructor(&owner, &arguments);
                     result = Type::named(owner);
                 }
             }
@@ -6707,6 +6715,46 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    fn observe_struct_constructor(&mut self, owner: &str, arguments: &CallArguments<'_>) {
+        let Some(fields) = self.struct_fields.get(owner).cloned() else {
+            return;
+        };
+        for (field, actual) in fields.iter().zip(&arguments.positional_types) {
+            let key = (owner.to_owned(), field.clone());
+            let next = self
+                .struct_field_types
+                .get(&key)
+                .map_or_else(|| actual.clone(), |current| current.join(actual));
+            if self.struct_field_types.get(&key) != Some(&next) {
+                self.struct_field_types.insert(key.clone(), next);
+                self.changed_shared.insert(SharedKey::StructField(key.0, key.1));
+            }
+        }
+    }
+
+    fn struct_field_type(
+        &mut self,
+        owner: &str,
+        name: &str,
+        environment: &Environment,
+    ) -> Option<Type> {
+        if !self
+            .struct_fields
+            .get(owner)
+            .is_some_and(|fields| fields.iter().any(|field| field == name))
+        {
+            return None;
+        }
+        let key = (owner.to_owned(), name.to_owned());
+        self.record_shared_read(SharedKey::StructField(key.0.clone(), key.1.clone()), environment);
+        Some(
+            self.struct_field_types
+                .get(&key)
+                .cloned()
+                .unwrap_or(Type::Any),
+        )
+    }
+
     fn implicit_method_key(&self, name: &str, environment: &Environment) -> MethodKey {
         if let Some(current) = &environment.method_key {
             let owner = if current.singleton {
@@ -6972,7 +7020,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn struct_subclass_type<'node>(
-        &self,
+        &mut self,
         environment: &Environment,
         value: &Node<'node>,
         constant_name: &str,
@@ -6985,6 +7033,25 @@ impl<'src> Analyzer<'src> {
         let receiver_name = self.constant_reference_name(&receiver)?;
         if receiver_name.trim_start_matches("::") != "Struct" {
             return None;
+        }
+        let fields = call
+            .arguments()
+            .map(|arguments| {
+                arguments
+                    .arguments()
+                    .into_iter()
+                    .filter_map(|argument| {
+                        argument
+                            .as_symbol_node()
+                            .map(|symbol| String::from_utf8_lossy(symbol.unescaped()).into_owned())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !fields.is_empty() {
+            self.struct_fields
+                .entry(self.constant_key(environment, constant_name))
+                .or_insert(fields);
         }
         Some(Type::named(self.constant_key(environment, constant_name)))
     }
@@ -7656,6 +7723,9 @@ impl<'src> Analyzer<'src> {
                 Type::Named(class.clone(), arguments.clone())
             }
             Type::Named(class, _) => {
+                if let Some(type_) = self.struct_field_type(class, name, environment) {
+                    return type_;
+                }
                 if let Some(type_) =
                     self.inferred_accessor_ivar_type(class, name, false, environment)
                 {
