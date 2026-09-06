@@ -9598,6 +9598,58 @@ impl<'src> Analyzer<'src> {
                 });
                 Type::Array(Box::new(block_type))
             }
+            "reduce" | "inject" => {
+                let Some(block) = site.block else {
+                    return Type::named("Enumerator");
+                };
+                let accumulator = site
+                    .argument_types
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| element.clone());
+                if let Some(symbol) = block
+                    .as_block_argument_node()
+                    .and_then(|block| block.expression())
+                    .and_then(|expression| expression.as_symbol_node())
+                {
+                    let name = String::from_utf8_lossy(symbol.unescaped()).into_owned();
+                    let argument_types = vec![element.clone()];
+                    let argument_nodes = Vec::new();
+                    let site = CallSite {
+                        argument_nodes: &argument_nodes,
+                        argument_types: &argument_types,
+                        block: None,
+                    };
+                    self.eval_method_call(&accumulator, &name, &site, environment)
+                } else if let Some(expression_type) =
+                    self.passed_block_expression_type(block, environment)
+                {
+                    if let Some(signature) = Self::passed_block_signature(&expression_type) {
+                        let expected = Type::Proc(
+                            vec![accumulator.clone(), element.clone()],
+                            Box::new(Type::Anything),
+                        );
+                        if !self.is_assignable(&signature, &expected) {
+                            self.error(
+                                block,
+                                format!(
+                                    "Expected `{}` but found `{}` for block argument",
+                                    Self::block_type_description(&expected),
+                                    Self::block_type_description(&signature),
+                                ),
+                            );
+                        }
+                        match signature {
+                            Type::Proc(_, result) => *result,
+                            _ => Type::Any,
+                        }
+                    } else {
+                        Type::Any
+                    }
+                } else {
+                    self.eval_block_node(block, &[accumulator, element.clone()], environment)
+                }
+            }
             "flat_map" => {
                 if site.block.is_none() {
                     return Type::named("Enumerator");
@@ -10426,34 +10478,7 @@ impl<'src> Analyzer<'src> {
                 .and_then(|expression| expression.as_symbol_node())
             {
                 let name = String::from_utf8_lossy(symbol.unescaped()).into_owned();
-                let arguments = CallArguments::default();
-                if let Some(key) = self.receiver_method_key(None, element, &name, outer) {
-                    self.record_method_dependency(&key, outer);
-                    if let Some(signature) = self.observe_call(&key, &arguments, false) {
-                        self.invoke_signature(
-                            node,
-                            &name,
-                            &signature,
-                            &arguments,
-                            Some(element),
-                            None,
-                        )
-                    } else {
-                        let site = CallSite {
-                            argument_nodes: &arguments.argument_nodes,
-                            argument_types: &arguments.argument_types,
-                            block: None,
-                        };
-                        self.eval_method_call(element, &name, &site, outer)
-                    }
-                } else {
-                    let site = CallSite {
-                        argument_nodes: &arguments.argument_nodes,
-                        argument_types: &arguments.argument_types,
-                        block: None,
-                    };
-                    self.eval_method_call(element, &name, &site, outer)
-                }
+                self.eval_symbol_collection_block(node, element, &name, outer)
             } else {
                 let Some(expression_type) = self.passed_block_expression_type(node, outer) else {
                     return Type::Any;
@@ -10482,6 +10507,70 @@ impl<'src> Analyzer<'src> {
         };
         self.expected_return_type = previous_expected_return;
         result
+    }
+
+    fn eval_symbol_collection_block<'node>(
+        &mut self,
+        node: &Node<'node>,
+        receiver: &Type,
+        name: &str,
+        environment: &mut Environment,
+    ) -> Type {
+        self.eval_symbol_collection_block_inner(node, receiver, name, environment, None)
+    }
+
+    fn eval_symbol_collection_block_inner<'node>(
+        &mut self,
+        node: &Node<'node>,
+        receiver: &Type,
+        name: &str,
+        environment: &mut Environment,
+        union_context: Option<&Type>,
+    ) -> Type {
+        if let Type::Union(members) = receiver {
+            return members.iter().fold(Type::Never, |result, member| {
+                result.join(&self.eval_symbol_collection_block_inner(
+                    node,
+                    member,
+                    name,
+                    environment,
+                    Some(receiver),
+                ))
+            });
+        }
+
+        let arguments = CallArguments::default();
+        let mut resolved = false;
+        let type_ = if let Some(key) = self.receiver_method_key(None, receiver, name, environment) {
+            self.record_method_dependency(&key, environment);
+            if let Some(signature) = self.observe_call(&key, &arguments, false) {
+                resolved = true;
+                self.invoke_signature(node, name, &signature, &arguments, Some(receiver), None)
+            } else {
+                let site = CallSite {
+                    argument_nodes: &arguments.argument_nodes,
+                    argument_types: &arguments.argument_types,
+                    block: None,
+                };
+                self.eval_method_call(receiver, name, &site, environment)
+            }
+        } else {
+            let site = CallSite {
+                argument_nodes: &arguments.argument_nodes,
+                argument_types: &arguments.argument_types,
+                block: None,
+            };
+            self.eval_method_call(receiver, name, &site, environment)
+        };
+        if type_.is_any() && !receiver.contains_any() && !receiver.is_never() && !resolved {
+            let component =
+                union_context.map_or_else(String::new, |union| format!(" component of `{union}`"));
+            self.error(
+                node,
+                format!("Method `{name}` does not exist on `{receiver}`{component}"),
+            );
+        }
+        type_
     }
 
     fn inferred_block_signature<'node>(node: &Node<'node>) -> MethodSig {
