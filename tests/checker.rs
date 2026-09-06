@@ -1593,9 +1593,9 @@ fn treats_t_namespaced_enumerables_as_nominal_types() {
 
 #[test]
 fn prefers_builtin_rbi_signatures_over_untyped_gem_declarations() {
-    let source = std::fs::read_to_string("tests/fixtures/benchmark_realtime.rb").unwrap();
+    let source = "# typed: true\n\nT.reveal_type(Benchmark.realtime { nil })\n";
     let mut files = load_workspace_paths(&builtin_rbi_paths().unwrap()).unwrap();
-    files.push(WorkspaceFile::new("tests/fixtures/benchmark_realtime.rb", source));
+    files.push(WorkspaceFile::new("benchmark_realtime.rb", source));
     let result = check_workspace(&files, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
