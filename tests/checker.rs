@@ -545,6 +545,11 @@ fn narrows_nilable_locals_after_safe_navigation_guards() {
 }
 
 #[test]
+fn rejects_safe_navigation_on_definitely_non_nil_receivers() {
+    check_fixture("tests/fixtures/safe_navigation_non_nil.rb");
+}
+
+#[test]
 fn narrows_unions_for_equality_predicates() {
     let result = check_fixture("tests/fixtures/equality_predicate_narrowing.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

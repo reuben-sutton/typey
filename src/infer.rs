@@ -6810,6 +6810,20 @@ impl<'src> Analyzer<'src> {
         } else {
             Type::Object
         };
+        if call.is_safe_navigation()
+            && !receiver_type.is_any()
+            && !receiver_type.contains_any()
+            && !receiver_type.is_never()
+            && !matches!(receiver_type, Type::Anything)
+            && receiver_type.without(&Type::Nil) == receiver_type
+        {
+            self.error(
+                node,
+                format!(
+                    "Used `&.` operator on `{receiver_type}`, which can never be nil"
+                ),
+            );
+        }
         let block = call.block();
         let mut untyped_origin = None;
         let mut callee_type = if receiver_node.as_ref().is_some_and(|receiver| {
