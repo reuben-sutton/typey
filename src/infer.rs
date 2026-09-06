@@ -8108,8 +8108,16 @@ impl<'src> Analyzer<'src> {
             "match" => Type::union([Type::Nil, Type::named("MatchData")]),
             "match?" => Type::bool(),
             "=~" => Type::union([Type::Nil, Type::Integer]),
-            "delete_prefix" | "delete_suffix" | "inspect" | "dump" | "to_str"
-            | "shellescape" => Type::String,
+            "delete_prefix"
+            | "delete_suffix"
+            | "inspect"
+            | "dump"
+            | "to_str"
+            | "shellescape"
+            | "pluralize"
+            | "singularize"
+            | "underscore"
+            | "squish" => Type::String,
             "+@" => Type::String,
             "index" | "rindex" => Type::union([Type::Nil, Type::Integer]),
             "chomp!" | "chop!" => Type::union([Type::Nil, Type::String]),
