@@ -8498,6 +8498,13 @@ impl<'src> Analyzer<'src> {
             "match" => Type::union([Type::Nil, Type::named("MatchData")]),
             "match?" => Type::bool(),
             "=~" => Type::union([Type::Nil, Type::Integer]),
+            "<=>" => {
+                if site.argument_types.first() == Some(&Type::String) {
+                    Type::Integer
+                } else {
+                    Type::union([Type::Nil, Type::Integer])
+                }
+            }
             "delete_prefix"
             | "delete_suffix"
             | "inspect"
