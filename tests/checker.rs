@@ -4132,6 +4132,26 @@ T.reveal_type(value)
 }
 
 #[test]
+fn models_dir_as_string() {
+    let result = check(
+        r#"
+path = __dir__
+
+T.reveal_type(path)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `String`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
