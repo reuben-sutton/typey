@@ -153,6 +153,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut application_seen_untyped = BTreeSet::new();
                 let mut application_examples_by_origin =
                     BTreeMap::<UntypedOrigin, Vec<String>>::new();
+                let application_call_labels = files
+                    .iter()
+                    .filter(|file| is_application_source(&file.path))
+                    .map(|file| (file.path.clone(), syntactic_call_labels(&file.source)))
+                    .collect::<BTreeMap<_, _>>();
+                let mut application_fallback_calls = BTreeMap::<String, usize>::new();
                 for inferred in &result.types {
                     if !is_application_source(&inferred.path) || !inferred.is_send {
                         continue;
@@ -169,6 +175,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             origin,
                         )) {
                             *application_untyped_by_origin.entry(origin).or_default() += 1;
+                            if origin == UntypedOrigin::FallbackCall {
+                                let label = application_call_labels
+                                    .get(&inferred.path)
+                                    .and_then(|labels| labels.get(&(inferred.start, inferred.end)))
+                                    .cloned()
+                                    .unwrap_or_else(|| "<unknown call>".to_owned());
+                                *application_fallback_calls.entry(label).or_default() += 1;
+                            }
                             let examples =
                                 application_examples_by_origin.entry(origin).or_default();
                             if examples.len() < 5 {
@@ -193,6 +207,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                }
+                let mut application_fallback_calls =
+                    application_fallback_calls.into_iter().collect::<Vec<_>>();
+                application_fallback_calls
+                    .sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+                for (label, count) in application_fallback_calls.into_iter().take(30) {
+                    eprintln!("[typey]   fallback call `{label}`: {count} unique spans");
                 }
                 let mut application_syntactic_send_spans = BTreeSet::new();
                 for file in &files {
@@ -543,4 +564,36 @@ fn syntactic_send_spans(source: &str) -> BTreeSet<(usize, usize)> {
     let mut visitor = SyntacticSendVisitor::default();
     visitor.visit(&parsed.node());
     visitor.spans
+}
+
+#[derive(Default)]
+struct SyntacticCallLabelVisitor<'src> {
+    source: &'src [u8],
+    labels: BTreeMap<(usize, usize), String>,
+}
+
+impl<'src> Visit<'src> for SyntacticCallLabelVisitor<'src> {
+    fn visit_call_node(&mut self, node: &ruby_prism::CallNode<'src>) {
+        let location = node.location();
+        let receiver = node
+            .receiver()
+            .map(|receiver| typey::prism::text(self.source, &receiver))
+            .unwrap_or_else(|| "<self>".to_owned());
+        let name = typey::prism::constant_name(node.name());
+        self.labels.insert(
+            (location.start_offset(), location.end_offset()),
+            format!("{receiver}.{name}"),
+        );
+        ruby_prism::visit_call_node(self, node);
+    }
+}
+
+fn syntactic_call_labels(source: &str) -> BTreeMap<(usize, usize), String> {
+    let parsed = ruby_prism::parse(source.as_bytes());
+    let mut visitor = SyntacticCallLabelVisitor {
+        source: source.as_bytes(),
+        ..Default::default()
+    };
+    visitor.visit(&parsed.node());
+    visitor.labels
 }
