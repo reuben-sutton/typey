@@ -7847,6 +7847,19 @@ impl<'src> Analyzer<'src> {
                 }
                 _ => self.eval_common_method(name),
             },
+            Type::Named(class, arguments) if name_matches(class, "Enumerator") => match name {
+                "map" | "collect" => {
+                    if site.block.is_none() {
+                        return Type::Named(class.clone(), arguments.clone());
+                    }
+                    let element = arguments.first().cloned().unwrap_or(Type::Any);
+                    let result = site.block.map_or(Type::Any, |block| {
+                        self.eval_collection_block(block, &element, environment)
+                    });
+                    Type::Array(Box::new(result))
+                }
+                _ => self.eval_common_method(name),
+            },
             Type::Named(class, _) if name_matches(class, "Parser::Source::Map")
                 || name_matches(class, "Parser::Source::Range") => match name
             {
