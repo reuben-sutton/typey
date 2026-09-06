@@ -7802,6 +7802,13 @@ impl<'src> Analyzer<'src> {
             }
             Type::Named(class, arguments) if name_matches(class, "Set") => match name {
                 "empty?" | "include?" | "member?" => Type::bool(),
+                "any?" | "all?" | "none?" => {
+                    if let Some(block) = site.block {
+                        let element = arguments.first().cloned().unwrap_or(Type::Any);
+                        let _ = self.eval_block_node(block, &[element], environment);
+                    }
+                    Type::bool()
+                }
                 "length" | "size" => Type::Integer,
                 "to_a" => Type::Array(Box::new(
                     arguments.first().cloned().unwrap_or(Type::Any),
