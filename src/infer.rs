@@ -10798,6 +10798,15 @@ impl<'src> Analyzer<'src> {
                     _ => Type::Any,
                 }
             }
+            Type::Named(class, _)
+                if name_matches(class, "YAML") || name_matches(class, "Psych") =>
+            {
+                match name {
+                    "dump" => Type::String,
+                    "load" | "load_file" => Type::union([Type::Nil, Type::Object]),
+                    _ => self.eval_common_method(name),
+                }
+            }
             Type::Named(class, arguments) if name == "new" => {
                 if self
                     .classes
