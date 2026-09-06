@@ -6811,7 +6811,10 @@ impl<'src> Analyzer<'src> {
                 .get(&owner_name)
                 .and_then(|info| info.superclass.clone());
         }
-        Type::Any
+        // Reading an uninitialized Ruby instance variable yields nil. Keep
+        // that concrete fact instead of letting an unknown ivar poison
+        // `@value ||= ...` expressions with T.untyped.
+        Type::Nil
     }
 
     fn inferred_accessor_ivar_type(
