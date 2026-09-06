@@ -9507,7 +9507,7 @@ impl<'src> Analyzer<'src> {
                 .as_ref()
                 .is_some_and(|key| key.singleton)
         } else {
-            receiver_node.is_some_and(|node| self.constant_reference_name(node).is_some())
+            false
         };
         Some(MethodKey {
             owner: Some(owner),
