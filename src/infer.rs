@@ -7825,6 +7825,7 @@ impl<'src> Analyzer<'src> {
             "delete_prefix" | "delete_suffix" | "inspect" | "dump" | "to_str" => Type::String,
             "+@" => Type::String,
             "index" | "rindex" => Type::union([Type::Nil, Type::Integer]),
+            "chomp!" | "chop!" => Type::union([Type::Nil, Type::String]),
             "encode" | "reverse" | "reverse!" | "strip" | "lstrip" | "rstrip" | "upcase"
             | "downcase" | "capitalize" | "swapcase" | "chomp" | "chop" | "succ" | "next"
             | "delete" | "tr" | "tr_s" | "squeeze" | "scrub" | "center" | "ljust" | "rjust"
