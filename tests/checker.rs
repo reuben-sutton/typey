@@ -87,6 +87,11 @@ fn reports_missing_constants_in_typed_true_files() {
 }
 
 #[test]
+fn tracks_constant_mixins_and_binds_dsl_blocks_to_instances() {
+    check_fixture("tests/fixtures/dynamic_mixin_bound_block.rb");
+}
+
+#[test]
 fn dispatches_structural_collections_through_vendored_rbis() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs read");

@@ -3067,7 +3067,7 @@ impl<'src> Analyzer<'src> {
                     .is_some()
             {
                 receiver_type
-                    .cloned()
+                    .and_then(Self::class_object_instance_type)
                     .unwrap_or_else(|| (**receiver).clone())
             } else {
                 self.substitute_signature_type(receiver, receiver_type, bindings, type_parameters)
@@ -8115,12 +8115,16 @@ impl<'src> Analyzer<'src> {
                     self.constant_reference_name(receiver)
                         .is_some_and(|name| name.trim_start_matches("::") == "YAML")
                 });
+            let class_mixin = matches!(name.as_str(), "include" | "prepend" | "extend")
+                && Self::class_object_instance_type(&dispatch_receiver_type).is_some();
             let random_formatter_signature = self.random_formatter_signature(
                 receiver_node.as_ref(),
                 &dispatch_receiver_type,
                 &name,
             );
-            let mut result = if yaml_dump {
+            let mut result = if class_mixin {
+                Type::Nil
+            } else if yaml_dump {
                 Type::String
             } else if struct_constructor {
                 Self::class_object_type("Struct")
