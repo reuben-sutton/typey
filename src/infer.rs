@@ -11831,6 +11831,14 @@ impl<'src> Analyzer<'src> {
                 .zip(argument_types)
                 .enumerate()
             {
+                if arguments.has_dynamic_keyword_splat
+                    && arguments
+                        .argument_nodes
+                        .get(*argument_index)
+                        .is_some_and(|argument| argument.as_keyword_hash_node().is_some())
+                {
+                    continue;
+                }
                 if let (Some(argument), Some(expected)) = (
                     arguments.argument_nodes.get(*argument_index),
                     signature.positional_type(index, argument_types.len()),

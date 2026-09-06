@@ -50,3 +50,12 @@ fixed_keywords(**dynamic_keywords) # error: Keyword args with splats are only su
 # it should not be mistaken for an empty argument list.
 fixed(*unknown_splat)
 fixed_keywords(**unknown_splat)
+
+sig { params(name: T.any(Symbol, String)).void }
+def accepts_dynamic_dispatch(name, *args)
+end
+
+sig { params(kwargs: T::Hash[Symbol, T.untyped]).void }
+def forwards_dynamic_keywords(kwargs)
+  accepts_dynamic_dispatch(**kwargs) # error: Keyword args with splats are only supported where the shape of the hash is known statically
+end
