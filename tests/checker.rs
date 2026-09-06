@@ -2206,6 +2206,25 @@ T.reveal_type(Mapper.new.to_h { |value| [value, value.length] })
 }
 
 #[test]
+fn preserves_pair_tuples_for_hash_from_collection_blocks() {
+    let result = check(
+        r#"
+files = ["a", "b"]
+T.reveal_type(Hash[files.collect { |file| [file, file.length] }])
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T::Hash[String, Integer]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn infers_dir_globs_as_string_arrays() {
     let result = check(
         r#"
