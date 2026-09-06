@@ -1052,6 +1052,82 @@ T.reveal_type(require_relative("library"))
 }
 
 #[test]
+fn infers_attr_reader_types_from_instance_variables() {
+    let result = check(
+        r#"
+class Box
+  attr_reader :value
+
+  def initialize
+    @value = 1
+  end
+end
+
+T.reveal_type(Box.new.value)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `Integer`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn uses_declarations_on_attr_readers() {
+    let result = check(
+        r#"
+class Box
+  #: () -> String
+  attr_reader :value
+end
+
+T.reveal_type(Box.new.value)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn records_hash_calls_in_private_methods() {
+    let source = r#"
+class Tree
+  def initialize
+    @scores = {} #: Hash[String, Float]
+  end
+
+  private
+
+  #: (String) -> Float
+  def score(child)
+    @scores.fetch(child, 0.0)
+  end
+end
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_start = source
+        .find("@scores.fetch(child, 0.0)")
+        .expect("fetch call");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + 25
+    }));
+}
+
+#[test]
 fn reports_signature_and_call_type_errors_precisely() {
     let result = check(
         r#"
@@ -3120,6 +3196,19 @@ fn evaluates_collection_callback_variants() {
             inferred.is_send && inferred.start == send_start && inferred.end == send_start + 10
         }));
     }
+}
+
+#[test]
+fn evaluates_sum_callbacks() {
+    let source = r#"
+values = [1, 2]
+values.sum { |value| value.to_f }
+"#;
+    let result = check(source, CheckerConfig::default());
+    let send_start = source.find("value.to_f").expect("sum block send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + 10
+    }));
 }
 
 #[test]

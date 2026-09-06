@@ -101,6 +101,9 @@ pub struct AnnotationTable {
     /// RBS type aliases collected from `#:` comments. The analyzer resolves
     /// these names against the lexical declaration that uses them.
     pub type_aliases: BTreeMap<String, Type>,
+    /// Signatures attached to generated attribute methods such as
+    /// `#: () -> String` followed by `attr_reader :name`.
+    pub attribute_annotations: BTreeMap<usize, Vec<MethodSig>>,
     pub assertions: BTreeMap<usize, InlineAssertion>,
 }
 
@@ -239,10 +242,12 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
     let mut table = collect(source);
     table.methods.clear();
     table.method_annotations.clear();
+    table.attribute_annotations.clear();
 
     let mut nodes = AnnotationNodes::default();
     nodes.visit(root);
     nodes.definitions.sort_unstable();
+    nodes.attribute_calls.sort_unstable();
     nodes
         .signatures
         .sort_unstable_by_key(|(start, end)| (*end, *start));
@@ -259,6 +264,17 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
             .or_default()
             .push(*definition);
     }
+    let mut attributes_by_line = BTreeMap::<usize, Vec<usize>>::new();
+    let mut line_index = 0;
+    for attribute in &nodes.attribute_calls {
+        while line_index + 1 < lines.len() && lines[line_index + 1].0 <= *attribute {
+            line_index += 1;
+        }
+        attributes_by_line
+            .entry(line_index)
+            .or_default()
+            .push(*attribute);
+    }
 
     let mut pending_rbs: Option<String> = None;
     for (line_number, (_, line)) in lines.iter().enumerate() {
@@ -272,6 +288,20 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
                     table
                         .method_annotations
                         .entry(*definition)
+                        .or_default()
+                        .push(signature);
+                }
+            }
+        }
+        if let Some(attribute) = attributes_by_line
+            .get(&line_number)
+            .and_then(|attributes| attributes.first())
+        {
+            if let Some(text) = pending_rbs.take() {
+                if let Some(signature) = parse_rbs_signature(&text) {
+                    table
+                        .attribute_annotations
+                        .entry(*attribute)
                         .or_default()
                         .push(signature);
                 }
@@ -325,6 +355,28 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
             table.method_annotations.insert(*definition, signatures);
         }
     }
+    for attribute in &nodes.attribute_calls {
+        let mut signatures = Vec::new();
+        let mut cursor = *attribute;
+        for (start, end) in nodes
+            .signatures
+            .iter()
+            .rev()
+            .filter(|(_, end)| *end <= *attribute)
+        {
+            if !only_trivia(&source.as_bytes()[*end..cursor]) {
+                break;
+            }
+            if let Some(signature) = parse_sorbet_signature(&source[*start..*end]) {
+                signatures.push(signature);
+            }
+            cursor = *start;
+        }
+        signatures.reverse();
+        if !signatures.is_empty() {
+            table.attribute_annotations.insert(*attribute, signatures);
+        }
+    }
 
     table
 }
@@ -332,6 +384,7 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
 #[derive(Default)]
 struct AnnotationNodes {
     definitions: Vec<usize>,
+    attribute_calls: Vec<usize>,
     signatures: Vec<(usize, usize)>,
 }
 
@@ -344,6 +397,15 @@ impl<'pr> Visit<'pr> for AnnotationNodes {
     fn visit_call_node(&mut self, node: &CallNode<'pr>) {
         if node.receiver().is_none() && node.name().as_slice() == b"sig" {
             self.signatures.push(crate::prism::span(&node.as_node()));
+        }
+        if node.receiver().is_none()
+            && matches!(
+                node.name().as_slice(),
+                b"attr_reader" | b"attr_writer" | b"attr_accessor"
+            )
+        {
+            self.attribute_calls
+                .push(crate::prism::span(&node.as_node()).0);
         }
         ruby_prism::visit_call_node(self, node);
     }

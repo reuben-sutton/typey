@@ -182,6 +182,12 @@ struct IvarKey {
     name: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccessorKind {
+    Reader,
+    Writer,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ClassVarKey {
     owner: String,
@@ -783,6 +789,16 @@ impl MethodState {
         }
     }
 
+    fn inferred_accessor(kind: AccessorKind) -> Self {
+        let mut state = Self::inferred(None);
+        state.return_type = Some(Type::Any);
+        if kind == AccessorKind::Writer {
+            state.params = vec![Some(Type::Any)];
+            state.required_params = 1;
+        }
+        state
+    }
+
     fn body_signature(&self) -> MethodSig {
         MethodSig {
             params: self
@@ -986,6 +1002,8 @@ struct MethodRegistrar<'a> {
     parameter_shapes: &'a mut BTreeMap<usize, ParameterShape>,
     classes: &'a mut BTreeMap<String, ClassInfo>,
     aliases: &'a mut BTreeMap<MethodKey, MethodKey>,
+    accessors: &'a mut BTreeMap<MethodKey, AccessorKind>,
+    attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
     type_aliases: &'a mut BTreeMap<String, Type>,
     class_stack: Vec<String>,
     singleton_stack: Vec<String>,
@@ -1186,6 +1204,49 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                         },
                     );
                 }
+                if matches!(
+                    name.as_str(),
+                    "attr_reader" | "attr_writer" | "attr_accessor"
+                ) {
+                    let owner = self
+                        .singleton_stack
+                        .last()
+                        .cloned()
+                        .or_else(|| self.class_stack.last().cloned());
+                    let singleton = self.singleton_stack.last().is_some();
+                    let signatures = self
+                        .attribute_annotations
+                        .get(&prism::span(&node.as_node()).0);
+                    for attribute in &arguments {
+                        let add_accessor =
+                            |registrar: &mut Self, name: String, kind: AccessorKind| {
+                                let key = MethodKey {
+                                    owner: owner.clone(),
+                                    name,
+                                    singleton,
+                                };
+                                registrar.accessors.insert(key.clone(), kind);
+                                let state = signatures.map_or_else(
+                                    || MethodState::inferred_accessor(kind),
+                                    |signatures| MethodState::explicit_overloads(signatures),
+                                );
+                                registrar.methods.entry(key).or_insert(state);
+                            };
+                        match name.as_str() {
+                            "attr_reader" => {
+                                add_accessor(self, attribute.clone(), AccessorKind::Reader)
+                            }
+                            "attr_writer" => {
+                                add_accessor(self, format!("{}=", attribute), AccessorKind::Writer)
+                            }
+                            "attr_accessor" => {
+                                add_accessor(self, attribute.clone(), AccessorKind::Reader);
+                                add_accessor(self, format!("{}=", attribute), AccessorKind::Writer);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
         ruby_prism::visit_call_node(self, node);
@@ -1338,6 +1399,7 @@ pub(crate) fn check_with_policies(
         parameter_shapes: BTreeMap::new(),
         classes: BTreeMap::new(),
         aliases: BTreeMap::new(),
+        accessors: BTreeMap::new(),
         type_aliases: BTreeMap::new(),
         ivars: BTreeMap::new(),
         constants: BTreeMap::new(),
@@ -1388,6 +1450,7 @@ struct Analyzer<'src> {
     parameter_shapes: BTreeMap<usize, ParameterShape>,
     classes: BTreeMap<String, ClassInfo>,
     aliases: BTreeMap<MethodKey, MethodKey>,
+    accessors: BTreeMap<MethodKey, AccessorKind>,
     type_aliases: BTreeMap<String, Type>,
     ivars: BTreeMap<IvarKey, Type>,
     constants: BTreeMap<String, Type>,
@@ -2365,6 +2428,8 @@ impl<'src> Analyzer<'src> {
             parameter_shapes: &mut self.parameter_shapes,
             classes: &mut self.classes,
             aliases: &mut self.aliases,
+            accessors: &mut self.accessors,
+            attribute_annotations: &self.annotations.attribute_annotations,
             type_aliases: &mut self.type_aliases,
             class_stack: Vec::new(),
             singleton_stack: Vec::new(),
@@ -5431,7 +5496,31 @@ impl<'src> Analyzer<'src> {
                 environment,
             ) {
                 self.record_method_dependency(&key, environment);
-                if let Some(signature) = self.observe_call(&key, &arguments) {
+                let inferred_accessor = self
+                    .resolve_method_key(&key)
+                    .filter(|resolved| {
+                        self.methods
+                            .get(resolved)
+                            .is_some_and(|state| !state.explicit)
+                    })
+                    .and_then(|resolved| {
+                        self.accessors
+                            .get(&resolved)
+                            .copied()
+                            .map(|accessor| (resolved, accessor))
+                    });
+                if let Some((accessor_key, accessor)) = inferred_accessor {
+                    let type_ = self.eval_accessor_call(
+                        &accessor_key,
+                        accessor,
+                        argument_types,
+                        environment,
+                    );
+                    if type_.contains_any() {
+                        untyped_origin = Some(UntypedOrigin::InferredMethod);
+                    }
+                    type_
+                } else if let Some(signature) = self.observe_call(&key, &arguments) {
                     let declared = self
                         .resolve_method_key(&key)
                         .and_then(|resolved| self.methods.get(&resolved))
@@ -6016,6 +6105,52 @@ impl<'src> Analyzer<'src> {
         self.ivars.get(&key).cloned().unwrap_or(Type::Any)
     }
 
+    fn inferred_accessor_ivar_type(
+        &mut self,
+        class: &str,
+        name: &str,
+        singleton: bool,
+        environment: &Environment,
+    ) -> Option<Type> {
+        let mut owner = Some(class.to_owned());
+        let mut visited = BTreeSet::new();
+        while let Some(current) = owner {
+            if !visited.insert(current.clone()) {
+                break;
+            }
+            let key = IvarKey {
+                owner: current.clone(),
+                singleton,
+                name: format!("@{name}"),
+            };
+            if let Some(type_) = self.ivars.get(&key).cloned() {
+                self.record_shared_read(SharedKey::Ivar(key), environment);
+                return Some(type_);
+            }
+            owner = self
+                .classes
+                .get(&current)
+                .and_then(|info| info.superclass.clone());
+        }
+        None
+    }
+
+    fn observe_accessor_ivar(&mut self, owner: &str, name: &str, singleton: bool, actual: &Type) {
+        let key = IvarKey {
+            owner: owner.to_owned(),
+            singleton,
+            name: format!("@{name}"),
+        };
+        let next = self
+            .ivars
+            .get(&key)
+            .map_or_else(|| actual.clone(), |current| current.join(actual));
+        if self.ivars.get(&key) != Some(&next) {
+            self.ivars.insert(key.clone(), next);
+            self.changed_shared.insert(SharedKey::Ivar(key));
+        }
+    }
+
     fn lexical_owner(&self, environment: &Environment) -> Option<String> {
         environment
             .method_key
@@ -6331,6 +6466,29 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    fn eval_accessor_call(
+        &mut self,
+        key: &MethodKey,
+        kind: AccessorKind,
+        argument_types: &[Type],
+        environment: &Environment,
+    ) -> Type {
+        let Some(owner) = key.owner.as_deref() else {
+            return Type::Any;
+        };
+        let name = key.name.strip_suffix('=').unwrap_or(&key.name);
+        match kind {
+            AccessorKind::Reader => self
+                .inferred_accessor_ivar_type(owner, name, key.singleton, environment)
+                .unwrap_or(Type::Any),
+            AccessorKind::Writer => {
+                let type_ = argument_types.first().cloned().unwrap_or(Type::Any);
+                self.observe_accessor_ivar(owner, name, key.singleton, &type_);
+                type_
+            }
+        }
+    }
+
     fn eval_method_call<'a, 'node>(
         &mut self,
         receiver: &Type,
@@ -6603,11 +6761,18 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Named(class.clone(), arguments.clone())
             }
-            Type::Named(_, _)
-            | Type::Any
-            | Type::Object
-            | Type::TypeVar(_)
-            | Type::AttachedClass => {
+            Type::Named(class, _) => {
+                if let Some(type_) =
+                    self.inferred_accessor_ivar_type(class, name, false, environment)
+                {
+                    return type_;
+                }
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, &[Type::Any], environment);
+                }
+                self.eval_common_method(name)
+            }
+            Type::Any | Type::Object | Type::TypeVar(_) | Type::AttachedClass => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, &[Type::Any], environment);
                 }
@@ -6878,7 +7043,13 @@ impl<'src> Analyzer<'src> {
                 );
                 Type::Array(Box::new(Type::Tuple(tuple)))
             }
-            "sum" => Self::numeric_sum_type(element, site.argument_types.first()),
+            "sum" => {
+                let element = site.block.map_or_else(
+                    || element.clone(),
+                    |block| self.eval_block_node(block, std::slice::from_ref(element), environment),
+                );
+                Self::numeric_sum_type(&element, site.argument_types.first())
+            }
             "+" | "|" => {
                 let element = site
                     .argument_types
