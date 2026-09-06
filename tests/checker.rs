@@ -1468,6 +1468,22 @@ T.reveal_type(instances)
 }
 
 #[test]
+fn publishes_only_the_final_type_per_expression() {
+    let source = "# typed: strict\n\n#: (String command) -> String\ndef exec(command)\n  command.to_s\nend\n";
+    let result = check(source, CheckerConfig::default());
+    let start = source.find("command.to_s").expect("call span");
+    let types = result
+        .types
+        .iter()
+        .filter(|inferred| {
+            inferred.start == start && inferred.end == start + "command.to_s".len()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(types.len(), 1, "duplicate final types: {types:?}");
+    assert_eq!(types[0].type_, Type::String, "unexpected final type: {types:?}");
+}
+
+#[test]
 fn infers_attr_reader_types_from_instance_variables() {
     let result = check(
         r#"
