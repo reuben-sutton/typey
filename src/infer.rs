@@ -6824,11 +6824,11 @@ impl<'src> Analyzer<'src> {
         if environment.contains(&refinement) {
             return environment.get(&refinement);
         }
-        let mut owner = Some(key.owner.clone());
+        let mut pending = vec![key.owner.clone()];
         let mut visited = BTreeSet::new();
-        while let Some(owner_name) = owner {
+        while let Some(owner_name) = pending.pop() {
             if !visited.insert(owner_name.clone()) {
-                break;
+                continue;
             }
             let candidate = IvarKey {
                 owner: owner_name.clone(),
@@ -6839,10 +6839,14 @@ impl<'src> Analyzer<'src> {
                 self.record_shared_read(SharedKey::Ivar(candidate), environment);
                 return type_;
             }
-            owner = self
-                .classes
-                .get(&owner_name)
-                .and_then(|info| info.superclass.clone());
+            if let Some(info) = self.classes.get(&owner_name) {
+                pending.extend(info.includes.iter().cloned());
+                pending.extend(info.prepends.iter().cloned());
+                pending.extend(info.extends.iter().cloned());
+                if let Some(superclass) = &info.superclass {
+                    pending.push(superclass.clone());
+                }
+            }
         }
         // Reading an uninitialized Ruby instance variable yields nil. Keep
         // that concrete fact instead of letting an unknown ivar poison
