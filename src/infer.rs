@@ -8426,6 +8426,12 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Hash(Box::new(key.clone()), Box::new(value.clone()))
             }
+            "any?" | "all?" | "none?" => {
+                if let Some(block) = site.block {
+                    let _ = self.eval_block_node(block, &[key.clone(), value.clone()], environment);
+                }
+                Type::bool()
+            }
             "sort" => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, &[key.clone(), value.clone()], environment);
