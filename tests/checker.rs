@@ -3832,6 +3832,46 @@ T.reveal_type(extract(AST::Node.new))
 }
 
 #[test]
+fn inherits_ivar_types_from_included_modules() {
+    let result = check(
+        r#"
+class Files
+  #: -> Array[String]
+  def files
+    ["file.rb"]
+  end
+end
+
+module UsesFiles
+  #: (Files) -> void
+  def initialize(files)
+    @files = files
+  end
+end
+
+class Command
+  include UsesFiles
+
+  def files
+    @files.files
+  end
+end
+
+T.reveal_type(Command.new(Files.new).files)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_namespaced_classes_that_shadow_primitives() {
     let result = check(
         r#"
