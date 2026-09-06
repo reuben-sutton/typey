@@ -7638,6 +7638,8 @@ impl<'src> Analyzer<'src> {
             }
             let key = self.implicit_method_key(&name, environment);
             let receiver_type = environment.self_type.clone();
+            let random_formatter_signature =
+                self.random_formatter_signature(None, &receiver_type, &name);
             let resolved_owner = self
                 .resolve_method_key(&key)
                 .and_then(|resolved| resolved.owner);
@@ -7648,7 +7650,16 @@ impl<'src> Analyzer<'src> {
                 resolved_owner.as_deref(),
             );
             self.record_method_dependency(&key, environment);
-            if let Some(type_) = tsort_type {
+            if let Some(signature) = random_formatter_signature {
+                self.invoke_signature(
+                    node,
+                    &name,
+                    &signature,
+                    &arguments,
+                    Some(&receiver_type),
+                    None,
+                )
+            } else if let Some(type_) = tsort_type {
                 type_
             } else if name == "autoload"
                 && Self::class_object_instance_type(&receiver_type).is_some()
@@ -7821,12 +7832,26 @@ impl<'src> Analyzer<'src> {
                         matches!(name.trim_start_matches("::"), "YAML" | "Psych")
                     })
                 });
+            let random_formatter_signature = self.random_formatter_signature(
+                receiver_node.as_ref(),
+                &dispatch_receiver_type,
+                &name,
+            );
             let mut result = if yaml_dump {
                 Type::String
             } else if yaml_load {
                 Type::union([Type::Nil, Type::Object])
             } else if struct_constructor {
                 Self::class_object_type("Struct")
+            } else if let Some(signature) = random_formatter_signature {
+                self.invoke_signature(
+                    node,
+                    &name,
+                    &signature,
+                    &arguments,
+                    Some(&dispatch_receiver_type),
+                    None,
+                )
             } else if matches!(
                 dispatch_receiver_type,
                 Type::Union(_) | Type::Intersection(_)
@@ -10052,6 +10077,42 @@ impl<'src> Analyzer<'src> {
             Type::Named(name, _) if name_matches(&name, "FalseClass") => Some(Type::bool()),
             _ => None,
         }
+    }
+
+    fn random_formatter_signature(
+        &self,
+        receiver_node: Option<&Node<'_>>,
+        receiver_type: &Type,
+        name: &str,
+    ) -> Option<MethodSig> {
+        if name != "alphanumeric" {
+            return None;
+        }
+        let constant_receiver = receiver_node
+            .and_then(|receiver| self.constant_reference_name(receiver))
+            .map(|name| name.trim_start_matches("::").to_owned());
+        let typed_receiver = Self::class_object_instance_type(receiver_type)
+            .or_else(|| Some(receiver_type.clone()))
+            .and_then(|receiver| Self::named_type_name(&receiver));
+        let is_random_formatter_receiver = constant_receiver
+            .as_deref()
+            .or(typed_receiver.as_deref())
+            .is_some_and(|name| matches!(name, "Random" | "SecureRandom"));
+        if !is_random_formatter_receiver {
+            return None;
+        }
+
+        let mut signature =
+            MethodSig::new(vec![Type::union([Type::Nil, Type::Integer])], Type::String);
+        signature.required_params = 0;
+        signature.keywords.insert(
+            "chars".to_owned(),
+            signature::KeywordParam {
+                type_: Type::Array(Box::new(Type::Any)),
+                required: false,
+            },
+        );
+        Some(signature)
     }
 
     fn eval_method_call<'a, 'node>(

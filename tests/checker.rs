@@ -728,6 +728,21 @@ fn accepts_ranges_with_concrete_integer_endpoints_as_integer_ranges() {
 }
 
 #[test]
+fn models_random_formatter_keywords() {
+    let result = check_fixture("tests/fixtures/random_formatter.rb");
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `String`"))
+            .count(),
+        2,
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn models_array_inspection_as_string() {
     let result = check(
         r#"
