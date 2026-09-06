@@ -5504,9 +5504,12 @@ impl<'src> Analyzer<'src> {
         let mut normal_type = Some(Type::Nil);
         let mut abrupt = OutcomeTypes::default();
         let body = statements.body();
+        let report_unreachable = environment.method_key.is_some();
         for child in &body {
             if flow.is_terminated() {
-                self.error(&child, "This expression appears after an unconditional return");
+                if report_unreachable {
+                    self.error(&child, "This expression appears after an unconditional return");
+                }
                 continue;
             }
             let result = self.eval_node(&child, environment);
