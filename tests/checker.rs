@@ -193,6 +193,29 @@ fn dispatches_short_names_and_structural_builtins() {
 }
 
 #[test]
+fn indexes_inline_record_types() {
+    let result = check_fixture("tests/fixtures/inline_record_dispatch.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `Integer`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn prefers_direct_class_methods_over_extended_module_methods() {
     let result = check_fixture("tests/fixtures/direct_class_method_precedes_extension.rb");
     assert!(result
