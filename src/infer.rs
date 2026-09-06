@@ -7340,6 +7340,7 @@ impl<'src> Analyzer<'src> {
             }
             "lambda" | "proc" => Type::Proc(Vec::new(), Box::new(Type::Any)),
             "enum_for" => Type::named("Enumerator"),
+            "binding" => Type::named("Binding"),
             "rand" => Type::Float,
             "sleep" => Type::Integer,
             "include" | "prepend" | "extend" | "alias_method" | "attr_reader" | "attr_writer"
