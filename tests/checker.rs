@@ -2040,6 +2040,22 @@ T.reveal_type(Box.new.value)
         "{:?}",
         result.diagnostics
     );
+
+    let result = check(
+        r#"
+T.reveal_type(YAML.load_file("config.yml"))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `Object`")),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]

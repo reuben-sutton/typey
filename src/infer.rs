@@ -7760,8 +7760,16 @@ impl<'src> Analyzer<'src> {
                     self.constant_reference_name(receiver)
                         .is_some_and(|name| name.trim_start_matches("::") == "YAML")
                 });
+            let yaml_load = matches!(name.as_str(), "load" | "load_file")
+                && receiver_node.as_ref().is_some_and(|receiver| {
+                    self.constant_reference_name(receiver).is_some_and(|name| {
+                        matches!(name.trim_start_matches("::"), "YAML" | "Psych")
+                    })
+                });
             let mut result = if yaml_dump {
                 Type::String
+            } else if yaml_load {
+                Type::Object
             } else if struct_constructor {
                 Self::class_object_type("Struct")
             } else if matches!(
@@ -10046,6 +10054,12 @@ impl<'src> Analyzer<'src> {
                     .is_some_and(|name| name_matches(&name, "Psych") || name_matches(&name, "YAML"))
             {
                 return Type::String;
+            }
+            if matches!(name, "load" | "load_file")
+                && Self::named_type_name(&instance)
+                    .is_some_and(|name| name_matches(&name, "Psych") || name_matches(&name, "YAML"))
+            {
+                return Type::Object;
             }
             match name {
                 "===" => return Type::bool(),
