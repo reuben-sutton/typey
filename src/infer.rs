@@ -23,6 +23,10 @@ fn name_matches(name: &str, bare: &str) -> bool {
     name == bare || name == format!("T::{bare}")
 }
 
+fn nominal_name(name: &str) -> &str {
+    name.strip_prefix("T::").unwrap_or(name)
+}
+
 #[derive(Clone, Debug, Default)]
 struct ParameterShape {
     required_positional: usize,
@@ -8688,13 +8692,13 @@ impl<'src> Analyzer<'src> {
     }
 
     fn nominal_names_match(&self, actual: &str, expected: &str) -> bool {
-        if actual == expected {
+        if nominal_name(actual) == nominal_name(expected) {
             return true;
         }
         if self.nominal_name_candidates(actual).iter().any(|actual| {
             self.nominal_name_candidates(expected)
                 .iter()
-                .any(|expected| actual == expected)
+                .any(|expected| nominal_name(actual) == nominal_name(expected))
         }) {
             return true;
         }
@@ -8870,7 +8874,13 @@ impl<'src> Analyzer<'src> {
                                 .zip(expected_args)
                                 .all(|(actual, expected)| self.is_assignable(actual, expected)))
                 } else {
-                    expected_args.is_empty() && self.nominal_subtype(actual_name, expected_name)
+                    self.nominal_subtype(actual_name, expected_name)
+                        && (expected_args.is_empty()
+                            || actual_args.is_empty()
+                            || (actual_args.len() == expected_args.len()
+                                && actual_args.iter().zip(expected_args).all(
+                                    |(actual, expected)| self.is_assignable(actual, expected),
+                                )))
                 }
             }
             (Type::Named(actual, _), Type::Integer) if self.nominal_subtype(actual, "Integer") => {
@@ -8888,8 +8898,16 @@ impl<'src> Analyzer<'src> {
     }
 
     fn nominal_subtype(&self, actual: &str, expected: &str) -> bool {
-        let actual_candidates = self.nominal_name_candidates(actual);
-        let expected_candidates = self.nominal_name_candidates(expected);
+        let actual_candidates = self
+            .nominal_name_candidates(actual)
+            .into_iter()
+            .map(|name| nominal_name(&name).to_owned())
+            .collect::<Vec<_>>();
+        let expected_candidates = self
+            .nominal_name_candidates(expected)
+            .into_iter()
+            .map(|name| nominal_name(&name).to_owned())
+            .collect::<Vec<_>>();
         if expected_candidates
             .iter()
             .any(|expected| expected == "BasicObject")
@@ -8917,10 +8935,18 @@ impl<'src> Analyzer<'src> {
                         continue;
                     };
                     if let Some(superclass) = &info.superclass {
-                        pending.push(superclass.clone());
+                        pending.push(nominal_name(superclass).to_owned());
                     }
-                    pending.extend(info.includes.iter().cloned());
-                    pending.extend(info.prepends.iter().cloned());
+                    pending.extend(
+                        info.includes
+                            .iter()
+                            .map(|include| nominal_name(include).to_owned()),
+                    );
+                    pending.extend(
+                        info.prepends
+                            .iter()
+                            .map(|prepend| nominal_name(prepend).to_owned()),
+                    );
                 }
                 false
             })
