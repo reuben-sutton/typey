@@ -7602,6 +7602,9 @@ impl<'src> Analyzer<'src> {
                 if matches!(name, "classify" | "camelize" | "underscore" | "humanize") {
                     return Type::String;
                 }
+                if name == "inflections" {
+                    return Type::named("ActiveSupport::Inflector::Inflections");
+                }
             }
             match name {
                 "===" => return Type::bool(),
