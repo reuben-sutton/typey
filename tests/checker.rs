@@ -3996,6 +3996,26 @@ end
 }
 
 #[test]
+fn narrows_case_branches_through_nominal_inheritance() {
+    let result = check(
+        r#"
+class Base; end
+class Child < Base
+  def child_only; end
+end
+
+value = Base.new
+case value
+when Child
+  value.child_only
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"

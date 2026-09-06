@@ -5440,7 +5440,7 @@ impl<'src> Analyzer<'src> {
         if let Some(local) = predicate.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
             let current = environment.get(&name);
-            environment.bind(name, current.meet(condition_type));
+            environment.bind(name, self.meet_predicate_type(&current, condition_type));
         }
     }
 
