@@ -1125,6 +1125,12 @@ fn parses_the_supported_advanced_sorbet_type_forms() {
         typey::signature::parse_type("T.proc.params(value: String).returns(Integer)"),
         Type::Proc(vec![Type::String], Box::new(Type::Integer))
     );
+    let benchmark_signature = typey::signature::parse_sorbet_signature(
+        "sig { params(blk: T.proc.void).returns(Float) }",
+    )
+    .expect("benchmark signature parses");
+    assert_eq!(benchmark_signature.return_type, Type::Float);
+    assert!(!benchmark_signature.is_void);
     assert_eq!(
         typey::signature::parse_type("T::Map[String, Integer]"),
         Type::Named("T::Map".to_owned(), vec![Type::String, Type::Integer],)
@@ -1583,6 +1589,25 @@ fn preserves_tuple_shape_when_pushing_into_typed_arrays() {
 fn treats_t_namespaced_enumerables_as_nominal_types() {
     let result = check_fixture("tests/fixtures/set_enumerable_assignability.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn prefers_builtin_rbi_signatures_over_untyped_gem_declarations() {
+    let source = std::fs::read_to_string("tests/fixtures/benchmark_realtime.rb").unwrap();
+    let mut files = load_workspace_paths(&builtin_rbi_paths().unwrap()).unwrap();
+    files.push(WorkspaceFile::new("tests/fixtures/benchmark_realtime.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .diagnostic
+                .message
+                .contains("Revealed type: `Float`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
