@@ -3962,6 +3962,23 @@ T.reveal_type("text".codepoints)
 }
 
 #[test]
+fn accepts_array_replacement_splats_for_range_assignment() {
+    let source = r#"
+class Rewriter
+  #: (Array[Integer]) -> void
+  def rewrite(bytes)
+    bytes[1..2] = *"text".bytes
+  end
+end
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("array_replacement_splat.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"

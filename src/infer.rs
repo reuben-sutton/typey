@@ -10293,6 +10293,18 @@ impl<'src> Analyzer<'src> {
         if *receiver == Type::String && matches!(name, "bytes" | "codepoints") {
             return Some(Type::Array(Box::new(Type::Integer)));
         }
+        if name == "[]=" {
+            if let (Type::Array(element), Some(Type::Array(replacement))) =
+                (receiver, argument_types.last())
+            {
+                let range_index = argument_types.first().is_some_and(|type_| {
+                    matches!(type_, Type::Named(name, arguments) if name_matches(name, "Range") && arguments.len() == 2)
+                });
+                if range_index && self.is_assignable(replacement, element) {
+                    return Some(Type::Array(replacement.clone()));
+                }
+            }
+        }
         if name != "literal_value" {
             return None;
         }
