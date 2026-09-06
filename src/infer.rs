@@ -5890,6 +5890,22 @@ impl<'src> Analyzer<'src> {
                         );
                     }
                 }
+            } else if matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?") {
+                if let (Some(receiver), Some(arguments)) = (
+                    call.receiver(),
+                    call.arguments()
+                        .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>()),
+                ) {
+                    if let Some(local) = receiver.as_local_variable_read_node() {
+                        if let Some(argument) = arguments.first() {
+                            let current = environment.get(&prism::constant_name(local.name()));
+                            let expected = self.predicate_expected_type(argument, environment);
+                            let truthy = self.meet_predicate_type(&current, &expected);
+                            let falsy = current.without(&expected);
+                            return (!truthy.is_never(), !falsy.is_never());
+                        }
+                    }
+                }
             }
         }
         (
@@ -5955,6 +5971,20 @@ impl<'src> Analyzer<'src> {
             return call
                 .receiver()
                 .is_some_and(|receiver| self.predicate_is_precise(&receiver, environment));
+        }
+        if matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?")
+            && call.receiver().is_some()
+            && call
+                .arguments()
+                .is_some_and(|arguments| !arguments.arguments().is_empty())
+        {
+            return call.receiver().is_some_and(|receiver| {
+                receiver.as_local_variable_read_node().is_some_and(|local| {
+                    !environment
+                        .get(&prism::constant_name(local.name()))
+                        .is_any()
+                })
+            });
         }
         if let Some(receiver) = call.receiver() {
             let receiver_type = self.recorded_node_type(&receiver).or_else(|| {
@@ -6205,7 +6235,7 @@ impl<'src> Analyzer<'src> {
                         "is_a?" | "kind_of?" | "instance_of?" if !arguments.is_empty() => {
                             let expected = self.predicate_expected_type(&arguments[0], environment);
                             if truthy {
-                                current.meet(&expected)
+                                self.meet_predicate_type(&current, &expected)
                             } else {
                                 current.without(&expected)
                             }
@@ -6247,7 +6277,7 @@ impl<'src> Analyzer<'src> {
                         "is_a?" | "kind_of?" | "instance_of?" if !arguments.is_empty() => {
                             let expected = self.predicate_expected_type(&arguments[0], environment);
                             if truthy {
-                                current.meet(&expected)
+                                self.meet_predicate_type(&current, &expected)
                             } else {
                                 current.without(&expected)
                             }
@@ -6258,6 +6288,21 @@ impl<'src> Analyzer<'src> {
                     environment.bind(ivar_refinement_key(&instance_variable_name), narrowed);
                 }
             }
+        }
+    }
+
+    fn meet_predicate_type(&self, current: &Type, expected: &Type) -> Type {
+        if let Type::Union(members) = current {
+            return Type::union(
+                members
+                    .iter()
+                    .map(|member| self.meet_predicate_type(member, expected)),
+            );
+        }
+        if Self::definitely_disjoint_class_types(self, current, expected) {
+            Type::Never
+        } else {
+            current.meet(expected)
         }
     }
 

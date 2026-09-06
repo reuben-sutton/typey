@@ -119,6 +119,19 @@ fn infers_the_static_top_for_bare_class_annotations() {
 }
 
 #[test]
+fn narrows_nominal_predicates_to_unreachable_when_classes_are_disjoint() {
+    let result = check_fixture("tests/fixtures/nominal_predicate_unreachable.rb");
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `First`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn checks_splat_call_shapes() {
     check_fixture("tests/fixtures/splat_comparison.rb");
 }
