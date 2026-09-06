@@ -4088,6 +4088,27 @@ T.reveal_type(context.count)
 }
 
 #[test]
+fn infers_array_coercions_from_scalar_types() {
+    let result = check(
+        r#"
+value = "glob"
+values = Array(value)
+
+T.reveal_type(values)
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
