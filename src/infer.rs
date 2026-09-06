@@ -1278,10 +1278,25 @@ struct MethodRegistrar<'a> {
     method_depth: usize,
 }
 
+fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map_or(start, |offset| offset + 1);
+    &bytes[start..end]
+}
+
 impl MethodRegistrar<'_> {
-    fn has_preceding_annotation(&self, node: &Node<'_>, annotation: &str) -> bool {
+    fn for_each_preceding_comment_line(
+        &self,
+        node: &Node<'_>,
+        mut visit: impl FnMut(&[u8]) -> bool,
+    ) {
         let mut end = prism::span(node).0;
-        let annotation = annotation.as_bytes();
         loop {
             while end > 0 && matches!(self.source[end - 1], b'\n' | b'\r') {
                 end -= 1;
@@ -1290,26 +1305,10 @@ impl MethodRegistrar<'_> {
                 .iter()
                 .rposition(|byte| *byte == b'\n')
                 .map_or(0, |offset| offset + 1);
-            let line = &self.source[line_start..end];
-            let trimmed_start = line
-                .iter()
-                .position(|byte| !byte.is_ascii_whitespace())
-                .unwrap_or(line.len());
-            let trimmed_end = line
-                .iter()
-                .rposition(|byte| !byte.is_ascii_whitespace())
-                .map_or(trimmed_start, |offset| offset + 1);
-            let trimmed = &line[trimmed_start..trimmed_end];
-            if trimmed.is_empty() {
+            let line = trim_ascii_whitespace(&self.source[line_start..end]);
+            if line.is_empty() {
                 // Keep looking past blank lines, matching `str::lines().rev()`.
-            } else if trimmed.first() == Some(&b'#') {
-                if trimmed
-                    .windows(annotation.len())
-                    .any(|window| window == annotation)
-                {
-                    return true;
-                }
-            } else {
+            } else if line.first() != Some(&b'#') || !visit(line) {
                 break;
             }
 
@@ -1318,7 +1317,19 @@ impl MethodRegistrar<'_> {
             }
             end = line_start - 1;
         }
-        false
+    }
+
+    fn has_preceding_annotation(&self, node: &Node<'_>, annotation: &str) -> bool {
+        let annotation = annotation.as_bytes();
+        let mut found = false;
+        self.for_each_preceding_comment_line(node, |line| {
+            found = annotation.is_empty()
+                || line
+                    .windows(annotation.len())
+                    .any(|window| window == annotation);
+            !found
+        });
+        found
     }
 
     fn report_interface_on_class(&mut self, node: &Node<'_>) {
@@ -1781,25 +1792,17 @@ impl MethodRegistrar<'_> {
     }
 
     fn required_ancestors<'node>(&self, node: &Node<'node>) -> Vec<String> {
-        let start = prism::span(node).0;
-        let prefix = String::from_utf8_lossy(&self.source[..start]);
         let mut result = Vec::new();
-        for line in prefix.lines().rev() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let Some(value) = trimmed.strip_prefix("# @requires_ancestor:") else {
-                if trimmed.starts_with('#') {
-                    continue;
+        self.for_each_preceding_comment_line(node, |line| {
+            if let Some(value) = line.strip_prefix(b"# @requires_ancestor:") {
+                let value = String::from_utf8_lossy(value);
+                let value = value.trim();
+                if !value.is_empty() {
+                    result.push(value.to_owned());
                 }
-                break;
-            };
-            let value = value.trim();
-            if !value.is_empty() {
-                result.push(value.to_owned());
             }
-        }
+            true
+        });
         result.reverse();
         result
     }
