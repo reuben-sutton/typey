@@ -104,7 +104,11 @@ fn maps_nullable_proc_parameters_to_blocks() {
 
 #[test]
 fn maps_arbitrary_and_anonymous_block_parameter_names() {
-    check_fixture("tests/fixtures/block_parameter_names.rb");
+    let result = check_fixture("tests/fixtures/block_parameter_names.rb");
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `Integer`")));
 }
 
 #[test]

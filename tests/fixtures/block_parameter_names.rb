@@ -7,4 +7,4 @@ sig { params("&": T.proc.params(value: Integer).void).void }
 def anonymous_callback(&)
 end
 
-anonymous_callback { |value| value + "suffix" } # error: Expected `Integer`, but found `String`
+anonymous_callback { |value| T.reveal_type(value) } # note: Integer
