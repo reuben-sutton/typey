@@ -141,6 +141,24 @@ fn applies_short_rbs_types_to_generated_accessors() {
 }
 
 #[test]
+fn preserves_array_types_through_must_on_slices() {
+    let result = check_fixture("tests/fixtures/must_array_slice.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T::Array[String]`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn propagates_typed_keyword_arguments_into_must_ivar_reads() {
+    let result = check_fixture("tests/fixtures/typed_keyword_ivar_must.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("Revealed type: `String`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_numeric_unary_methods() {
     let result = check_fixture("tests/fixtures/numeric_unary.rb");
     let notes = result
@@ -265,6 +283,25 @@ fn visits_hash_sort_by_blocks() {
     assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
         .message
         .contains("Revealed type: `T::Array[[String, Integer]]`")));
+}
+
+#[test]
+fn destructures_typed_tuple_elements_in_collection_blocks() {
+    let result = check_fixture("tests/fixtures/tuple_block_destructuring.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes.iter().any(|message| message.contains("Revealed type: `String`")),
+        "{notes:?}"
+    );
+    assert!(
+        notes.iter().any(|message| message.contains("Revealed type: `Integer`")),
+        "{notes:?}"
+    );
 }
 
 #[test]
