@@ -7589,7 +7589,7 @@ impl<'src> Analyzer<'src> {
                 let block_type = site.block.map_or(Type::Any, |block| {
                     self.eval_collection_block(block, element, environment)
                 });
-                Type::Array(Box::new(self.array_element_type(&block_type)))
+                Type::Array(Box::new(self.flat_map_element_type(&block_type)))
             }
             "each_with_index" => {
                 if site.block.is_none() {
@@ -9388,6 +9388,33 @@ impl<'src> Analyzer<'src> {
                 }
             }
             _ => Type::Any,
+        }
+    }
+
+    fn flat_map_element_type(&self, type_: &Type) -> Type {
+        match type_ {
+            Type::Array(element) => element.as_ref().clone(),
+            Type::Tuple(elements) => {
+                let element = elements
+                    .iter()
+                    .fold(Type::Never, |current, element| current.join(element));
+                if element.is_never() {
+                    Type::Any
+                } else {
+                    element
+                }
+            }
+            Type::Union(members) => {
+                let element = members.iter().fold(Type::Never, |current, member| {
+                    current.join(&self.flat_map_element_type(member))
+                });
+                if element.is_never() {
+                    Type::Any
+                } else {
+                    element
+                }
+            }
+            other => other.clone(),
         }
     }
 
