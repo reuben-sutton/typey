@@ -5499,8 +5499,7 @@ impl<'src> Analyzer<'src> {
                             }
                         }
                         "is_a?" | "kind_of?" | "instance_of?" if !arguments.is_empty() => {
-                            let expected =
-                                signature::parse_type(&prism::text(self.source, &arguments[0]));
+                            let expected = self.predicate_expected_type(&arguments[0], environment);
                             if truthy {
                                 current.meet(&expected)
                             } else {
@@ -5532,8 +5531,7 @@ impl<'src> Analyzer<'src> {
                             }
                         }
                         "is_a?" | "kind_of?" | "instance_of?" if !arguments.is_empty() => {
-                            let expected =
-                                signature::parse_type(&prism::text(self.source, &arguments[0]));
+                            let expected = self.predicate_expected_type(&arguments[0], environment);
                             if truthy {
                                 current.meet(&expected)
                             } else {
@@ -5547,6 +5545,24 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
+    }
+
+    fn predicate_expected_type<'node>(
+        &self,
+        node: &Node<'node>,
+        environment: &Environment,
+    ) -> Type {
+        if let Some(call) = node.as_call_node() {
+            if prism::constant_name(call.name()) == "class"
+                && call
+                    .receiver()
+                    .as_ref()
+                    .is_some_and(|receiver| receiver.as_self_node().is_some())
+            {
+                return environment.self_type.clone();
+            }
+        }
+        signature::parse_type(&prism::text(self.source, node))
     }
 
     fn safe_navigation_method_returns_non_nil<'node>(
