@@ -4038,6 +4038,41 @@ end
 }
 
 #[test]
+fn binds_class_new_blocks_to_the_new_class() {
+    let result = check(
+        r#"
+class Base
+  #: Index
+  attr_reader :index
+
+  #: (Index) -> void
+  def initialize(index)
+    @index = index
+  end
+
+  class << self
+    def configure; end
+  end
+end
+
+class Index
+  def ignore; end
+end
+
+plugin = Class.new(Base) do
+  configure
+
+  def on_event
+    @index.ignore
+  end
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"

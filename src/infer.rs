@@ -6016,11 +6016,27 @@ impl<'src> Analyzer<'src> {
         outer: &mut Environment,
     ) -> Eval {
         let name = prism::constant_name(definition.name());
-        let key = self
+        let registered_key = self
             .definitions
             .get(&prism::span(node).0)
             .cloned()
             .unwrap_or_else(|| MethodKey::top_level(name.clone()));
+        let key = if registered_key.owner.is_none()
+            && outer
+                .method_key
+                .as_ref()
+                .is_some_and(|method| method.name == "<bound-block>")
+        {
+            Self::class_object_owner(&outer.self_type).map_or(registered_key.clone(), |owner| {
+                MethodKey {
+                    owner: Some(owner),
+                    name: registered_key.name.clone(),
+                    singleton: registered_key.singleton,
+                }
+            })
+        } else {
+            registered_key
+        };
         if self.filter_method_bodies && !self.active_methods.contains(&key) {
             return Eval::value(Type::Nil);
         }
@@ -8925,10 +8941,26 @@ impl<'src> Analyzer<'src> {
             .as_ref()
             .and_then(optional_proc_type)
             .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()));
-        let bound_receiver = block_signature
-            .as_ref()
-            .and_then(optional_proc_type)
-            .and_then(|block| proc_receiver(&block).cloned());
+        let class_new_receiver = (key.name == "new"
+            && key.singleton
+            && key
+                .owner
+                .as_deref()
+                .is_some_and(|owner| name_matches(owner, "Class")))
+        .then(|| {
+            arguments
+                .argument_types
+                .first()
+                .filter(|argument| Self::class_object_instance_type(argument).is_some())
+                .cloned()
+        })
+        .flatten();
+        let bound_receiver = class_new_receiver.or_else(|| {
+            block_signature
+                .as_ref()
+                .and_then(optional_proc_type)
+                .and_then(|block| proc_receiver(&block).cloned())
+        });
         let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
             if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
             {
