@@ -1,7 +1,10 @@
 use std::path::Path;
 
 use typey::diagnostic::Severity;
-use typey::{check, CheckerConfig, Type, TypeLattice};
+use typey::{
+    builtin_rbi_paths, check, check_workspace, load_workspace_paths, CheckerConfig, Type,
+    TypeLattice, WorkspaceFile,
+};
 
 fn expected_errors(source: &str) -> Vec<&str> {
     source
@@ -1010,22 +1013,24 @@ T.reveal_type(T.unsafe(1))
 
 #[test]
 fn models_core_global_and_file_calls() {
-    let result = check(
-        r#"
+    let source = r#"
 T.reveal_type(1.id)
 T.reveal_type(File.read("path"))
 T.reveal_type(File.write("path", "contents"))
 T.reveal_type(require("library"))
 T.reveal_type(require_relative("library"))
-"#,
-        CheckerConfig::default(),
-    );
+"#;
+    let files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    let mut files = files;
+    files.push(WorkspaceFile::new("core_calls.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     let notes = result
         .diagnostics
         .iter()
-        .filter(|diagnostic| diagnostic.severity == Severity::Note)
-        .map(|diagnostic| diagnostic.message.as_str())
+        .filter(|diagnostic| diagnostic.diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.diagnostic.message.as_str())
         .collect::<Vec<_>>();
     assert_eq!(
         notes

@@ -6694,46 +6694,6 @@ impl<'src> Analyzer<'src> {
                     _ => Type::Any,
                 }
             }
-            Type::Named(_, _)
-                if Self::class_object_instance_type(receiver)
-                    .and_then(|instance| Self::named_type_name(&instance))
-                    .is_some_and(|class| name_matches(&class, "File")) =>
-            {
-                match name {
-                    "read" | "binread" | "readlines" => {
-                        if name == "readlines" {
-                            Type::Array(Box::new(Type::String))
-                        } else {
-                            Type::String
-                        }
-                    }
-                    "write" | "binwrite" => Type::Integer,
-                    "expand_path" | "absolute_path" | "join" | "basename" | "dirname"
-                    | "extname" | "realpath" | "realdirpath" => Type::String,
-                    "exist?" | "file?" | "directory?" | "readable?" | "writable?"
-                    | "executable?" | "zero?" => Type::bool(),
-                    "open" => {
-                        if let Some(block) = site.block {
-                            self.eval_block_node(block, &[Type::named("File")], environment)
-                        } else {
-                            Type::named("File")
-                        }
-                    }
-                    _ => self.eval_common_method(name),
-                }
-            }
-            Type::Named(_, _)
-                if Self::class_object_instance_type(receiver)
-                    .and_then(|instance| Self::named_type_name(&instance))
-                    .is_some_and(|class| name_matches(&class, "Dir")) =>
-            {
-                match name {
-                    "glob" | "entries" | "children" => Type::Array(Box::new(Type::String)),
-                    "pwd" | "home" => Type::String,
-                    "exist?" | "empty?" => Type::bool(),
-                    _ => self.eval_common_method(name),
-                }
-            }
             Type::Named(class, arguments) if name == "new" => {
                 if self
                     .classes
