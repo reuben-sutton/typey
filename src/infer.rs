@@ -1016,6 +1016,7 @@ struct MethodRegistrar<'a> {
     accessors: &'a mut BTreeMap<MethodKey, AccessorKind>,
     attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
     type_aliases: &'a mut BTreeMap<String, Type>,
+    constants: &'a mut BTreeMap<String, Type>,
     class_stack: Vec<String>,
     singleton_stack: Vec<String>,
     method_depth: usize,
@@ -1146,6 +1147,9 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode<'pr>) {
         let target = node.target();
         let name = self.constant_assignment_name(&prism::text(self.source, &target.as_node()));
+        if let Some(type_) = self.parse_typed_constant(&node.value()) {
+            self.constants.insert(name.clone(), type_);
+        }
         self.register_type_alias(name, &node.value());
         ruby_prism::visit_constant_path_write_node(self, node);
     }
@@ -1161,6 +1165,9 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             }
         }
         let name = self.constant_assignment_name(&constant_name);
+        if let Some(type_) = self.parse_typed_constant(&node.value()) {
+            self.constants.insert(name.clone(), type_);
+        }
         self.register_type_alias(name, &node.value());
         ruby_prism::visit_constant_write_node(self, node);
     }
@@ -1354,6 +1361,22 @@ impl MethodRegistrar<'_> {
         if let Some(type_) = signature::parse_sorbet_type_alias(&prism::text(self.source, value)) {
             self.type_aliases.insert(name, type_);
         }
+    }
+
+    fn parse_typed_constant<'node>(&self, value: &Node<'node>) -> Option<Type> {
+        let call = value.as_call_node()?;
+        if prism::constant_name(call.name()) != "let"
+            || call
+                .receiver()
+                .is_none_or(|receiver| prism::text(self.source, &receiver).trim() != "T")
+        {
+            return None;
+        }
+        call.arguments()?
+            .arguments()
+            .into_iter()
+            .nth(1)
+            .map(|argument| signature::parse_type(&prism::text(self.source, &argument)))
     }
 
     fn parse_generic_member<'node>(&self, value: &Node<'node>) -> Option<GenericMember> {
@@ -2510,6 +2533,7 @@ impl<'src> Analyzer<'src> {
             accessors: &mut self.accessors,
             attribute_annotations: &self.annotations.attribute_annotations,
             type_aliases: &mut self.type_aliases,
+            constants: &mut self.constants,
             class_stack: Vec::new(),
             singleton_stack: Vec::new(),
             method_depth: 0,

@@ -1057,6 +1057,22 @@ T.reveal_type(require_relative("library"))
 }
 
 #[test]
+fn uses_typed_constants_from_rbis() {
+    let files = vec![
+        WorkspaceFile::new(
+            "vendor/sorbet/rbi/core/encoding.rbi",
+            "class Encoding < Object\n  ASCII_8BIT = T.let(T.unsafe(nil), Encoding)\nend\n",
+        ),
+        WorkspaceFile::new(
+            "app.rb",
+            "#: (Encoding) -> void\ndef accept_encoding(value); end\naccept_encoding(Encoding::ASCII_8BIT)\n",
+        ),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn infers_builtin_generic_block_return_types() {
     let source = r#"
 class Base
