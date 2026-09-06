@@ -29,6 +29,7 @@ fn nominal_name(name: &str) -> &str {
 
 #[derive(Clone, Debug, Default)]
 struct ParameterShape {
+    parameter_kinds: Vec<(String, signature::ParameterKind)>,
     required_positional: usize,
     accepts_rest: bool,
     rest_index: Option<usize>,
@@ -39,7 +40,10 @@ struct ParameterShape {
 }
 
 impl ParameterShape {
-    fn from_parameters<'node>(parameters: Option<ParametersNode<'node>>) -> Self {
+    fn from_parameters<'node>(
+        source: &[u8],
+        parameters: Option<ParametersNode<'node>>,
+    ) -> Self {
         let Some(parameters) = parameters else {
             return Self::default();
         };
@@ -52,14 +56,80 @@ impl ParameterShape {
             .rest()
             .map(|_| parameters.requireds().len() + parameters.optionals().len());
         let mut keywords = BTreeMap::new();
+        let mut parameter_kinds = Vec::new();
+        let parameter_name = |parameter: &Node<'_>| {
+            parameter
+                .as_required_parameter_node()
+                .map(|parameter| prism::constant_name(parameter.name()))
+                .or_else(|| {
+                    parameter
+                        .as_optional_parameter_node()
+                        .map(|parameter| prism::constant_name(parameter.name()))
+                })
+                .unwrap_or_else(|| prism::text(source, parameter))
+        };
+        for parameter in &parameters.requireds() {
+            parameter_kinds.push((
+                parameter_name(&parameter),
+                signature::ParameterKind::Positional,
+            ));
+        }
+        for parameter in &parameters.optionals() {
+            parameter_kinds.push((
+                parameter_name(&parameter),
+                signature::ParameterKind::OptionalPositional,
+            ));
+        }
+        if let Some(rest) = parameters
+            .rest()
+            .and_then(|node| node.as_rest_parameter_node())
+        {
+            if let Some(name) = rest.name() {
+                parameter_kinds.push((
+                    prism::constant_name(name),
+                    signature::ParameterKind::RestPositional,
+                ));
+            }
+        }
+        for parameter in &parameters.posts() {
+            parameter_kinds.push((
+                parameter_name(&parameter),
+                signature::ParameterKind::Positional,
+            ));
+        }
         for parameter in &parameters.keywords() {
             if let Some(required) = parameter.as_required_keyword_parameter_node() {
                 keywords.insert(prism::constant_name(required.name()), true);
+                parameter_kinds.push((
+                    prism::constant_name(required.name()),
+                    signature::ParameterKind::Keyword,
+                ));
             } else if let Some(optional) = parameter.as_optional_keyword_parameter_node() {
                 keywords.insert(prism::constant_name(optional.name()), false);
+                parameter_kinds.push((
+                    prism::constant_name(optional.name()),
+                    signature::ParameterKind::OptionalKeyword,
+                ));
+            }
+        }
+        if let Some(rest) = parameters
+            .keyword_rest()
+            .and_then(|node| node.as_keyword_rest_parameter_node())
+        {
+            if let Some(name) = rest.name() {
+                parameter_kinds.push((
+                    prism::constant_name(name),
+                    signature::ParameterKind::RestKeyword,
+                ));
+            }
+        }
+        if let Some(block) = parameters.block() {
+            if let Some(name) = block.name() {
+                parameter_kinds.push((prism::constant_name(name), signature::ParameterKind::Block));
             }
         }
         Self {
+            parameter_kinds,
             required_positional,
             accepts_rest,
             rest_index,
@@ -168,6 +238,7 @@ fn merge_method_signatures(signatures: &[MethodSig]) -> MethodSig {
     });
     MethodSig {
         params,
+        parameter_kinds: Vec::new(),
         param_names: Vec::new(),
         return_type,
         required_params: signatures
@@ -968,6 +1039,7 @@ impl MethodState {
                 .iter()
                 .map(|type_| type_.clone().unwrap_or(Type::Any))
                 .collect(),
+            parameter_kinds: Vec::new(),
             param_names: Vec::new(),
             return_type: Type::Any,
             required_params: self.required_params,
@@ -1001,6 +1073,7 @@ impl MethodState {
                 .iter()
                 .map(|type_| type_.clone().unwrap_or(Type::Any))
                 .collect(),
+            parameter_kinds: Vec::new(),
             param_names: Vec::new(),
             return_type: self.return_type.clone().unwrap_or(Type::Never),
             required_params: self.required_params,
@@ -1219,7 +1292,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         self.definitions.insert(definition_start, key.clone());
         self.parameter_shapes.insert(
             definition_start,
-            ParameterShape::from_parameters(node.parameters()),
+            ParameterShape::from_parameters(self.source, node.parameters()),
         );
         let visibility = self
             .visibility_overrides
@@ -3050,6 +3123,30 @@ impl<'src> Analyzer<'src> {
         strictness
     }
 
+    fn validate_rbs_parameter_kinds(
+        &mut self,
+        offset: usize,
+        ruby_parameters: &[(String, signature::ParameterKind)],
+        signature: &MethodSig,
+    ) {
+        for ((name, ruby_kind), rbs_kind) in ruby_parameters.iter().zip(&signature.parameter_kinds)
+        {
+            if ruby_kind == rbs_kind {
+                continue;
+            }
+            self.diagnostics.push(Diagnostic::error(
+                self.source,
+                format!(
+                    "Argument kind mismatch for `{name}`, method declares `{}`, but RBS signature declares `{}`",
+                    ruby_kind.display_name(),
+                    rbs_kind.display_name(),
+                ),
+                offset,
+                offset,
+            ));
+        }
+    }
+
     fn register_methods<'node>(&mut self, root: &Node<'node>) {
         self.methods.clear();
         self.type_aliases = self.annotations.type_aliases.clone();
@@ -3104,8 +3201,9 @@ impl<'src> Analyzer<'src> {
         let mut source_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut builtin_rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
-        for (offset, signatures) in &self.annotations.method_annotations {
-            let Some(key) = self.definitions.get(offset) else {
+        let method_annotations = self.annotations.method_annotations.clone();
+        for (offset, signatures) in &method_annotations {
+            let Some(key) = self.definitions.get(offset).cloned() else {
                 continue;
             };
             let signatures = signatures
@@ -3118,6 +3216,28 @@ impl<'src> Analyzer<'src> {
                     self.resolve_signature_names(&signature, key.owner.as_deref())
                 })
                 .collect::<Vec<_>>();
+            let ruby_parameter_kinds = self
+                .parameter_shapes
+                .get(offset)
+                .map(|shape| shape.parameter_kinds.clone());
+            let is_source_annotation = !self
+                .rbi_ranges
+                .iter()
+                .chain(&self.builtin_rbi_ranges)
+                .any(|(start, end)| *offset >= *start && *offset < *end);
+            if is_source_annotation {
+                if let Some(ruby_parameter_kinds) = ruby_parameter_kinds.as_deref() {
+                    for signature in &signatures {
+                        if !signature.parameter_kinds.is_empty() {
+                            self.validate_rbs_parameter_kinds(
+                                *offset,
+                                ruby_parameter_kinds,
+                                signature,
+                            );
+                        }
+                    }
+                }
+            }
             let target = if self
                 .builtin_rbi_ranges
                 .iter()

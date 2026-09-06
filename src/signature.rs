@@ -8,9 +8,38 @@ pub struct KeywordParam {
     pub required: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParameterKind {
+    Positional,
+    OptionalPositional,
+    RestPositional,
+    Keyword,
+    OptionalKeyword,
+    RestKeyword,
+    Block,
+}
+
+impl ParameterKind {
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Positional => "positional",
+            Self::OptionalPositional => "optional positional",
+            Self::RestPositional => "rest positional",
+            Self::Keyword => "keyword",
+            Self::OptionalKeyword => "optional keyword",
+            Self::RestKeyword => "rest keyword",
+            Self::Block => "block",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MethodSig {
     pub params: Vec<Type>,
+    /// Parameter kinds from an RBS signature, retained for declaration
+    /// compatibility checks against the Ruby definition.
+    pub parameter_kinds: Vec<ParameterKind>,
     /// Names from Sorbet's `params(name: Type)` form. RBS keyword parameters
     /// are stored in `keywords`; these names let the analyzer reconcile
     /// Sorbet's syntax with the actual Prism parameter shape.
@@ -42,6 +71,7 @@ impl MethodSig {
     pub fn new(params: Vec<Type>, return_type: Type) -> Self {
         Self {
             required_params: params.len(),
+            parameter_kinds: Vec::new(),
             accepts_rest: false,
             rest_index: None,
             accepts_keyword_rest: false,
@@ -619,6 +649,7 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
     let mut accepts_keyword_rest = false;
     let mut keywords = BTreeMap::new();
     let mut block = None;
+    let mut parameter_kinds = Vec::new();
     let params = if left.starts_with('(') {
         let close = matching_delimiter(left, 0, '(', ')')?;
         let mut params = Vec::new();
@@ -628,17 +659,26 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
             }
             let trimmed = part.trim();
             if trimmed.starts_with('{') || trimmed.starts_with("?{") {
-                block = parse_rbs_block_type(trimmed);
+                if let Some(block_type) = parse_rbs_block_type(trimmed) {
+                    block = Some(block_type);
+                    parameter_kinds.push(ParameterKind::Block);
+                }
                 continue;
             }
             if trimmed.starts_with("**") {
                 accepts_keyword_rest = true;
+                parameter_kinds.push(ParameterKind::RestKeyword);
                 continue;
             }
             if let Some((name, type_)) = split_top_level_colon(trimmed) {
                 let name = name.trim();
                 let required = !name.starts_with('?');
                 let name = name.trim_start_matches('?').to_owned();
+                parameter_kinds.push(if required {
+                    ParameterKind::Keyword
+                } else {
+                    ParameterKind::OptionalKeyword
+                });
                 if !name.is_empty() {
                     keywords.insert(
                         name,
@@ -650,24 +690,39 @@ pub fn parse_rbs_signature(text: &str) -> Option<MethodSig> {
                 }
                 continue;
             }
-            if trimmed.starts_with('*') {
+            let parameter_kind = if trimmed.starts_with('*') {
                 accepts_rest = true;
                 rest_index = Some(params.len());
+                ParameterKind::RestPositional
+            } else if trimmed.starts_with('?') {
+                ParameterKind::OptionalPositional
             } else if !trimmed.starts_with('?') {
                 required_params += 1;
-            }
+                ParameterKind::Positional
+            } else {
+                ParameterKind::OptionalPositional
+            };
+            parameter_kinds.push(parameter_kind);
             params.push(parse_rbs_parameter(part));
         }
         if block.is_none() {
-            block = parse_rbs_block_type(left[close + 1..].trim());
+            if let Some(block_type) = parse_rbs_block_type(left[close + 1..].trim()) {
+                block = Some(block_type);
+                parameter_kinds.push(ParameterKind::Block);
+            }
         }
         params
     } else {
+        if let Some(block_type) = parse_rbs_block_type(left) {
+            block = Some(block_type);
+            parameter_kinds.push(ParameterKind::Block);
+        }
         Vec::new()
     };
     let is_void = right == "void";
     Some(MethodSig {
         params,
+        parameter_kinds,
         param_names: Vec::new(),
         return_type: parse_type(right),
         required_params,
