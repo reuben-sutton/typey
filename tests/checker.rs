@@ -4016,6 +4016,28 @@ end
 }
 
 #[test]
+fn narrows_or_type_tests_to_the_union_of_classes() {
+    let result = check(
+        r#"
+class Base; end
+class Left < Base
+  def elements; end
+end
+class Right < Base
+  def elements; end
+end
+
+value = Base.new
+if value.is_a?(Left) || value.is_a?(Right)
+  value.elements
+end
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn models_blockless_collection_enumerators() {
     let result = check(
         r#"

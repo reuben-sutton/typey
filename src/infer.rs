@@ -6807,7 +6807,21 @@ impl<'src> Analyzer<'src> {
             return;
         }
         if let Some(or) = node.as_or_node() {
-            if !truthy {
+            if truthy {
+                let left = self.positive_type_test(&or.left(), environment);
+                let right = self.positive_type_test(&or.right(), environment);
+                if let (Some((left_name, left_type)), Some((right_name, right_type))) =
+                    (left, right)
+                {
+                    if left_name == right_name {
+                        let current = environment.get(&left_name);
+                        environment.bind(
+                            left_name,
+                            self.meet_predicate_type(&current, &left_type.join(&right_type)),
+                        );
+                    }
+                }
+            } else {
                 let left = or.left();
                 self.narrow_from_predicate(&left, environment, false);
                 let right = or.right();
@@ -7009,6 +7023,27 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
+    }
+
+    fn positive_type_test<'node>(
+        &self,
+        node: &Node<'node>,
+        environment: &Environment,
+    ) -> Option<(String, Type)> {
+        let call = node.as_call_node()?;
+        let name = prism::constant_name(call.name());
+        if !matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?") {
+            return None;
+        }
+        let receiver = call.receiver()?;
+        let local = receiver.as_local_variable_read_node()?;
+        let argument = call
+            .arguments()
+            .and_then(|arguments| arguments.arguments().into_iter().next())?;
+        Some((
+            prism::constant_name(local.name()),
+            self.predicate_expected_type(&argument, environment),
+        ))
     }
 
     fn meet_predicate_type(&self, current: &Type, expected: &Type) -> Type {
