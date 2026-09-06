@@ -184,6 +184,14 @@ fn models_numeric_unary_methods() {
 }
 
 #[test]
+fn models_integer_bitwise_operators() {
+    let result = check_fixture("tests/fixtures/integer_bitwise.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("Revealed type: `Integer`")
+    }), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn dispatches_short_names_and_structural_builtins() {
     let result = check_fixture("tests/fixtures/common_builtin_dispatch.rb");
     let notes = result
