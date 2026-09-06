@@ -100,6 +100,18 @@ fn dispatches_structural_collections_through_vendored_rbis() {
 }
 
 #[test]
+fn narrows_basic_object_after_class_case_equality() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs read");
+    files.push(WorkspaceFile::new(
+        "tests/fixtures/class_case_narrowing.rb",
+        std::fs::read_to_string("tests/fixtures/class_case_narrowing.rb").expect("fixture exists"),
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn applies_rubys_implicit_object_superclass() {
     check_fixture("tests/fixtures/default_object_inheritance.rb");
 }

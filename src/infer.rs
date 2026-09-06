@@ -6897,6 +6897,17 @@ impl<'src> Analyzer<'src> {
                 }
             }
             if let Some(receiver) = receiver {
+                if truthy && name == "===" && arguments.len() == 1 {
+                    if let Some(local) = arguments[0].as_local_variable_read_node() {
+                        let class_type = self.node_type(&receiver, environment);
+                        let expected = Self::class_object_value_type(&class_type)
+                            .unwrap_or_else(|| class_type.clone());
+                        let local_name = prism::constant_name(local.name());
+                        let current = environment.get(&local_name);
+                        environment.bind(local_name, self.meet_predicate_type(&current, &expected));
+                        return;
+                    }
+                }
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
                     let current = environment.get(&local_name);
@@ -7004,7 +7015,9 @@ impl<'src> Analyzer<'src> {
                     .map(|member| self.meet_predicate_type(member, expected)),
             );
         }
-        if Self::definitely_disjoint_class_types(self, current, expected) {
+        if self.is_assignable(expected, current) {
+            expected.clone()
+        } else if Self::definitely_disjoint_class_types(self, current, expected) {
             Type::Never
         } else {
             current.meet(expected)
