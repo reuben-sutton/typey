@@ -8959,10 +8959,17 @@ impl<'src> Analyzer<'src> {
                     .map_or_else(Vec::new, MethodState::block_parameters)
             });
         let previous_expected_return = self.expected_return_type.take();
-        self.expected_return_type = block_signature
+        let expected_block_return = block_signature
             .as_ref()
             .and_then(optional_proc_type)
             .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()));
+        self.expected_return_type = expected_block_return.map(|expected| {
+            if matches!(expected, Type::TypeVar(_)) {
+                Self::literal_block_tuple_type(block).unwrap_or(expected)
+            } else {
+                expected
+            }
+        });
         let class_new_receiver = (key.name == "new"
             && key.singleton
             && key
@@ -11989,6 +11996,28 @@ impl<'src> Analyzer<'src> {
         result
     }
 
+    fn literal_block_tuple_type(node: &Node<'_>) -> Option<Type> {
+        let array = node
+            .as_block_node()
+            .and_then(|block| block.body())
+            .and_then(|body| {
+                body.as_array_node().or_else(|| {
+                    body.as_statements_node().and_then(|statements| {
+                        statements
+                            .body()
+                            .into_iter()
+                            .last()
+                            .and_then(|last| last.as_array_node())
+                    })
+                })
+            })?;
+        array
+            .elements()
+            .iter()
+            .all(|element| element.as_splat_node().is_none())
+            .then(|| Type::Tuple(vec![Type::Any; array.elements().len()]))
+    }
+
     fn eval_symbol_collection_block<'node>(
         &mut self,
         node: &Node<'node>,
@@ -12421,6 +12450,11 @@ impl<'src> Analyzer<'src> {
             if name == "to_h" {
                 if let Some(block_return_type) = block_return_type {
                     if let Some((key, value)) = Self::pair_types(block_return_type) {
+                        return Type::Hash(Box::new(key), Box::new(value));
+                    }
+                }
+                if let Some(receiver_type) = receiver_type {
+                    if let Some((key, value)) = Self::pair_types(receiver_type) {
                         return Type::Hash(Box::new(key), Box::new(value));
                     }
                 }

@@ -4104,6 +4104,48 @@ T.reveal_type(entries.to_h { |entry| [entry.key, entry] })
 }
 
 #[test]
+fn preserves_pair_tuples_through_vendored_map_and_to_h() {
+    let source = r#"
+class Entry
+  #: -> String
+  def key
+    "entry"
+  end
+end
+
+entries = [Entry.new]
+mapped = entries.map { |entry| [entry.key, entry] }
+T.reveal_type(mapped)
+T.reveal_type(mapped.to_h)
+"#;
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("map_to_h_pairs.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|d| {
+            d.diagnostic.severity == Severity::Note
+                && d.diagnostic
+                    .message
+                    .contains("Revealed type: `T::Array[[String, Entry]]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|d| {
+            d.diagnostic.severity == Severity::Note
+                && d.diagnostic
+                    .message
+                    .contains("Revealed type: `T::Hash[String, Entry]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn narrows_case_assignments_to_nominal_subclasses() {
     let result = check(
         r#"
