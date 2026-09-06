@@ -10032,6 +10032,13 @@ impl<'src> Analyzer<'src> {
                     return Type::named("ActiveSupport::Inflector::Inflections");
                 }
             }
+            if name == "dump"
+                && site.argument_types.len() == 1
+                && Self::named_type_name(&instance)
+                    .is_some_and(|name| name_matches(&name, "Psych") || name_matches(&name, "YAML"))
+            {
+                return Type::String;
+            }
             match name {
                 "===" => return Type::bool(),
                 "name" => return Type::union([Type::Nil, Type::String]),

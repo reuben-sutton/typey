@@ -4928,6 +4928,28 @@ end
 }
 
 #[test]
+fn models_yaml_dump_without_io_as_a_string() {
+    let result = check(
+        r#"
+module Psych
+end
+
+T.reveal_type(Psych.dump({"key" => "value"}))
+"#,
+        CheckerConfig::default(),
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn narrows_ast_nodes_after_string_predicates() {
     let result = check(
         r#"
