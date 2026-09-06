@@ -90,6 +90,23 @@ fn distinguishes_static_top_from_untyped() {
 }
 
 #[test]
+fn enforces_private_class_method_visibility() {
+    let result = check_fixture("tests/fixtures/private_methods.rb");
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic
+                .message
+                .contains("Non-private call to private method `consume`"))
+            .count(),
+        1,
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn checks_splat_call_shapes() {
     check_fixture("tests/fixtures/splat_comparison.rb");
 }

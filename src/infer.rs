@@ -226,6 +226,13 @@ enum AccessorKind {
     Writer,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Visibility {
+    Public,
+    Private,
+    Protected,
+}
+
 fn attribute_writer_signature(signature: &MethodSig) -> MethodSig {
     if !signature.params.is_empty()
         || !signature.keywords.is_empty()
@@ -815,6 +822,7 @@ struct MethodState {
     accepts_keyword_rest: bool,
     is_void: bool,
     is_abstract: bool,
+    visibility: Visibility,
     explicit: bool,
     overloads: Vec<MethodSig>,
 }
@@ -856,6 +864,7 @@ impl MethodState {
             accepts_keyword_rest: signature.accepts_keyword_rest,
             is_void: signature.is_void,
             is_abstract: signature.is_abstract,
+            visibility: Visibility::Public,
             explicit: true,
             overloads: signatures.to_vec(),
         }
@@ -915,6 +924,7 @@ impl MethodState {
                 }),
                 is_void: false,
                 is_abstract: false,
+                visibility: Visibility::Public,
                 explicit: false,
                 overloads: Vec::new(),
             };
@@ -935,6 +945,7 @@ impl MethodState {
             accepts_keyword_rest: false,
             is_void: false,
             is_abstract: false,
+            visibility: Visibility::Public,
             explicit: false,
             overloads: Vec::new(),
         }
@@ -1162,51 +1173,31 @@ struct MethodRegistrar<'a> {
     constants: &'a mut BTreeMap<String, Type>,
     class_stack: Vec<String>,
     singleton_stack: Vec<String>,
+    visibility_stack: Vec<Visibility>,
+    visibility_overrides: BTreeMap<MethodKey, Visibility>,
     method_depth: usize,
 }
 
 impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     fn visit_def_node(&mut self, node: &DefNode<'pr>) {
-        let name = prism::constant_name(node.name());
         let definition_start = prism::span(&node.as_node()).0;
-        let key = if let Some(receiver) = node.receiver() {
-            let owner = if receiver.as_self_node().is_some() {
-                self.class_stack.last().cloned()
-            } else {
-                Some(
-                    prism::text(self.source, &receiver)
-                        .trim_start_matches("::")
-                        .to_owned(),
-                )
-            };
-            MethodKey {
-                owner,
-                name,
-                singleton: true,
-            }
-        } else if let Some(owner) = self.singleton_stack.last() {
-            MethodKey {
-                owner: Some(owner.clone()),
-                name,
-                singleton: true,
-            }
-        } else if let Some(owner) = self.class_stack.last() {
-            MethodKey {
-                owner: Some(owner.clone()),
-                name,
-                singleton: false,
-            }
-        } else {
-            MethodKey::top_level(name)
-        };
+        let key = self.definition_key(node);
         self.definitions.insert(definition_start, key.clone());
         self.parameter_shapes.insert(
             definition_start,
             ParameterShape::from_parameters(node.parameters()),
         );
-        self.methods
+        let visibility = self
+            .visibility_overrides
+            .get(&key)
+            .copied()
+            .or_else(|| self.visibility_stack.last().copied())
+            .unwrap_or(Visibility::Public);
+        let state = self
+            .methods
             .entry(key)
             .or_insert_with(|| MethodState::inferred(node.parameters()));
+        state.visibility = visibility;
         self.method_depth += 1;
         ruby_prism::visit_def_node(self, node);
         self.method_depth -= 1;
@@ -1234,9 +1225,11 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             info.superclass = superclass;
         }
         self.class_stack.push(name);
+        self.visibility_stack.push(Visibility::Public);
         let singleton_stack = std::mem::take(&mut self.singleton_stack);
         ruby_prism::visit_class_node(self, node);
         self.singleton_stack = singleton_stack;
+        self.visibility_stack.pop();
         self.class_stack.pop();
     }
 
@@ -1247,9 +1240,11 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         info.is_module = true;
         info.requires_ancestors.extend(required_ancestors);
         self.class_stack.push(name);
+        self.visibility_stack.push(Visibility::Public);
         let singleton_stack = std::mem::take(&mut self.singleton_stack);
         ruby_prism::visit_module_node(self, node);
         self.singleton_stack = singleton_stack;
+        self.visibility_stack.pop();
         self.class_stack.pop();
     }
 
@@ -1269,7 +1264,9 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         };
         if let Some(owner) = owner {
             self.singleton_stack.push(owner);
+            self.visibility_stack.push(Visibility::Public);
             ruby_prism::visit_singleton_class_node(self, node);
+            self.visibility_stack.pop();
             self.singleton_stack.pop();
         } else {
             ruby_prism::visit_singleton_class_node(self, node);
@@ -1359,7 +1356,51 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                     info.attached_class_member = Some(index);
                 }
             }
+            if arguments.is_none() {
+                match name.as_str() {
+                    "private" => self.set_default_visibility(Visibility::Private),
+                    "protected" => self.set_default_visibility(Visibility::Protected),
+                    "public" => self.set_default_visibility(Visibility::Public),
+                    _ => {}
+                }
+            }
             if let Some(arguments) = arguments {
+                match name.as_str() {
+                    "private" => self.set_visibility_for_method_names(
+                        &arguments,
+                        Visibility::Private,
+                        self.current_singleton(),
+                    ),
+                    "protected" => self.set_visibility_for_method_names(
+                        &arguments,
+                        Visibility::Protected,
+                        self.current_singleton(),
+                    ),
+                    "public" => self.set_visibility_for_method_names(
+                        &arguments,
+                        Visibility::Public,
+                        self.current_singleton(),
+                    ),
+                    "private_class_method" => {
+                        let owner = self.current_owner();
+                        if let Some(nodes) = node.arguments() {
+                            for argument in &nodes.arguments() {
+                                if let Some(definition) = argument.as_def_node() {
+                                    let key = self.definition_key(&definition);
+                                    self.visibility_overrides.insert(key, Visibility::Private);
+                                }
+                            }
+                        }
+                        if owner.is_some() {
+                            self.set_visibility_for_method_names(
+                                &arguments,
+                                Visibility::Private,
+                                true,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
                 if let Some(module) = arguments.first() {
                     let Some(owner) = self
                         .singleton_stack
@@ -1509,6 +1550,78 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
 }
 
 impl MethodRegistrar<'_> {
+    fn definition_key<'node>(&self, node: &DefNode<'node>) -> MethodKey {
+        let name = prism::constant_name(node.name());
+        if let Some(receiver) = node.receiver() {
+            let owner = if receiver.as_self_node().is_some() {
+                self.class_stack.last().cloned()
+            } else {
+                Some(
+                    prism::text(self.source, &receiver)
+                        .trim_start_matches("::")
+                        .to_owned(),
+                )
+            };
+            MethodKey {
+                owner,
+                name,
+                singleton: true,
+            }
+        } else if let Some(owner) = self.singleton_stack.last() {
+            MethodKey {
+                owner: Some(owner.clone()),
+                name,
+                singleton: true,
+            }
+        } else if let Some(owner) = self.class_stack.last() {
+            MethodKey {
+                owner: Some(owner.clone()),
+                name,
+                singleton: false,
+            }
+        } else {
+            MethodKey::top_level(name)
+        }
+    }
+
+    fn current_owner(&self) -> Option<String> {
+        self.singleton_stack
+            .last()
+            .cloned()
+            .or_else(|| self.class_stack.last().cloned())
+    }
+
+    fn current_singleton(&self) -> bool {
+        self.singleton_stack.last().is_some()
+    }
+
+    fn set_visibility_for_method_names(
+        &mut self,
+        names: &[String],
+        visibility: Visibility,
+        singleton: bool,
+    ) {
+        let Some(owner) = self.current_owner() else {
+            return;
+        };
+        for name in names {
+            let key = MethodKey {
+                owner: Some(owner.clone()),
+                name: name.clone(),
+                singleton,
+            };
+            if let Some(state) = self.methods.get_mut(&key) {
+                state.visibility = visibility;
+            }
+        }
+    }
+
+    fn set_default_visibility(&mut self, visibility: Visibility) {
+        if let Some(current) = self.visibility_stack.last_mut() {
+            *current = visibility;
+        }
+    }
+
     fn required_ancestors<'node>(&self, node: &Node<'node>) -> Vec<String> {
         let start = prism::span(node).0;
         let prefix = String::from_utf8_lossy(&self.source[..start]);
@@ -2907,6 +3020,8 @@ impl<'src> Analyzer<'src> {
             constants: &mut self.constants,
             class_stack: Vec::new(),
             singleton_stack: Vec::new(),
+            visibility_stack: Vec::new(),
+            visibility_overrides: BTreeMap::new(),
             method_depth: 0,
         };
         registrar.visit(root);
@@ -6827,6 +6942,19 @@ impl<'src> Analyzer<'src> {
                     resolved_owner.as_deref(),
                 );
                 self.record_method_dependency(&key, environment);
+                if self
+                    .resolve_method_key(&key)
+                    .and_then(|resolved| self.methods.get(&resolved))
+                    .is_some_and(|state| state.visibility == Visibility::Private)
+                    && !self.private_call_allowed(&key, environment)
+                {
+                    self.error(
+                        node,
+                        format!(
+                            "Non-private call to private method `{name}` on `{dispatch_receiver_type}`"
+                        ),
+                    );
+                }
                 if let Some(type_) = tsort_type {
                     type_
                 } else if matches!(&dispatch_receiver_type, Type::Array(_) | Type::Tuple(_))
@@ -7266,6 +7394,18 @@ impl<'src> Analyzer<'src> {
         let resolved_owner = self
             .resolve_method_key(key)
             .and_then(|resolved| resolved.owner);
+        if self
+            .resolve_method_key(key)
+            .and_then(|resolved| self.methods.get(&resolved))
+            .is_some_and(|state| state.visibility == Visibility::Private)
+            && !self.private_call_allowed(key, environment)
+        {
+            self.error(
+                node,
+                format!("Non-private call to private method `{name}` on `{receiver_type}`"),
+            );
+            return Some((Type::Any, true));
+        }
         if let Some(type_) =
             self.eval_tsort_method(receiver_type, name, environment, resolved_owner.as_deref())
         {
@@ -7325,6 +7465,26 @@ impl<'src> Analyzer<'src> {
             )
         };
         Some((type_, declared))
+    }
+
+    fn private_call_allowed(&self, key: &MethodKey, environment: &Environment) -> bool {
+        let Some(current) = environment.method_key.as_ref() else {
+            return false;
+        };
+        let Some(current_owner) = current.owner.as_deref() else {
+            return false;
+        };
+        let Some(resolved_owner) = self
+            .resolve_method_key(key)
+            .and_then(|resolved| resolved.owner)
+        else {
+            return false;
+        };
+        current_owner == resolved_owner
+            || (!current.singleton && self.nominal_subtype(current_owner, &resolved_owner))
+            || (current.singleton
+                && key.singleton
+                && self.nominal_subtype(current_owner, &resolved_owner))
     }
 
     fn call_terminates<'node>(
