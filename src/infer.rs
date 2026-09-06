@@ -1338,14 +1338,33 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
 impl MethodRegistrar<'_> {
     fn scope_name<'node>(&self, node: &Node<'node>) -> String {
         let raw = prism::text(self.source, node);
+        let absolute = raw.starts_with("::");
         let raw = raw.trim_start_matches("::");
-        if raw.contains("::") || self.class_stack.is_empty() {
+        let Some(scope) = self.class_stack.last() else {
+            return raw.to_owned();
+        };
+        if absolute {
+            return raw.to_owned();
+        }
+        if !raw.contains("::") {
+            return format!("{scope}::{raw}");
+        }
+
+        // A qualified class declaration is still relative to the current
+        // lexical scope (`module LSP; class Error::Diagnostics; end; end`).
+        // Keep an already-qualified path intact and otherwise qualify a path
+        // whose first component is known in the current scope.
+        if raw == scope || raw.starts_with(&format!("{scope}::")) {
+            return raw.to_owned();
+        }
+        let first = raw.split("::").next().unwrap_or(raw);
+        let nested_first = format!("{scope}::{first}");
+        if self.classes.contains_key(&nested_first) || self.constants.contains_key(&nested_first) {
+            format!("{scope}::{raw}")
+        } else if self.classes.contains_key(raw) || self.constants.contains_key(raw) {
             raw.to_owned()
         } else {
-            format!(
-                "{}::{raw}",
-                self.class_stack.last().expect("stack is not empty")
-            )
+            format!("{scope}::{raw}")
         }
     }
 
@@ -2595,6 +2614,28 @@ impl<'src> Analyzer<'src> {
         };
         registrar.visit(root);
         self.normalize_class_graph();
+
+        // Attribute annotations are registered while walking the AST, before
+        // the analyzer has its final class table. Resolve their relative
+        // names just like method annotations once all declarations are known.
+        let accessor_keys = self.accessors.keys().cloned().collect::<Vec<_>>();
+        for key in accessor_keys {
+            let Some(signatures) = self
+                .methods
+                .get(&key)
+                .filter(|state| state.explicit)
+                .map(|state| state.overloads.clone())
+            else {
+                continue;
+            };
+            let signatures = signatures
+                .iter()
+                .map(|signature| self.resolve_signature_names(signature, key.owner.as_deref()))
+                .collect::<Vec<_>>();
+            if let Some(state) = self.methods.get_mut(&key) {
+                *state = MethodState::explicit_overloads(&signatures);
+            }
+        }
 
         // Resolve annotation offsets through the same definition table used by
         // body evaluation. This makes signatures owner-aware and prevents a
