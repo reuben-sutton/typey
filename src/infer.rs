@@ -8117,6 +8117,7 @@ impl<'src> Analyzer<'src> {
             | "pluralize"
             | "singularize"
             | "underscore"
+            | "classify"
             | "squish" => Type::String,
             "+@" => Type::String,
             "index" | "rindex" => Type::union([Type::Nil, Type::Integer]),
