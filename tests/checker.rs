@@ -4590,6 +4590,23 @@ fn unsigiled_sources_default_to_typed_true() {
 }
 
 #[test]
+fn reports_interface_annotations_only_on_preceding_classes() {
+    let result = check(
+        "# @interface\nclass Invalid\nend\n\nclass Valid\nend\n\n# @interface\nclass AnotherInvalid\nend\n",
+        CheckerConfig::default(),
+    );
+    let errors = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors
+        .iter()
+        .all(|diagnostic| diagnostic.message.contains("Classes can't be interfaces")));
+}
+
+#[test]
 fn strict_mode_accepts_methods_with_concrete_inferred_types() {
     let result = check(
         r#"# typed: strict

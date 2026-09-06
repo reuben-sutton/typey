@@ -1280,19 +1280,43 @@ struct MethodRegistrar<'a> {
 
 impl MethodRegistrar<'_> {
     fn has_preceding_annotation(&self, node: &Node<'_>, annotation: &str) -> bool {
-        let start = prism::span(node).0;
-        for line in String::from_utf8_lossy(&self.source[..start]).lines().rev() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
+        let mut end = prism::span(node).0;
+        let annotation = annotation.as_bytes();
+        loop {
+            while end > 0 && matches!(self.source[end - 1], b'\n' | b'\r') {
+                end -= 1;
             }
-            if trimmed.starts_with('#') {
-                if trimmed.contains(annotation) {
+            let line_start = self.source[..end]
+                .iter()
+                .rposition(|byte| *byte == b'\n')
+                .map_or(0, |offset| offset + 1);
+            let line = &self.source[line_start..end];
+            let trimmed_start = line
+                .iter()
+                .position(|byte| !byte.is_ascii_whitespace())
+                .unwrap_or(line.len());
+            let trimmed_end = line
+                .iter()
+                .rposition(|byte| !byte.is_ascii_whitespace())
+                .map_or(trimmed_start, |offset| offset + 1);
+            let trimmed = &line[trimmed_start..trimmed_end];
+            if trimmed.is_empty() {
+                // Keep looking past blank lines, matching `str::lines().rev()`.
+            } else if trimmed.first() == Some(&b'#') {
+                if trimmed
+                    .windows(annotation.len())
+                    .any(|window| window == annotation)
+                {
                     return true;
                 }
-                continue;
+            } else {
+                break;
             }
-            break;
+
+            if line_start == 0 {
+                break;
+            }
+            end = line_start - 1;
         }
         false
     }
