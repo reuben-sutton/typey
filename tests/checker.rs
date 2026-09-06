@@ -192,6 +192,24 @@ fn models_integer_bitwise_operators() {
 }
 
 #[test]
+fn models_class_object_methods() {
+    let result = check_fixture("tests/fixtures/class_object_builtins.rb");
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    for expected in [
+        "Revealed type: `T::Boolean`",
+        "Revealed type: `T.nilable([String, Integer])`",
+        "Revealed type: `T.noreturn`",
+    ] {
+        assert!(notes.iter().any(|message| message.contains(expected)), "missing {expected} in {notes:?}");
+    }
+}
+
+#[test]
 fn dispatches_short_names_and_structural_builtins() {
     let result = check_fixture("tests/fixtures/common_builtin_dispatch.rb");
     let notes = result
