@@ -5510,6 +5510,10 @@ impl<'src> Analyzer<'src> {
                 if report_unreachable {
                     self.error(&child, "This expression appears after an unconditional return");
                 }
+                // Sorbet still typechecks dead syntax for diagnostics and
+                // reveals. Preserve the enclosing terminated flow while
+                // evaluating the child for its own effects.
+                let _ = self.eval_node(&child, environment);
                 continue;
             }
             let result = self.eval_node(&child, environment);
@@ -6949,6 +6953,93 @@ impl<'src> Analyzer<'src> {
         result
     }
 
+    fn static_type_value(&self, node: &Node<'_>) -> bool {
+        let Some(call) = node.as_call_node() else {
+            return false;
+        };
+        let name = prism::constant_name(call.name());
+        let arguments = call
+            .arguments()
+            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if name == "first"
+            && call.receiver().as_ref().is_some_and(|receiver| {
+                receiver.as_array_node().is_some_and(|array| {
+                    !array.elements().is_empty()
+                        && array
+                            .elements()
+                            .iter()
+                            .all(|element| self.static_type_value(&element))
+                })
+            })
+        {
+            return true;
+        }
+        let Some(receiver) = call.receiver() else {
+            return false;
+        };
+        let receiver_is_t = self
+            .constant_reference_name(&receiver)
+            .is_some_and(|name| name.trim_start_matches("::") == "T");
+        let direct_type_constructor = receiver_is_t
+            && match name.as_str() {
+                "class_of" => arguments.len() == 1,
+                "any"
+                | "all"
+                | "nilable"
+                | "noreturn"
+                | "untyped"
+                | "self_type"
+                | "proc"
+                | "type_parameter"
+                | "attached_class" => true,
+                _ => false,
+            };
+        let generic_type_constructor = name == "[]"
+            && self
+                .constant_reference_name(&receiver)
+                .is_some_and(|name| name.trim_start_matches("::").starts_with("T::"));
+        if direct_type_constructor || generic_type_constructor {
+            return true;
+        }
+        if self.static_type_value(&receiver) {
+            return !matches!(
+                name.as_str(),
+                "new"
+                    | "valid?"
+                    | "recursively_valid?"
+                    | "subtype_of?"
+                    | "describe_obj"
+                    | "error_message_for_obj"
+                    | "error_message_for_obj_recursive"
+                    | "validate!"
+            );
+        }
+        false
+    }
+
+    fn static_type_description(&self, node: &Node<'_>) -> String {
+        if let Some(call) = node.as_call_node() {
+            if prism::constant_name(call.name()) == "first" {
+                if let Some(receiver) = call.receiver() {
+                    if receiver.as_array_node().is_some() {
+                        if let Some(array) = receiver.as_array_node() {
+                            if let Some(element) = array.elements().first() {
+                                return prism::text(self.source, &element);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let source = prism::text(self.source, node);
+        if source.contains("T.self_type") {
+            "T.untyped".to_owned()
+        } else {
+            source
+        }
+    }
+
     fn eval_call<'node>(
         &mut self,
         node: &Node<'node>,
@@ -6976,6 +7067,36 @@ impl<'src> Analyzer<'src> {
         } else {
             Type::Object
         };
+        let static_type_receiver = receiver_node
+            .as_ref()
+            .is_some_and(|receiver| self.static_type_value(receiver));
+        if static_type_receiver
+            && !matches!(
+                name.as_str(),
+                "new"
+                    | "valid?"
+                    | "recursively_valid?"
+                    | "subtype_of?"
+                    | "describe_obj"
+                    | "error_message_for_obj"
+                    | "error_message_for_obj_recursive"
+                    | "validate!"
+                    | "params"
+                    | "returns"
+                    | "void"
+                    | "bind"
+            )
+        {
+            if let Some(receiver) = receiver_node.as_ref() {
+                let description = self.static_type_description(receiver);
+                self.error(
+                    node,
+                    format!(
+                        "Call to method `{name}` on `{description}` mistakes a type for a value"
+                    ),
+                );
+            }
+        }
         if call.is_safe_navigation()
             && !receiver_type.is_any()
             && !receiver_type.contains_any()
@@ -8771,6 +8892,23 @@ impl<'src> Analyzer<'src> {
             "any" => Type::union(value_types()),
             "all" => Type::intersection(value_types()),
             "noreturn" => Type::Never,
+            "class_of" => {
+                match argument_types.len() {
+                    0 => self.error(node, "Not enough arguments"),
+                    1 => {}
+                    _ => self.error(node, "Too many arguments"),
+                }
+                argument_types
+                    .first()
+                    .map(|type_| {
+                        Type::Named(
+                            "Class".to_owned(),
+                            vec![Self::class_object_value_type(type_)
+                                .unwrap_or_else(|| type_.clone())],
+                        )
+                    })
+                    .unwrap_or_else(|| Type::Named("Class".to_owned(), vec![Type::Anything]))
+            }
             _ => {
                 let _ = environment;
                 Type::Any
