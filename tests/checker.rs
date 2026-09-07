@@ -347,6 +347,15 @@ fn infers_the_rails_route_mapper_for_draw_blocks() {
 }
 
 #[test]
+fn binds_active_support_continuous_integration_blocks_to_instances() {
+    let result = check_fixture("tests/fixtures/active_support_ci_run.rb");
+    assert!(!result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("step")));
+}
+
+#[test]
 fn binds_active_support_test_dsl_blocks_to_test_instances() {
     check_fixture("tests/fixtures/active_support_test_dsl_bound_block.rb");
 }

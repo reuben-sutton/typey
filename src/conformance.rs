@@ -159,6 +159,7 @@ pub fn check_fixture(path: &Path, config: CheckerConfig) -> io::Result<FixtureRe
             .find(|(index, diagnostic)| {
                 !used[*index]
                     && diagnostic.severity == expectation.severity
+                    && diagnostic.line == expectation.line
                     && diagnostic.message.contains(&expectation.message)
             });
         if let Some((index, _)) = matching {

@@ -13,7 +13,7 @@ use crate::infer::{check_with_policies, CheckerConfig, Strictness, UntypedOrigin
 use crate::prism::LineMap;
 use crate::types::Type;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 const SKIPPED_DIRECTORIES: &[&str] = &[
@@ -82,12 +82,26 @@ impl WorkspaceCheckResult {
     }
 }
 
-/// Return whether a path is a Ruby implementation or RBI source file.
+/// Return whether a path has a Ruby implementation or RBI extension.
 #[must_use]
 pub fn is_ruby_source(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| matches!(extension, "rb" | "rbi"))
+}
+
+fn is_discoverable_ruby_file(path: &Path) -> io::Result<bool> {
+    if is_ruby_source(path) {
+        return Ok(true);
+    }
+    let mut file = fs::File::open(path)?;
+    let mut prefix = [0_u8; 256];
+    let length = file.read(&mut prefix)?;
+    let first_line = prefix[..length]
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or_default();
+    Ok(first_line.starts_with(b"#!") && first_line.windows(4).any(|window| window == b"ruby"))
 }
 
 /// Discover `.rb` and `.rbi` files below a file or directory.
@@ -116,7 +130,7 @@ fn discover_ruby_files_with_patterns(root: &Path, ignores: &[String]) -> io::Res
     let metadata = fs::metadata(root)?;
     let mut paths = Vec::new();
     if metadata.is_file() {
-        if is_ruby_source(root) {
+        if is_discoverable_ruby_file(root)? {
             paths.push(root.to_owned());
         }
     } else if metadata.is_dir() {
@@ -366,7 +380,7 @@ fn collect_ruby_files(
             if !skipped {
                 collect_ruby_files(&path, base, ignores, paths)?;
             }
-        } else if file_type.is_file() && is_ruby_source(&path) {
+        } else if file_type.is_file() && is_discoverable_ruby_file(&path)? {
             paths.push(path);
         }
     }

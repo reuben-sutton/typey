@@ -10743,6 +10743,7 @@ impl<'src> Analyzer<'src> {
             .or_else(|| self.rails_initializer_block_receiver(&key, receiver_type))
             .or_else(|| self.rails_application_configure_block_receiver(&key, receiver_type))
             .or_else(|| self.rails_route_draw_block_receiver(&key, receiver_type))
+            .or_else(|| self.active_support_ci_block_receiver(&key, receiver_type))
             .or_else(|| self.active_support_test_block_receiver(&key, receiver_type));
         let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
             if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
@@ -10950,6 +10951,18 @@ impl<'src> Analyzer<'src> {
             })
             .flatten()
             .map(|_| Type::named("ActionDispatch::Routing::Mapper"))
+    }
+
+    fn active_support_ci_block_receiver(
+        &self,
+        key: &MethodKey,
+        receiver_type: Option<&Type>,
+    ) -> Option<Type> {
+        (key.singleton
+            && key.name == "run"
+            && key.owner.as_deref() == Some("ActiveSupport::ContinuousIntegration"))
+        .then(|| receiver_type.and_then(Self::class_object_instance_type))
+        .flatten()
     }
 
     /// Active Support's test DSL is implemented by defining instance methods,

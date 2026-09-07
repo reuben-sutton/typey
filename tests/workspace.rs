@@ -13,13 +13,16 @@ const IGNORE_FIXTURE_ROOT: &str = "tests/workspace_ignore_repo";
 #[test]
 fn discovers_and_checks_rb_and_rbi_files_as_one_workspace() {
     let paths = discover_ruby_files(Path::new(FIXTURE_ROOT)).expect("workspace exists");
-    assert_eq!(paths.len(), 3);
+    assert_eq!(paths.len(), 4);
     assert!(paths
         .iter()
         .any(|path| path.extension().is_some_and(|ext| ext == "rb")));
     assert!(paths
         .iter()
         .any(|path| path.extension().is_some_and(|ext| ext == "rbi")));
+    assert!(paths
+        .iter()
+        .any(|path| path.ends_with("tests/workspace_repo/bin/entry")));
 
     let files = load_workspace(Path::new(FIXTURE_ROOT)).expect("workspace loads");
     let result = check_workspace(&files, CheckerConfig::default());
