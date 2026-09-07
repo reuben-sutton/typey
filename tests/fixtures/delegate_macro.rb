@@ -20,5 +20,4 @@ end
 
 Parser.new.parse("xml")
 Parser.new.backend_name
-Parser.new.missing
-# error: Method `missing` does not exist on `Parser`
+Parser.new.missing # error: Method `missing` does not exist on `Parser`

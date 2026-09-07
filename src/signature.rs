@@ -143,6 +143,11 @@ pub struct AnnotationTable {
     /// Method signatures attached to actual Prism `def` nodes. Multiple
     /// consecutive Sorbet `sig` calls represent overloads for one definition.
     pub method_annotations: BTreeMap<usize, Vec<MethodSig>>,
+    /// Source offsets of the Sorbet `sig` calls in `method_annotations`.
+    /// These are retained separately because diagnostics for a malformed
+    /// parameter name belong to the `sig`, while a missing block annotation
+    /// belongs to the method definition.
+    pub method_annotation_spans: BTreeMap<usize, Vec<(usize, usize)>>,
     /// RBS type aliases collected from `#:` comments. The analyzer resolves
     /// these names against the lexical declaration that uses them.
     pub type_aliases: BTreeMap<String, Type>,
@@ -296,6 +301,7 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
     let mut table = collect(source);
     table.methods.clear();
     table.method_annotations.clear();
+    table.method_annotation_spans.clear();
     table.attribute_annotations.clear();
     table.signature_errors.clear();
 
@@ -424,6 +430,7 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
     // nested method bodies and fixture strings out of the annotation table.
     for definition in &nodes.definitions {
         let mut signatures = Vec::new();
+        let mut signature_spans = Vec::new();
         let mut cursor = *definition;
         for (start, end) in nodes
             .signatures
@@ -436,12 +443,16 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
             }
             if let Some(signature) = parse_sorbet_signature(&source[*start..*end]) {
                 signatures.push(signature);
+                signature_spans.push((*start, *end));
             }
             cursor = *start;
         }
         signatures.reverse();
         if !signatures.is_empty() {
             table.method_annotations.insert(*definition, signatures);
+            table
+                .method_annotation_spans
+                .insert(*definition, signature_spans);
         }
     }
     for attribute in &nodes.attribute_calls {

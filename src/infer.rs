@@ -1682,7 +1682,8 @@ impl<'src> Analyzer<'src> {
 
     fn validate_sorbet_parameter_names(
         &mut self,
-        offset: usize,
+        definition_offset: usize,
+        signature_offset: usize,
         ruby_parameters: &ParameterShape,
         signature: &MethodSig,
     ) {
@@ -1698,8 +1699,8 @@ impl<'src> Analyzer<'src> {
                 self.diagnostics.push(Diagnostic::error(
                     self.source,
                     format!("Unknown parameter name `{name}`"),
-                    offset,
-                    offset,
+                    signature_offset,
+                    signature_offset,
                 ));
             }
         }
@@ -1711,8 +1712,8 @@ impl<'src> Analyzer<'src> {
                 self.diagnostics.push(Diagnostic::error(
                     self.source,
                     format!("Malformed `sig`. Type not specified for parameter `{block_name}`"),
-                    offset,
-                    offset,
+                    definition_offset,
+                    definition_offset,
                 ));
             }
         }
@@ -1828,6 +1829,7 @@ impl<'src> Analyzer<'src> {
         let mut rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut builtin_rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let method_annotations = self.annotations.method_annotations.clone();
+        let method_annotation_spans = self.annotations.method_annotation_spans.clone();
         for (offset, signatures) in &method_annotations {
             let Some(key) = self.declarations.definitions.get(offset).cloned() else {
                 continue;
@@ -1866,9 +1868,18 @@ impl<'src> Analyzer<'src> {
                     }
                 }
                 if let Some(shape) = self.declarations.parameter_shapes.get(offset).cloned() {
-                    for signature in &raw_signatures {
+                    for (index, signature) in raw_signatures.iter().enumerate() {
                         if !signature.param_names.is_empty() {
-                            self.validate_sorbet_parameter_names(*offset, &shape, signature);
+                            let signature_offset = method_annotation_spans
+                                .get(offset)
+                                .and_then(|spans| spans.get(index))
+                                .map_or(*offset, |(start, _)| *start);
+                            self.validate_sorbet_parameter_names(
+                                *offset,
+                                signature_offset,
+                                &shape,
+                                signature,
+                            );
                         }
                     }
                 }

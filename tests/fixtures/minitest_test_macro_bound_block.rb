@@ -11,10 +11,8 @@ module Minitest
     include Assertions
 
     class << self
-      # error: Malformed `sig`. Type not specified for parameter `block`
-      # error: Unknown parameter name `&`
-      sig { params(name: String, "&": T.proc.bind(T.self_type).void).returns(NilClass) }
-      def test(name, &block); end
+      sig { params(name: String, "&": T.proc.bind(T.self_type).void).returns(NilClass) } # error: Unknown parameter name `&`
+      def test(name, &block); end # error: Malformed `sig`. Type not specified for parameter `block`
     end
   end
 end

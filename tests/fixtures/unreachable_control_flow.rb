@@ -23,9 +23,9 @@ def known_truthy_after_early_returns(value)
     end
   else
     if value
-      :reachable
+      :reachable # error: This code is unreachable
     else
-      return false # error: This code is unreachable
+      return false
     end
   end
 
