@@ -323,6 +323,18 @@ fn models_class_eval_methods_through_dynamic_includes() {
 }
 
 #[test]
+fn infers_the_rails_application_for_configure_blocks() {
+    let result = check_fixture("tests/fixtures/rails_application_configure_inference.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `RailsSorbetApplication`")));
+    assert!(!result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("application_only")));
+}
+
+#[test]
 fn binds_active_support_test_dsl_blocks_to_test_instances() {
     check_fixture("tests/fixtures/active_support_test_dsl_bound_block.rb");
 }

@@ -9279,6 +9279,13 @@ impl<'src> Analyzer<'src> {
             self.eval_dynamic_eval_call(&name, &dynamic_eval_receiver, block.as_ref(), environment)
         {
             type_
+        } else if name == "application"
+            && receiver_node.as_ref().is_some_and(|receiver| {
+                self.constant_reference_name(receiver)
+                    .is_some_and(|constant| constant.trim_start_matches("::") == "Rails")
+            })
+        {
+            self.rails_application_instance_type().unwrap_or(Type::Any)
         } else if receiver_node.is_none()
             && matches!(name.as_str(), "lambda" | "proc")
             && call.block().is_some()
@@ -10732,6 +10739,7 @@ impl<'src> Analyzer<'src> {
                     .flatten()
             })
             .or_else(|| self.rails_initializer_block_receiver(&key, receiver_type))
+            .or_else(|| self.rails_application_configure_block_receiver(&key, receiver_type))
             .or_else(|| self.active_support_test_block_receiver(&key, receiver_type));
         let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
             if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
@@ -10870,6 +10878,56 @@ impl<'src> Analyzer<'src> {
         (owner == "Rails::Initializable::ClassMethods" && key.name == "initializer")
             .then(|| receiver_type.and_then(Self::class_object_instance_type))
             .flatten()
+    }
+
+    /// `Rails.application.configure` evaluates its block with the application
+    /// instance as `self`. Tapioca's RBI leaves both the application factory
+    /// and the callback binding untyped, but a repository normally declares a
+    /// concrete subclass of `Rails::Application`. Preserve that concrete
+    /// runtime receiver when checking the configuration block.
+    fn rails_application_configure_block_receiver(
+        &self,
+        key: &MethodKey,
+        receiver_type: Option<&Type>,
+    ) -> Option<Type> {
+        (key.name == "configure")
+            .then(|| receiver_type.filter(|type_| self.is_rails_application_instance(type_)))
+            .flatten()
+            .cloned()
+    }
+
+    fn is_rails_application_instance(&self, type_: &Type) -> bool {
+        match type_ {
+            Type::Named(name, _) => {
+                self.nominal_subtype_names(nominal_name(name), "Rails::Application")
+            }
+            Type::Union(members) => {
+                !members.is_empty()
+                    && members
+                        .iter()
+                        .all(|member| self.is_rails_application_instance(member))
+            }
+            _ => false,
+        }
+    }
+
+    fn rails_application_instance_type(&self) -> Option<Type> {
+        let applications = self
+            .classes
+            .iter()
+            .filter(|(name, info)| {
+                !info.is_module
+                    && name.as_str() != "Rails::Application"
+                    && self.nominal_subtype_names(nominal_name(name), "Rails::Application")
+            })
+            .map(|(name, _)| Type::named(name.clone()))
+            .collect::<Vec<_>>();
+        if !applications.is_empty() {
+            return Some(Type::union(applications));
+        }
+        self.classes
+            .contains_key("Rails::Application")
+            .then(|| Type::named("Rails::Application"))
     }
 
     /// Active Support's test DSL is implemented by defining instance methods,
