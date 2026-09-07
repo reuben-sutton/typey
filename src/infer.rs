@@ -526,6 +526,7 @@ pub struct Environment {
     inferred_locals: BTreeSet<String>,
     provisional_locals: BTreeSet<String>,
     open_array_locals: BTreeSet<String>,
+    known_nonempty_arrays: BTreeSet<String>,
     predicate_aliases: BTreeMap<String, PredicateAlias>,
     known_truthiness: BTreeMap<String, bool>,
     self_type: Type,
@@ -539,6 +540,7 @@ impl Default for Environment {
             inferred_locals: BTreeSet::new(),
             provisional_locals: BTreeSet::new(),
             open_array_locals: BTreeSet::new(),
+            known_nonempty_arrays: BTreeSet::new(),
             predicate_aliases: BTreeMap::new(),
             known_truthiness: BTreeMap::new(),
             self_type: Type::Object,
@@ -561,6 +563,7 @@ impl Environment {
     pub fn bind(&mut self, name: impl Into<String>, type_: Type) {
         let name = name.into();
         self.open_array_locals.remove(&name);
+        self.known_nonempty_arrays.remove(&name);
         self.inferred_locals.remove(&name);
         self.provisional_locals.remove(&name);
         self.locals.insert(name.clone(), type_);
@@ -600,6 +603,7 @@ impl Environment {
     ) {
         let name = name.into();
         self.open_array_locals.remove(&name);
+        self.known_nonempty_arrays.remove(&name);
         self.inferred_locals.remove(&name);
         self.provisional_locals.remove(&name);
         self.locals.insert(name.clone(), type_);
@@ -617,6 +621,19 @@ impl Environment {
 
     fn known_truthiness(&self, name: &str) -> Option<bool> {
         self.known_truthiness.get(name).copied()
+    }
+
+    fn set_known_nonempty_array(&mut self, name: impl Into<String>, nonempty: bool) {
+        let name = name.into();
+        if nonempty {
+            self.known_nonempty_arrays.insert(name);
+        } else {
+            self.known_nonempty_arrays.remove(&name);
+        }
+    }
+
+    fn known_nonempty_array(&self, name: &str) -> bool {
+        self.known_nonempty_arrays.contains(name)
     }
 
     /// Join two control-flow environments using the same type lattice as
@@ -640,6 +657,11 @@ impl Environment {
             open_array_locals: self
                 .open_array_locals
                 .intersection(&other.open_array_locals)
+                .cloned()
+                .collect(),
+            known_nonempty_arrays: self
+                .known_nonempty_arrays
+                .intersection(&other.known_nonempty_arrays)
                 .cloned()
                 .collect(),
             predicate_aliases: self
@@ -7546,6 +7568,18 @@ impl<'src> Analyzer<'src> {
                         }
                     }
                 }
+                if name == "empty?" {
+                    if let Some(local) = receiver.as_local_variable_read_node() {
+                        let local_name = prism::constant_name(local.name());
+                        if matches!(
+                            environment.get(&local_name),
+                            Type::Array(_) | Type::Tuple(_)
+                        ) {
+                            environment.set_known_nonempty_array(&local_name, !truthy);
+                        }
+                        return;
+                    }
+                }
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
                     if environment.is_inferred(&local_name) {
@@ -8792,6 +8826,14 @@ impl<'src> Analyzer<'src> {
                         .as_array_node()
                         .is_some_and(|array| !array.elements().is_empty())
                 });
+            let nonempty_array_access = matches!(name.as_str(), "first" | "last")
+                && argument_types.is_empty()
+                && receiver_node
+                    .as_ref()
+                    .and_then(Node::as_local_variable_read_node)
+                    .is_some_and(|local| {
+                        environment.known_nonempty_array(&prism::constant_name(local.name()))
+                    });
             let dispatch_receiver_type = if call.is_safe_navigation() {
                 receiver_type.without(&Type::Nil)
             } else {
@@ -9051,7 +9093,7 @@ impl<'src> Analyzer<'src> {
                 }
                 type_
             };
-            if nonempty_literal_extremum {
+            if nonempty_literal_extremum || nonempty_array_access {
                 result = result.without(&Type::Nil);
             }
             self.refine_local_array_write(

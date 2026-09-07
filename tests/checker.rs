@@ -164,6 +164,11 @@ fn knows_extrema_of_a_nonempty_array_are_non_nil() {
 }
 
 #[test]
+fn narrows_array_first_after_proving_the_array_is_nonempty() {
+    check_fixture("tests/fixtures/nonempty_array_flow.rb");
+}
+
+#[test]
 fn models_sorbet_abstract_helper_declarations() {
     let result = check_fixture("tests/fixtures/sorbet_abstract_helper.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
