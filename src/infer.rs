@@ -8363,8 +8363,18 @@ impl<'src> Analyzer<'src> {
                 format!("Used `&.` operator on `{receiver_type}`, which can never be nil"),
             );
         }
+        // Sorbet's `T.proc` expressions are runtime type objects when they
+        // appear outside a signature declaration (for example as the second
+        // argument to `T.cast`).  Preserve the parsed proc shape instead of
+        // treating the chained `.params/.returns/.void` calls as an unknown
+        // application method.  The signature parser already understands the
+        // complete expression, including nested `T.nilable` and `bind`.
+        let runtime_proc_type_expression =
+            self.static_type_value(node) && prism::text(self.source, node).contains("T.proc");
         let mut untyped_origin = None;
-        let mut callee_type = if receiver_node.as_ref().is_some_and(|receiver| {
+        let mut callee_type = if runtime_proc_type_expression {
+            self.runtime_type_object_type(node)
+        } else if receiver_node.as_ref().is_some_and(|receiver| {
             self.constant_reference_name(receiver)
                 .is_some_and(|name| name.trim_start_matches("::") == "T")
         }) {
@@ -14225,6 +14235,29 @@ impl<'src> Analyzer<'src> {
 
     fn type_from_node<'node>(&self, node: &Node<'node>) -> Type {
         signature::parse_type(&prism::text(self.source, node))
+    }
+
+    fn runtime_type_object_type<'node>(&self, node: &Node<'node>) -> Type {
+        let source = prism::text(self.source, node);
+        let expression = source.trim().trim_start_matches("::");
+        let class = if expression.starts_with("T.proc") {
+            "T::Types::Proc"
+        } else if expression.starts_with("T.nilable(") || expression.starts_with("T.any(") {
+            "T::Types::Union"
+        } else if expression.starts_with("T.all(") {
+            "T::Types::Intersection"
+        } else if expression.starts_with("T.class_of(") {
+            "T::Types::ClassOf"
+        } else if expression.starts_with("T.noreturn") {
+            "T::Types::NoReturn"
+        } else if expression.starts_with("T.untyped") {
+            "T::Types::Untyped"
+        } else if expression.starts_with("T.anything") {
+            "T::Types::Anything"
+        } else {
+            "T::Types::Base"
+        };
+        Type::named(class)
     }
 
     fn constant_reference_name<'node>(&self, node: &Node<'node>) -> Option<String> {

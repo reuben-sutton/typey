@@ -100,6 +100,35 @@ fn models_sorbet_struct_props_as_typed_accessors() {
 }
 
 #[test]
+fn preserves_runtime_proc_type_expression_types() {
+    let result = check_fixture("tests/fixtures/runtime_proc_type_expression.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let reveals = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("Revealed type:"))
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        reveals
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Types::Proc`")),
+        "{reveals:?}"
+    );
+    assert!(
+        reveals
+            .iter()
+            .any(|message| message.contains("Revealed type: `T::Types::Union`")),
+        "{reveals:?}"
+    );
+}
+
+#[test]
+fn does_not_treat_runtime_proc_type_objects_as_callables() {
+    check_fixture("tests/fixtures/runtime_type_object_not_callable.rb");
+}
+
+#[test]
 fn models_sorbet_abstract_helper_declarations() {
     let result = check_fixture("tests/fixtures/sorbet_abstract_helper.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
