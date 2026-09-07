@@ -1369,37 +1369,7 @@ pub(super) struct HirCallView<'node> {
     prism_call: CallNode<'node>,
 }
 
-pub(super) trait CallShape<'node> {
-    fn name(&self) -> String;
-    fn argument_inputs(&self) -> Vec<CallArgumentInput<'node>>;
-    fn receiver(&self) -> Option<Node<'node>>;
-    fn block(&self) -> Option<Node<'node>>;
-    fn is_safe_navigation(&self) -> bool;
-}
-
-impl<'node> CallShape<'node> for CallNode<'node> {
-    fn name(&self) -> String {
-        prism::constant_name(self.name())
-    }
-
-    fn argument_inputs(&self) -> Vec<CallArgumentInput<'node>> {
-        prism_call_argument_inputs(self.arguments())
-    }
-
-    fn receiver(&self) -> Option<Node<'node>> {
-        self.receiver()
-    }
-
-    fn block(&self) -> Option<Node<'node>> {
-        self.block()
-    }
-
-    fn is_safe_navigation(&self) -> bool {
-        self.is_safe_navigation()
-    }
-}
-
-impl<'node> CallShape<'node> for HirCallView<'node> {
+impl<'node> HirCallView<'node> {
     fn name(&self) -> String {
         self.call.name.as_str().to_owned()
     }
@@ -3866,10 +3836,10 @@ impl<'src> Analyzer<'src> {
         Eval::value(self.record(node, type_))
     }
 
-    fn eval_call_result<'node, C: CallShape<'node>>(
+    fn eval_call_result<'node>(
         &mut self,
         node: &Node<'node>,
-        call: &C,
+        call: &HirCallView<'node>,
         environment: &mut Environment,
     ) -> Eval {
         let mut result = self.eval_call(node, call, environment);
@@ -7207,9 +7177,9 @@ impl<'src> Analyzer<'src> {
                 && self.nominal_subtype(current_owner, &resolved_owner))
     }
 
-    fn call_terminates<'node, C: CallShape<'node>>(
+    fn call_terminates<'node>(
         &self,
-        call: &C,
+        call: &HirCallView<'node>,
         environment: &Environment,
         receiver_type: &Type,
         type_: &Type,

@@ -1,5 +1,5 @@
 use super::{
-    name_matches, prism, Analyzer, CallShape, CallSite, Environment, Eval, Flow, FlowKind, Node,
+    name_matches, prism, Analyzer, CallSite, Environment, Eval, Flow, FlowKind, HirCallView, Node,
     OutcomeTypes, UntypedOrigin, Visibility,
 };
 use crate::types::Type;
@@ -106,10 +106,10 @@ impl<'src> Analyzer<'src> {
         }
     }
 
-    pub(super) fn eval_call<'node, C: CallShape<'node>>(
+    pub(super) fn eval_call<'node>(
         &mut self,
         node: &Node<'node>,
-        call: &C,
+        call: &HirCallView<'node>,
         environment: &mut Environment,
     ) -> Eval {
         let name = call.name();
