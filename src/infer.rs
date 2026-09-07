@@ -1885,8 +1885,12 @@ impl<'src> Analyzer<'src> {
                 }
             }
             if is_source_annotation {
-                for signature in &signatures {
-                    self.validate_attached_class_signature(*offset, &key, signature);
+                for (index, signature) in signatures.iter().enumerate() {
+                    let signature_offset = method_annotation_spans
+                        .get(offset)
+                        .and_then(|spans| spans.get(index))
+                        .map_or(*offset, |(start, _)| *start);
+                    self.validate_attached_class_signature(signature_offset, &key, signature);
                 }
             }
             let target = if self
@@ -2034,18 +2038,19 @@ impl<'src> Analyzer<'src> {
         let Some(message) = message else {
             return;
         };
-        let needle = b"T.attached_class";
-        let prefix = &self.source[..offset.min(self.source.len())];
-        let start = prefix
-            .windows(needle.len())
-            .rposition(|window| window == needle)
-            .unwrap_or(offset.min(self.source.len()));
-        self.diagnostics.push(Diagnostic::error(
-            self.source,
-            message,
-            start,
-            start + needle.len(),
-        ));
+        // The signature span is already the source location of the `sig`
+        // call. Do not search backwards for the type text: upstream fixtures
+        // place expectation comments between the signature and definition,
+        // and that search can accidentally select `T.attached_class` from a
+        // prose comment instead of the declaration being validated.
+        let start = offset.min(self.source.len());
+        let end = self
+            .source
+            .get(start..)
+            .and_then(|source| source.iter().position(|byte| *byte == b'\n'))
+            .map_or(self.source.len(), |line_end| start + line_end);
+        self.diagnostics
+            .push(Diagnostic::error(self.source, message, start, end));
     }
 
     fn record<'node>(&mut self, node: &Node<'node>, type_: Type) -> Type {
