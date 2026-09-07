@@ -4374,7 +4374,13 @@ impl<'src> Analyzer<'src> {
             return self.eval_call_result(node, &call, environment);
         }
         if let Some(multi) = node.as_multi_write_node() {
+            let previous_expected_return = self.expected_return_type.take();
+            if let Some(array) = multi.value().as_array_node() {
+                self.expected_return_type =
+                    Some(Type::Tuple(vec![Type::Any; array.elements().len()]));
+            }
             let mut result = self.eval_node(&multi.value(), environment);
+            self.expected_return_type = previous_expected_return;
             if let Some(type_) = result.normal_type.clone() {
                 let lefts = multi.lefts().into_iter().collect::<Vec<_>>();
                 let rights = multi.rights().into_iter().collect::<Vec<_>>();
