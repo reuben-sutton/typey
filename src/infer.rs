@@ -7582,17 +7582,19 @@ impl<'src> Analyzer<'src> {
                 }
             }
             if let Some(receiver) = receiver {
-                if truthy && name == "===" && arguments.len() == 1 {
+                if name == "===" && arguments.len() == 1 {
                     if let Some(local) = arguments[0].as_local_variable_read_node() {
                         let local_name = prism::constant_name(local.name());
-                        if environment.is_inferred(&local_name) {
-                            return;
-                        }
                         let class_type = self.node_type(&receiver, environment);
                         let expected = Self::class_object_value_type(&class_type)
                             .unwrap_or_else(|| class_type.clone());
                         let current = environment.get(&local_name);
-                        environment.bind(local_name, self.meet_predicate_type(&current, &expected));
+                        let narrowed = if truthy {
+                            self.meet_predicate_type(&current, &expected)
+                        } else {
+                            current.without(&expected)
+                        };
+                        environment.bind(local_name, narrowed);
                         return;
                     }
                     if let Some(instance_variable) = arguments[0].as_instance_variable_read_node() {
@@ -7601,10 +7603,12 @@ impl<'src> Analyzer<'src> {
                             .unwrap_or_else(|| class_type.clone());
                         let instance_variable_name = prism::constant_name(instance_variable.name());
                         let current = self.ivar_type(environment, &instance_variable_name);
-                        environment.bind(
-                            ivar_refinement_key(&instance_variable_name),
-                            self.meet_predicate_type(&current, &expected),
-                        );
+                        let narrowed = if truthy {
+                            self.meet_predicate_type(&current, &expected)
+                        } else {
+                            current.without(&expected)
+                        };
+                        environment.bind(ivar_refinement_key(&instance_variable_name), narrowed);
                         return;
                     }
                 }
