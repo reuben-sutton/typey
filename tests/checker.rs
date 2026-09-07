@@ -77,6 +77,35 @@ fn checks_sorbet_sig_calls() {
 }
 
 #[test]
+fn models_sorbet_struct_props_as_typed_accessors() {
+    let result = check_fixture("tests/fixtures/t_struct_props.rb");
+    let reveals = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("Revealed type:"))
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        reveals
+            .iter()
+            .any(|message| message.contains("Revealed type: `String`")),
+        "{reveals:?}"
+    );
+    assert!(
+        reveals
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.nilable(Integer)`")),
+        "{reveals:?}"
+    );
+}
+
+#[test]
+fn models_sorbet_abstract_helper_declarations() {
+    let result = check_fixture("tests/fixtures/sorbet_abstract_helper.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn reports_missing_methods_in_typed_true_files() {
     check_fixture("tests/fixtures/typed_true_missing_api.rb");
 }

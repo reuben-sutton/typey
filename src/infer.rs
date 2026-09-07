@@ -1360,6 +1360,112 @@ impl MethodRegistrar<'_> {
             ));
         }
     }
+
+    fn class_extends_t_struct(&self, owner: &str) -> bool {
+        let mut current = Some(owner.to_owned());
+        let mut visited = BTreeSet::new();
+        while let Some(name) = current {
+            if !visited.insert(name.clone()) {
+                return false;
+            }
+            if name.trim_start_matches("::") == "T::Struct" {
+                return true;
+            }
+            current = self
+                .classes
+                .get(&name)
+                .and_then(|info| info.superclass.clone());
+        }
+        false
+    }
+
+    fn register_struct_property<'node>(&mut self, node: &CallNode<'node>, immutable: bool) {
+        if self.method_depth != 0 {
+            return;
+        }
+        let Some(owner) = self
+            .singleton_stack
+            .last()
+            .or_else(|| self.class_stack.last())
+            .cloned()
+        else {
+            return;
+        };
+        if !self.class_extends_t_struct(&owner) {
+            return;
+        }
+        let Some(arguments) = node.arguments() else {
+            return;
+        };
+        let Some(name_node) = arguments.arguments().into_iter().next() else {
+            return;
+        };
+        let field = self.method_name(&name_node);
+        if field.is_empty() {
+            return;
+        }
+        let Some(type_node) = arguments.arguments().into_iter().nth(1) else {
+            return;
+        };
+        let type_ = signature::parse_type(&prism::text(self.source, &type_node));
+        let reader = MethodKey {
+            owner: Some(owner.clone()),
+            name: field.clone(),
+            singleton: false,
+        };
+        let reader_signature = MethodSig::new(Vec::new(), type_);
+        self.accessors.insert(reader.clone(), AccessorKind::Reader);
+        self.methods.entry(reader).or_insert_with(|| {
+            MethodState::explicit_overloads(std::slice::from_ref(&reader_signature))
+        });
+
+        if !immutable {
+            let writer = MethodKey {
+                owner: Some(owner.clone()),
+                name: format!("{field}="),
+                singleton: false,
+            };
+            let writer_signature = attribute_writer_signature(&reader_signature);
+            self.accessors.insert(writer.clone(), AccessorKind::Writer);
+            self.methods.entry(writer).or_insert_with(|| {
+                MethodState::explicit_overloads(std::slice::from_ref(&writer_signature))
+            });
+        }
+
+        // `prop` and `const` are DSL calls on the class object. Register a
+        // permissive declaration for the DSL itself so the class body is not
+        // reported as calling an unknown API while its accessors are created.
+        let dsl_name = if immutable { "const" } else { "prop" };
+        let dsl_key = MethodKey {
+            owner: Some(owner),
+            name: dsl_name.to_owned(),
+            singleton: true,
+        };
+        let mut dsl_signature = MethodSig::new(vec![Type::Any], Type::Nil);
+        dsl_signature.required_params = 0;
+        dsl_signature.accepts_rest = true;
+        dsl_signature.rest_index = Some(0);
+        dsl_signature.accepts_keyword_rest = true;
+        self.methods.entry(dsl_key).or_insert_with(|| {
+            MethodState::explicit_overloads(std::slice::from_ref(&dsl_signature))
+        });
+    }
+
+    fn register_class_dsl_method(&mut self, owner: &str, name: &str) {
+        let key = MethodKey {
+            owner: Some(owner.to_owned()),
+            name: name.to_owned(),
+            singleton: true,
+        };
+        let mut signature = MethodSig::new(vec![Type::Any], Type::Nil);
+        signature.required_params = 0;
+        signature.accepts_rest = true;
+        signature.rest_index = Some(0);
+        signature.accepts_keyword_rest = true;
+        self.methods
+            .entry(key)
+            .or_insert_with(|| MethodState::explicit_overloads(std::slice::from_ref(&signature)));
+    }
 }
 
 impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
@@ -1552,6 +1658,18 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         if self.method_depth == 0 && node.receiver().is_none() && self.class_stack.last().is_some()
         {
             let name = prism::constant_name(node.name());
+            if name == "prop" || name == "const" {
+                self.register_struct_property(node, name == "const");
+            } else if name == "abstract!" && node.arguments().is_none() {
+                if let Some(owner) = self
+                    .singleton_stack
+                    .last()
+                    .or_else(|| self.class_stack.last())
+                    .cloned()
+                {
+                    self.register_class_dsl_method(&owner, "abstract!");
+                }
+            }
             let arguments = node.arguments().map(|arguments| {
                 arguments
                     .arguments()
