@@ -138,6 +138,24 @@ fn preserves_positional_types_in_multi_assignment_rhs_tuples() {
 }
 
 #[test]
+fn preserves_tuple_components_through_conditional_multi_assignment() {
+    let result = check_fixture("tests/fixtures/conditional_tuple_multi_assignment.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`"))
+            .count(),
+        2,
+        "unexpected reveals: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn narrows_exhaustive_case_type_tests_to_noreturn() {
     let result = check_fixture("tests/fixtures/case_exhaustiveness.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

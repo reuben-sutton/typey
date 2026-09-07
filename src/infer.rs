@@ -2203,6 +2203,7 @@ pub(crate) fn check_with_policies(
         debug_round: 0,
         debug_nodes: 0,
         defer_inline_assertions: false,
+        preserve_literal_tuples: false,
         expected_return_type: None,
         substitution_context: None,
         checking_initializer: false,
@@ -2270,6 +2271,7 @@ struct Analyzer<'src> {
     debug_round: usize,
     debug_nodes: usize,
     defer_inline_assertions: bool,
+    preserve_literal_tuples: bool,
     expected_return_type: Option<Type>,
     substitution_context: Option<MethodKey>,
     checking_initializer: bool,
@@ -4375,12 +4377,15 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(multi) = node.as_multi_write_node() {
             let previous_expected_return = self.expected_return_type.take();
+            let previous_preserve_literal_tuples = self.preserve_literal_tuples;
+            self.preserve_literal_tuples = true;
             if let Some(array) = multi.value().as_array_node() {
                 self.expected_return_type =
                     Some(Type::Tuple(vec![Type::Any; array.elements().len()]));
             }
             let mut result = self.eval_node(&multi.value(), environment);
             self.expected_return_type = previous_expected_return;
+            self.preserve_literal_tuples = previous_preserve_literal_tuples;
             if let Some(type_) = result.normal_type.clone() {
                 let lefts = multi.lefts().into_iter().collect::<Vec<_>>();
                 let rights = multi.rights().into_iter().collect::<Vec<_>>();
@@ -5026,9 +5031,10 @@ impl<'src> Analyzer<'src> {
                 element
             };
             let inferred = if fixed_length
-                && self.expected_return_type.as_ref().is_some_and(|expected| {
-                    matches!(expected, Type::Tuple(elements) if elements.len() == element_types.len())
-                })
+                && (self.preserve_literal_tuples
+                    || self.expected_return_type.as_ref().is_some_and(|expected| {
+                        matches!(expected, Type::Tuple(elements) if elements.len() == element_types.len())
+                    }))
             {
                 Type::Tuple(element_types)
             } else {
