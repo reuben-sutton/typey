@@ -243,3 +243,24 @@ end
         matches!(&expression.kind, ExprKind::Call(call) if call.name.as_str() == "expand_path")
     }));
 }
+
+#[test]
+fn lowers_assignments_nested_in_unsupported_parents() {
+    let program = expressions(
+        r#"value = 1
+case value
+when Integer
+  value = 2
+end
+for item in [value]
+  value = item
+end
+"#,
+    );
+    let assignments = program
+        .expressions
+        .iter()
+        .filter(|expression| matches!(expression.kind, ExprKind::Assign { .. }))
+        .count();
+    assert_eq!(assignments, 3);
+}

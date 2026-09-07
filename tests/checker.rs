@@ -77,6 +77,11 @@ fn checks_sorbet_sig_calls() {
 }
 
 #[test]
+fn routes_assignment_forms_through_owned_hir_targets() {
+    check_fixture("tests/fixtures/hir_assignment_dispatch.rb");
+}
+
+#[test]
 fn reports_malformed_sorbet_proc_signatures() {
     check_fixture("tests/fixtures/malformed_bound_proc_signature.rb");
 }

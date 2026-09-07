@@ -35,6 +35,7 @@ struct Lowerer<'src> {
     program: Program,
     scopes: Vec<Scope>,
     lowered_call_spans: HashSet<(usize, usize)>,
+    lowered_assignment_spans: HashSet<(usize, usize)>,
     next_local: u32,
     next_scope: u32,
 }
@@ -50,6 +51,7 @@ impl<'src> Lowerer<'src> {
             },
             scopes: Vec::new(),
             lowered_call_spans: HashSet::new(),
+            lowered_assignment_spans: HashSet::new(),
             next_local: 0,
             next_scope: 0,
         }
@@ -58,7 +60,7 @@ impl<'src> Lowerer<'src> {
     fn lower_root(mut self, root: &Node<'_>) -> Program {
         self.push_scope();
         let root_expr = self.lower_node(root);
-        self.lower_nested_calls(root);
+        self.lower_nested_expressions(root);
         let body = self.push_body(
             BodyOwner::TopLevel,
             Parameters::default(),
@@ -180,17 +182,53 @@ impl<'src> Lowerer<'src> {
                 kind: Name::new("prism-node"),
             }),
         );
-        self.lower_nested_calls(node);
+        self.lower_nested_expressions(node);
         expression
     }
 
-    /// Unsupported parents still contain executable calls. Keep those calls
-    /// available to the migration adapter instead of making their source span
-    /// fall back to Prism evaluation solely because the parent syntax has not
-    /// acquired a dedicated HIR variant yet.
-    fn lower_nested_calls(&mut self, node: &Node<'_>) {
-        let mut visitor = NestedCallLowerer { lowerer: self };
+    /// Unsupported parents still contain executable expressions. Keep calls
+    /// and assignments available to the migration adapter instead of making
+    /// their source span fall back to Prism evaluation solely because the
+    /// parent syntax has not acquired a dedicated HIR variant yet.
+    fn lower_nested_expressions(&mut self, node: &Node<'_>) {
+        let mut visitor = NestedExpressionLowerer { lowerer: self };
         visitor.visit(node);
+    }
+
+    fn is_assignment_node(node: &Node<'_>) -> bool {
+        node.as_local_variable_write_node().is_some()
+            || node.as_local_variable_operator_write_node().is_some()
+            || node.as_local_variable_and_write_node().is_some()
+            || node.as_local_variable_or_write_node().is_some()
+            || node.as_instance_variable_write_node().is_some()
+            || node.as_instance_variable_operator_write_node().is_some()
+            || node.as_instance_variable_and_write_node().is_some()
+            || node.as_instance_variable_or_write_node().is_some()
+            || node.as_class_variable_write_node().is_some()
+            || node.as_class_variable_operator_write_node().is_some()
+            || node.as_class_variable_and_write_node().is_some()
+            || node.as_class_variable_or_write_node().is_some()
+            || node.as_global_variable_write_node().is_some()
+            || node.as_global_variable_operator_write_node().is_some()
+            || node.as_global_variable_and_write_node().is_some()
+            || node.as_global_variable_or_write_node().is_some()
+            || node.as_constant_write_node().is_some()
+            || node.as_constant_operator_write_node().is_some()
+            || node.as_constant_and_write_node().is_some()
+            || node.as_constant_or_write_node().is_some()
+            || node.as_constant_path_write_node().is_some()
+            || node.as_constant_path_operator_write_node().is_some()
+            || node.as_constant_path_and_write_node().is_some()
+            || node.as_constant_path_or_write_node().is_some()
+            || node.as_index_operator_write_node().is_some()
+            || node.as_index_and_write_node().is_some()
+            || node.as_index_or_write_node().is_some()
+            || node.as_call_operator_write_node().is_some()
+            || node.as_call_and_write_node().is_some()
+            || node.as_call_or_write_node().is_some()
+            || node
+                .as_call_node()
+                .is_some_and(|call| call.is_attribute_write())
     }
 
     fn lower_node(&mut self, node: &Node<'_>) -> ExprId {
@@ -761,6 +799,9 @@ impl<'src> Lowerer<'src> {
         value: Node<'_>,
         operator: AssignOperator,
     ) -> ExprId {
+        let span = self.span(node);
+        self.lowered_assignment_spans
+            .insert((span.start as usize, span.end as usize));
         let value = self.lower_node(&value);
         self.push_expr(
             node,
@@ -781,6 +822,9 @@ impl<'src> Lowerer<'src> {
         value: &Node<'_>,
         operator: AssignOperator,
     ) -> ExprId {
+        let span = self.span(node);
+        self.lowered_assignment_spans
+            .insert((span.start as usize, span.end as usize));
         let value = self.lower_node(value);
         self.push_expr(
             node,
@@ -1375,11 +1419,21 @@ impl<'src> Lowerer<'src> {
     }
 }
 
-struct NestedCallLowerer<'lower, 'src> {
+struct NestedExpressionLowerer<'lower, 'src> {
     lowerer: &'lower mut Lowerer<'src>,
 }
 
-impl<'pr, 'lower, 'src> Visit<'pr> for NestedCallLowerer<'lower, 'src> {
+impl<'pr, 'lower, 'src> Visit<'pr> for NestedExpressionLowerer<'lower, 'src> {
+    fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
+        if Lowerer::is_assignment_node(&node) {
+            let span = node.location();
+            let key = (span.start_offset(), span.end_offset());
+            if self.lowerer.lowered_assignment_spans.insert(key) {
+                self.lowerer.lower_node(&node);
+            }
+        }
+    }
+
     fn visit_call_node(&mut self, node: &CallNode<'pr>) {
         let span = node.location();
         let key = (span.start_offset(), span.end_offset());
