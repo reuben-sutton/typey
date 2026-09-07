@@ -8341,6 +8341,23 @@ impl<'src> Analyzer<'src> {
         result
     }
 
+    fn is_open_array_append_receiver(&self, node: &Node<'_>, environment: &Environment) -> bool {
+        if let Some(local) = node.as_local_variable_read_node() {
+            return environment
+                .open_array_locals
+                .contains(&prism::constant_name(local.name()));
+        }
+        let Some(call) = node.as_call_node() else {
+            return false;
+        };
+        matches!(
+            prism::constant_name(call.name()).as_str(),
+            "push" | "<<" | "prepend"
+        ) && call
+            .receiver()
+            .is_some_and(|receiver| self.is_open_array_append_receiver(&receiver, environment))
+    }
+
     fn static_type_value(&self, node: &Node<'_>) -> bool {
         let Some(call) = node.as_call_node() else {
             return false;
@@ -8910,16 +8927,18 @@ impl<'src> Analyzer<'src> {
                         environment.known_nonempty_array(&prism::constant_name(local.name()))
                     });
             let open_array_append = matches!(name.as_str(), "push" | "<<" | "prepend")
-                && receiver_node
-                    .as_ref()
-                    .and_then(Node::as_local_variable_read_node)
-                    .is_some_and(|local| {
-                        environment
-                            .open_array_locals
-                            .contains(&prism::constant_name(local.name()))
-                    });
+                && receiver_node.as_ref().is_some_and(|receiver| {
+                    self.is_open_array_append_receiver(receiver, environment)
+                });
             let dispatch_receiver_type = if call.is_safe_navigation() {
                 receiver_type.without(&Type::Nil)
+            } else if open_array_append && matches!(receiver_type, Type::Array(_) | Type::Tuple(_))
+            {
+                // An append expression rooted in an open array can be chained
+                // (`values << :symbol << integer`).  The nested expression's
+                // ordinary result is precise, but the open root still permits
+                // the outer append to widen the array element type.
+                Type::Array(Box::new(Type::Any))
             } else {
                 receiver_type.clone()
             };
