@@ -1381,5 +1381,6 @@ impl<'pr, 'lower, 'src> Visit<'pr> for NestedCallLowerer<'lower, 'src> {
         if self.lowerer.lowered_call_spans.insert(key) {
             self.lowerer.lower_call(&node.as_node(), node);
         }
+        ruby_prism::visit_call_node(self, node);
     }
 }

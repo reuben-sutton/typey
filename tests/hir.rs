@@ -219,3 +219,16 @@ fn unsupported_syntax_is_explicit_and_source_mapped() {
         .iter()
         .any(|expression| matches!(expression.kind, ExprKind::Unsupported(_))));
 }
+
+#[test]
+fn lowers_calls_nested_in_default_parameters() {
+    let program = expressions(
+        r#"def print_changes(path = File.expand_path("."))
+  path
+end
+"#,
+    );
+    assert!(program.expressions.iter().any(|expression| {
+        matches!(&expression.kind, ExprKind::Call(call) if call.name.as_str() == "expand_path")
+    }));
+}
