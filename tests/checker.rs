@@ -1084,6 +1084,11 @@ fn keeps_array_index_results_nilable() {
 }
 
 #[test]
+fn reports_nilable_array_indices_even_when_the_producer_is_untyped_to_sorbet() {
+    check_fixture("tests/fixtures/untyped_producer_array_index.rb");
+}
+
+#[test]
 fn checks_array_comparison_return_contracts() {
     check_fixture("tests/fixtures/array_comparison_contract.rb");
 }
