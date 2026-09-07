@@ -1812,6 +1812,11 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         let superclass = node.superclass().map(|superclass| {
             if struct_fields.is_some() {
                 "Struct".to_owned()
+            } else if superclass.as_self_node().is_some() {
+                self.class_stack
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| "Object".to_owned())
             } else {
                 self.scope_reference(&superclass)
             }
@@ -12124,6 +12129,23 @@ impl<'src> Analyzer<'src> {
             "lambda" | "proc" => Type::Proc(Vec::new(), Box::new(Type::Any)),
             "to_enum" | "enum_for" => Type::named("Enumerator"),
             "block_given?" => Type::bool(),
+            "loop" => {
+                if let Some(block) = block {
+                    let block_type = self.eval_block_node(block, &[Type::Any], environment);
+                    if block_type.is_never() {
+                        Type::Never
+                    } else {
+                        // A block may terminate the loop with `break`; when
+                        // that value cannot be recovered precisely, retain a
+                        // typed top rather than turning the whole call into
+                        // an unmodeled `T.untyped` send.
+                        Type::Object
+                    }
+                } else {
+                    Type::named("Enumerator")
+                }
+            }
+            "throw" => Type::Never,
             "binding" => Type::named("Binding"),
             "gem" => Type::named("Gem::Specification"),
             "rand" => Type::Float,
@@ -12169,6 +12191,13 @@ impl<'src> Analyzer<'src> {
             // later extended onto a class.
             "define_method" | "define_singleton_method" => Type::Symbol,
             _ => {
+                if let Some(block) = block {
+                    // Even when a global call has no modeled signature, Ruby
+                    // still evaluates its block.  Traverse it with an
+                    // unknown argument shape so concrete sends in the block
+                    // remain visible to inference and send accounting.
+                    let _ = self.eval_block_node(block, &[Type::Any], environment);
+                }
                 let _ = (node, argument_nodes, environment);
                 Type::Any
             }

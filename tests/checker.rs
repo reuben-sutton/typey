@@ -539,6 +539,11 @@ fn applies_rubys_implicit_object_superclass() {
 }
 
 #[test]
+fn resolves_self_as_a_class_superclass() {
+    check_fixture("tests/fixtures/self_superclass.rb");
+}
+
+#[test]
 fn applies_mixed_in_class_methods_to_including_classes() {
     check_fixture("tests/fixtures/mixes_in_class_methods.rb");
 }
@@ -6947,6 +6952,19 @@ value.each { |item| item.to_s }
     let send_start = source.rfind("item.to_s").expect("block send");
     assert!(result.types.iter().any(|inferred| {
         inferred.is_send && inferred.start == send_start && inferred.end == send_start + 9
+    }));
+}
+
+#[test]
+fn traverses_blocks_on_unmodeled_global_calls() {
+    let result = check_fixture("tests/fixtures/global_call_blocks.rb");
+    let source = std::fs::read_to_string("tests/fixtures/global_call_blocks.rb").unwrap();
+    let send_start = source.find("\"value\".upcase").expect("block send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send
+            && inferred.start == send_start
+            && inferred.end == send_start + "\"value\".upcase".len()
+            && inferred.type_ == Type::String
     }));
 }
 
