@@ -12193,6 +12193,13 @@ impl<'src> Analyzer<'src> {
                         _ => {}
                     }
                 }
+                if name == "<=>"
+                    && site.argument_types.first().is_some_and(|other| {
+                        self.definitely_comparable_array_tuple(elements, other)
+                    })
+                {
+                    return Type::Integer;
+                }
                 let element = elements
                     .iter()
                     .fold(Type::Never, |current, element| current.join(element));
@@ -12840,7 +12847,17 @@ impl<'src> Analyzer<'src> {
                 Type::Integer
             }
             "empty?" | "include?" | "intersect?" => Type::bool(),
-            "<=>" => Type::union([Type::Nil, Type::Integer]),
+            "<=>" => {
+                if site
+                    .argument_types
+                    .first()
+                    .is_some_and(|other| self.definitely_comparable_array_element(element, other))
+                {
+                    Type::Integer
+                } else {
+                    Type::union([Type::Nil, Type::Integer])
+                }
+            }
             "any?" | "all?" | "none?" => {
                 if let Some(block) = site.block {
                     let _ = self.eval_block_node(block, std::slice::from_ref(element), environment);
@@ -12943,6 +12960,41 @@ impl<'src> Analyzer<'src> {
                 Type::Named("Set".to_owned(), vec![element])
             }
             _ => Type::Any,
+        }
+    }
+
+    fn definitely_comparable_array_element(&self, left: &Type, right: &Type) -> bool {
+        match (left, right) {
+            (Type::Integer, Type::Integer)
+            | (Type::Integer, Type::Float)
+            | (Type::Float, Type::Integer)
+            | (Type::Float, Type::Float)
+            | (Type::String, Type::String)
+            | (Type::Symbol, Type::Symbol) => true,
+            (left, Type::Array(right)) => self.definitely_comparable_array_element(left, right),
+            (left, Type::Tuple(right)) => right
+                .iter()
+                .all(|right| self.definitely_comparable_array_element(left, right)),
+            (Type::Union(left), right) => left
+                .iter()
+                .all(|left| self.definitely_comparable_array_element(left, right)),
+            (left, Type::Union(right)) => right
+                .iter()
+                .all(|right| self.definitely_comparable_array_element(left, right)),
+            _ => false,
+        }
+    }
+
+    fn definitely_comparable_array_tuple(&self, left: &[Type], right: &Type) -> bool {
+        match right {
+            Type::Tuple(right) if left.len() == right.len() => left
+                .iter()
+                .zip(right)
+                .all(|(left, right)| self.definitely_comparable_array_element(left, right)),
+            Type::Array(right) => left
+                .iter()
+                .all(|left| self.definitely_comparable_array_element(left, right)),
+            _ => false,
         }
     }
 

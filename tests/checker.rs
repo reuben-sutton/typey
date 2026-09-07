@@ -1226,11 +1226,10 @@ fn models_array_intersection_predicates() {
 fn models_array_comparison() {
     let result = check_fixture("tests/fixtures/array_comparison.rb");
     assert!(
-        result.diagnostics.iter().any(|diagnostic| {
-            diagnostic
-                .message
-                .contains("Revealed type: `T.nilable(Integer)`")
-        }),
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Integer`") }),
         "{:?}",
         result.diagnostics
     );
