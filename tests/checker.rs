@@ -6974,6 +6974,21 @@ fn traverses_blocks_on_unmodeled_global_calls() {
 }
 
 #[test]
+fn traverses_defined_operands_without_reporting_their_runtime_probe_errors() {
+    let result = check_fixture("tests/fixtures/defined_operand_sends.rb");
+    let source = std::fs::read_to_string("tests/fixtures/defined_operand_sends.rb").unwrap();
+    let send_start = source
+        .find("\"value\".upcase")
+        .expect("defined operand send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send
+            && inferred.start == send_start
+            && inferred.end == send_start + "\"value\".upcase".len()
+            && inferred.type_ == Type::String
+    }));
+}
+
+#[test]
 fn traverses_blocks_on_unknown_super_calls() {
     let source = r#"
 class Parent

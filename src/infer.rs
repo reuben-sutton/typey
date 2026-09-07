@@ -155,8 +155,8 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     let mut keywords = result.keywords.clone();
     let mut block = result.block.clone();
     for (name, type_) in signature.param_names.iter().zip(&signature.params) {
-        let is_block_parameter = shape.has_block
-            && (name == "&" || shape.block_name.as_deref() == Some(name.as_str()));
+        let is_block_parameter =
+            shape.has_block && (name == "&" || shape.block_name.as_deref() == Some(name.as_str()));
         if is_block_parameter {
             if optional_proc_type(type_).is_some() {
                 // Preserve nilability here. It distinguishes Ruby's
@@ -2582,6 +2582,7 @@ pub(crate) fn check_with_policies(
         diagnostics: diagnostics.clone(),
         types: Vec::new(),
         untyped_origins: BTreeMap::new(),
+        suppress_diagnostics: false,
     };
     let result = analyzer.run(&root);
     (result, diagnostics)
@@ -2653,6 +2654,7 @@ struct Analyzer<'src> {
     diagnostics: Vec<Diagnostic>,
     types: Vec<InferredType>,
     untyped_origins: BTreeMap<(usize, usize), UntypedOrigin>,
+    suppress_diagnostics: bool,
 }
 
 impl<'src> Analyzer<'src> {
@@ -4496,7 +4498,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn error<'node>(&mut self, node: &Node<'node>, message: impl Into<String>) {
-        if !self.report {
+        if !self.report || self.suppress_diagnostics {
             return;
         }
         let (start, end) = prism::span(node);
@@ -4510,7 +4512,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn note<'node>(&mut self, node: &Node<'node>, message: impl Into<String>) {
-        if !self.report {
+        if !self.report || self.suppress_diagnostics {
             return;
         }
         let (start, end) = prism::span(node);
@@ -5380,7 +5382,15 @@ impl<'src> Analyzer<'src> {
             let type_ = self.apply_inline_assertion(node, environment.self_type.clone());
             return Eval::value(self.record(node, type_));
         }
-        if node.as_defined_node().is_some() {
+        if let Some(defined) = node.as_defined_node() {
+            // Sorbet inspects the operand of `defined?` for send accounting
+            // and type propagation, but it does not report ordinary missing
+            // API errors from that operand: the expression is only queried
+            // for whether it could be defined at runtime.
+            let previous_suppression = self.suppress_diagnostics;
+            self.suppress_diagnostics = true;
+            let _ = self.eval_node(&defined.value(), environment);
+            self.suppress_diagnostics = previous_suppression;
             let type_ = self.apply_inline_assertion(node, Type::union([Type::Nil, Type::String]));
             return Eval::value(self.record(node, type_));
         }
