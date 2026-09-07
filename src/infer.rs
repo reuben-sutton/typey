@@ -4319,7 +4319,7 @@ impl<'src> Analyzer<'src> {
 
     fn eval_index_access<'node>(
         &mut self,
-        receiver_node: Option<Node<'node>>,
+        receiver_node: Option<&Node<'node>>,
         arguments: Option<ruby_prism::ArgumentsNode<'node>>,
         environment: &mut Environment,
     ) -> IndexAccess<'node> {
@@ -4353,13 +4353,32 @@ impl<'src> Analyzer<'src> {
         kind: IndexAssignmentKind,
         environment: &mut Environment,
     ) -> Eval {
-        let access = self.eval_index_access(receiver_node, arguments, environment);
-        let site = CallSite {
-            argument_nodes: &access.arguments.argument_nodes,
-            argument_types: &access.arguments.argument_types,
-            block: None,
-        };
-        let current = self.eval_method_call(&access.receiver_type, "[]", &site, environment);
+        let access = self.eval_index_access(receiver_node.as_ref(), arguments, environment);
+        let current = receiver_node
+            .as_ref()
+            .and_then(|receiver| {
+                self.receiver_method_key(Some(receiver), &access.receiver_type, "[]", environment)
+            })
+            .and_then(|key| {
+                self.eval_resolved_receiver_call(
+                    node,
+                    "[]",
+                    &key,
+                    &access.receiver_type,
+                    &access.arguments,
+                    None,
+                    environment,
+                )
+                .map(|(type_, _)| type_)
+            })
+            .unwrap_or_else(|| {
+                let site = CallSite {
+                    argument_nodes: &access.arguments.argument_nodes,
+                    argument_types: &access.arguments.argument_types,
+                    block: None,
+                };
+                self.eval_method_call(&access.receiver_type, "[]", &site, environment)
+            });
         let value_result = match kind {
             IndexAssignmentKind::Operator(operator) => self.eval_compound_assignment(
                 current.without(&Type::Nil),

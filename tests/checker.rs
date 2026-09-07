@@ -319,6 +319,38 @@ fn models_extend_self_as_module_singleton_methods() {
 }
 
 #[test]
+fn resolves_module_singleton_index_methods() {
+    let result = check_fixture("tests/fixtures/module_singleton_index.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type:"))
+            .count(),
+        2,
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(String)`")));
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `String`"))
+            .count(),
+        1,
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn handles_packwerk_false_positive_patterns() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs read");
