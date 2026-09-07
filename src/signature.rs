@@ -127,6 +127,13 @@ pub struct InlineAssertion {
     pub offset: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignatureError {
+    pub start: usize,
+    pub end: usize,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct AnnotationTable {
     /// Legacy name-keyed annotations used by the standalone parser helper.
@@ -145,6 +152,7 @@ pub struct AnnotationTable {
     /// RBS class-level type parameters attached to real class declarations.
     pub class_type_parameters: BTreeMap<usize, Vec<String>>,
     pub assertions: BTreeMap<usize, InlineAssertion>,
+    pub signature_errors: Vec<SignatureError>,
 }
 
 #[derive(Clone, Debug)]
@@ -289,6 +297,7 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
     table.methods.clear();
     table.method_annotations.clear();
     table.attribute_annotations.clear();
+    table.signature_errors.clear();
 
     let mut nodes = AnnotationNodes::default();
     nodes.visit(root);
@@ -298,6 +307,16 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
     nodes
         .signatures
         .sort_unstable_by_key(|(start, end)| (*end, *start));
+
+    for (start, end) in &nodes.signatures {
+        for relative_start in malformed_proc_offsets(&source[*start..*end]) {
+            table.signature_errors.push(SignatureError {
+                start: *start + relative_start,
+                end: *start + relative_start + "T.proc".len(),
+                message: "Malformed T.proc: You must specify a return type".to_owned(),
+            });
+        }
+    }
 
     let lines = line_spans(source);
     let mut definitions_by_line = BTreeMap::<usize, Vec<usize>>::new();
@@ -541,6 +560,86 @@ fn only_trivia_or_method_modifier(mut source: &[u8]) -> bool {
         };
         source = &rest[modifier.len()..];
     }
+}
+
+fn malformed_proc_offsets(text: &str) -> Vec<usize> {
+    const NEEDLE: &str = "T.proc";
+    let bytes = text.as_bytes();
+    let mut offsets = Vec::new();
+    let mut search_start = 0;
+    while let Some(relative) = text[search_start..].find(NEEDLE) {
+        let start = search_start + relative;
+        let before_is_identifier = start
+            .checked_sub(1)
+            .and_then(|index| bytes.get(index))
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+        if !before_is_identifier && !proc_has_return_type(text, start + NEEDLE.len()) {
+            offsets.push(start);
+        }
+        search_start = start + NEEDLE.len();
+    }
+    offsets
+}
+
+fn proc_has_return_type(text: &str, mut index: usize) -> bool {
+    let bytes = text.as_bytes();
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(current_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == current_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'(' => paren += 1,
+            b')' => {
+                if paren == 0 && bracket == 0 && brace == 0 {
+                    return false;
+                }
+                paren = paren.saturating_sub(1);
+            }
+            b'[' => bracket += 1,
+            b']' => {
+                if bracket == 0 && paren == 0 && brace == 0 {
+                    return false;
+                }
+                bracket = bracket.saturating_sub(1);
+            }
+            b'{' => brace += 1,
+            b'}' => {
+                if paren == 0 && bracket == 0 && brace == 0 {
+                    return false;
+                }
+                brace = brace.saturating_sub(1);
+            }
+            b',' | b';' if paren == 0 && bracket == 0 && brace == 0 => return false,
+            b'.' if paren == 0 && bracket == 0 && brace == 0 => {
+                let rest = &text[index..];
+                if rest.starts_with(".returns(") || rest.starts_with(".void") {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    false
 }
 
 #[must_use]

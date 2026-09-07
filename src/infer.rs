@@ -2232,7 +2232,7 @@ pub(crate) fn check_with_policies(
     let parsed = prism::parse(bytes);
     let root = parsed.node();
     let annotations = signature::collect_for_ast(source, &root);
-    let diagnostics = parsed
+    let mut diagnostics = parsed
         .errors()
         .map(|error| {
             let location = error.location();
@@ -2240,6 +2240,12 @@ pub(crate) fn check_with_policies(
             Diagnostic::error(bytes, error.message(), start, end)
         })
         .collect::<Vec<_>>();
+    diagnostics.extend(
+        annotations
+            .signature_errors
+            .iter()
+            .map(|error| Diagnostic::error(bytes, &error.message, error.start, error.end)),
+    );
     if config.debug {
         eprintln!(
             "[typey] Prism parse complete: {} syntax diagnostics, {} method annotations, {} inline assertions",

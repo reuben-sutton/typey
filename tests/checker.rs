@@ -77,6 +77,11 @@ fn checks_sorbet_sig_calls() {
 }
 
 #[test]
+fn reports_malformed_sorbet_proc_signatures() {
+    check_fixture("tests/fixtures/malformed_bound_proc_signature.rb");
+}
+
+#[test]
 fn models_sorbet_struct_props_as_typed_accessors() {
     let result = check_fixture("tests/fixtures/t_struct_props.rb");
     let reveals = result
