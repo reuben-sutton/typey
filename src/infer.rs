@@ -5666,6 +5666,14 @@ impl<'src> Analyzer<'src> {
             }
         }
         let else_result = if let Some(else_clause) = case_node.else_clause() {
+            if let Some(predicate) = predicate.as_ref() {
+                self.narrow_case_target_without(
+                    predicate,
+                    &mut else_environment,
+                    &covered_type,
+                    all_conditions_are_type_tests,
+                );
+            }
             if let Some(statements) = else_clause.statements() {
                 self.eval_statements(&statements, &mut else_environment)
             } else {
@@ -5777,6 +5785,27 @@ impl<'src> Analyzer<'src> {
 
     fn is_case_type_test(node: &Node<'_>, value_type: &Type) -> bool {
         Self::class_object_instance_type(value_type).is_some()
+            || node.as_constant_read_node().is_some_and(|constant| {
+                matches!(
+                    prism::constant_name(constant.name()).as_str(),
+                    "Array"
+                        | "BasicObject"
+                        | "Class"
+                        | "Complex"
+                        | "FalseClass"
+                        | "Float"
+                        | "Hash"
+                        | "Integer"
+                        | "NilClass"
+                        | "Numeric"
+                        | "Object"
+                        | "Rational"
+                        | "Regexp"
+                        | "String"
+                        | "Symbol"
+                        | "TrueClass"
+                )
+            })
             || node.as_true_node().is_some()
             || node.as_false_node().is_some()
             || node.as_nil_node().is_some()
@@ -13500,6 +13529,11 @@ impl<'src> Analyzer<'src> {
                 if arguments.len() == 1 && name_matches(name, "Array") =>
             {
                 self.is_assignable(actual, &arguments[0])
+            }
+            (Type::Array(_) | Type::Tuple(_), Type::Named(name, arguments))
+                if arguments.is_empty() && name_matches(name, "Array") =>
+            {
+                true
             }
             (Type::Tuple(actual), Type::Named(name, arguments))
                 if arguments.len() == 1 && name_matches(name, "Array") =>

@@ -138,6 +138,12 @@ fn preserves_positional_types_in_multi_assignment_rhs_tuples() {
 }
 
 #[test]
+fn narrows_exhaustive_case_type_tests_to_noreturn() {
+    let result = check_fixture("tests/fixtures/case_exhaustiveness.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn reports_missing_methods_in_typed_true_files() {
     check_fixture("tests/fixtures/typed_true_missing_api.rb");
 }
