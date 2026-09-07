@@ -5614,7 +5614,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn bind_rescue_reference_locals<'node>(
-        &self,
+        &mut self,
         first: ruby_prism::RescueNode<'node>,
         environment: &mut Environment,
     ) {
@@ -6353,11 +6353,20 @@ impl<'src> Analyzer<'src> {
     }
 
     fn bind_for_target<'node>(
-        &self,
+        &mut self,
         target: &Node<'node>,
         type_: Type,
         environment: &mut Environment,
     ) {
+        if let Some(target) = target.as_instance_variable_target_node() {
+            let name = prism::constant_name(target.name());
+            let target_node = target.as_node();
+            let type_ =
+                self.apply_inline_assertion_in_environment(&target_node, type_, environment);
+            self.observe_ivar(environment, name.clone(), &type_, false);
+            environment.bind(ivar_refinement_key(&name), type_);
+            return;
+        }
         if let Some(write) = target.as_local_variable_write_node() {
             let name = prism::constant_name(write.name());
             let open_array = matches!(&type_, Type::Array(element) if element.is_never());
