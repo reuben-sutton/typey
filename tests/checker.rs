@@ -614,6 +614,26 @@ fn destructures_typed_tuple_elements_in_collection_blocks() {
 }
 
 #[test]
+fn destructures_literal_pair_elements_in_collection_blocks() {
+    let result = check_fixture("tests/fixtures/literal_pair_block_destructuring.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Note)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes
+            .iter()
+            .filter(|message| message.contains("String"))
+            .count(),
+        2,
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn preserves_typed_ivar_elements_through_empty_resets() {
     let result = check_fixture("tests/fixtures/typed_ivar_empty_reset.rb");
     assert!(
@@ -903,6 +923,11 @@ fn models_array_comparison() {
         "{:?}",
         result.diagnostics
     );
+}
+
+#[test]
+fn keeps_array_index_results_nilable() {
+    check_fixture("tests/fixtures/array_index_nilable.rb");
 }
 
 #[test]

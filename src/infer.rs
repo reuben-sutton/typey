@@ -2251,6 +2251,7 @@ pub(crate) fn check_with_policies(
         debug_nodes: 0,
         defer_inline_assertions: false,
         preserve_literal_tuples: false,
+        preserve_nested_literal_tuples: false,
         literal_tuple_depth: 0,
         expected_return_type: None,
         substitution_context: None,
@@ -2321,6 +2322,7 @@ struct Analyzer<'src> {
     debug_nodes: usize,
     defer_inline_assertions: bool,
     preserve_literal_tuples: bool,
+    preserve_nested_literal_tuples: bool,
     literal_tuple_depth: usize,
     expected_return_type: Option<Type>,
     substitution_context: Option<MethodKey>,
@@ -5089,7 +5091,9 @@ impl<'src> Analyzer<'src> {
                 // array.  Keeping `Never` here lets a concrete sibling
                 // branch refine it during tuple joins without losing the
                 // tuple's known component types.
-                if self.preserve_literal_tuples && tuple_depth > 0 {
+                if (self.preserve_literal_tuples || self.preserve_nested_literal_tuples)
+                    && tuple_depth > 0
+                {
                     Type::Never
                 } else {
                     Type::Any
@@ -5098,7 +5102,8 @@ impl<'src> Analyzer<'src> {
                 element
             };
             let inferred = if fixed_length
-                && (self.preserve_literal_tuples && tuple_depth == 0
+                && ((self.preserve_literal_tuples && tuple_depth == 0)
+                    || (self.preserve_nested_literal_tuples && tuple_depth > 0)
                     || self.expected_return_type.as_ref().is_some_and(|expected| {
                         tuple_depth == 0
                             && matches!(expected, Type::Tuple(elements) if elements.len() == element_types.len())
@@ -8273,8 +8278,18 @@ impl<'src> Analyzer<'src> {
         let mut abrupt_flow = evaluated.abrupt_flow;
         let mut all_normal = evaluated.all_normal;
         let receiver_node = call.receiver();
+        let block = call.block();
+        let preserve_nested_literal_tuples = receiver_node.as_ref().is_some_and(|receiver| {
+            receiver.as_array_node().is_some()
+                && block
+                    .as_ref()
+                    .is_some_and(Self::block_has_multiple_required_parameters)
+        });
         let mut receiver_type = if let Some(receiver) = receiver_node.as_ref() {
+            let previous_preserve_nested_literal_tuples = self.preserve_nested_literal_tuples;
+            self.preserve_nested_literal_tuples |= preserve_nested_literal_tuples;
             let result = self.eval_node(receiver, environment);
+            self.preserve_nested_literal_tuples = previous_preserve_nested_literal_tuples;
             abrupt = abrupt.join(&result.abrupt);
             abrupt_flow = abrupt_flow.union(result.flow.without(FlowKind::Normal));
             all_normal &= result.flow.contains(FlowKind::Normal);
@@ -8348,7 +8363,6 @@ impl<'src> Analyzer<'src> {
                 format!("Used `&.` operator on `{receiver_type}`, which can never be nil"),
             );
         }
-        let block = call.block();
         let mut untyped_origin = None;
         let mut callee_type = if receiver_node.as_ref().is_some_and(|receiver| {
             self.constant_reference_name(receiver)
@@ -12931,6 +12945,20 @@ impl<'src> Analyzer<'src> {
             .filter_map(|parameter| parameter.as_required_parameter_node())
             .nth(index)
             .map(|parameter| prism::constant_name(parameter.name()))
+    }
+
+    fn block_has_multiple_required_parameters(node: &Node<'_>) -> bool {
+        let Some(block) = node.as_block_node() else {
+            return false;
+        };
+        let Some(parameters) = block.parameters() else {
+            return false;
+        };
+        let parameters = parameters
+            .as_block_parameters_node()
+            .and_then(|parameters| parameters.parameters())
+            .or_else(|| parameters.as_parameters_node());
+        parameters.is_some_and(|parameters| parameters.requireds().len() > 1)
     }
 
     fn destructure_block_parameters<'node>(
