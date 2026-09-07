@@ -170,6 +170,19 @@ fn preserves_tuple_components_through_conditional_multi_assignment() {
 }
 
 #[test]
+fn preserves_fixed_tuple_positions_through_rbi_dispatch() {
+    let result = check_fixture("tests/fixtures/tuple_first_dispatch.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(String)`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn narrows_exhaustive_case_type_tests_to_noreturn() {
     let result = check_fixture("tests/fixtures/case_exhaustiveness.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

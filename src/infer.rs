@@ -8804,6 +8804,14 @@ impl<'src> Analyzer<'src> {
                 }
                 if let Some(type_) = tsort_type {
                     type_
+                } else if matches!(&dispatch_receiver_type, Type::Tuple(_))
+                    && matches!(name.as_str(), "first" | "last")
+                    && argument_types.is_empty()
+                {
+                    // A fixed tuple is more precise than the generic Array
+                    // RBI: preserve its positional component for methods
+                    // such as `first` and `last`.
+                    self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
                 } else if matches!(&dispatch_receiver_type, Type::Array(_) | Type::Tuple(_))
                     && self
                         .resolve_method_key(&key)
@@ -9337,6 +9345,27 @@ impl<'src> Analyzer<'src> {
             self.eval_tsort_method(receiver_type, name, environment, resolved_owner.as_deref())
         {
             return Some((type_, false));
+        }
+        if matches!(receiver_type, Type::Tuple(_))
+            && matches!(name, "first" | "last")
+            && arguments.argument_types.is_empty()
+        {
+            // A fixed tuple is more precise than the generic Array RBI.  In
+            // particular, `const_source_location(...).first` is known to be
+            // the tuple's String component, not an unresolved Array::Elem.
+            return Some((
+                self.eval_method_call(
+                    receiver_type,
+                    name,
+                    &CallSite {
+                        argument_nodes: &arguments.argument_nodes,
+                        argument_types: &arguments.argument_types,
+                        block,
+                    },
+                    environment,
+                ),
+                false,
+            ));
         }
         self.record_method_dependency(key, environment);
         let inferred_accessor = self
@@ -11368,6 +11397,13 @@ impl<'src> Analyzer<'src> {
         match receiver {
             Type::Array(element) => self.eval_array_method(element, name, site, environment),
             Type::Tuple(elements) => {
+                if site.argument_types.is_empty() {
+                    match name {
+                        "first" => return elements.first().cloned().unwrap_or(Type::Nil),
+                        "last" => return elements.last().cloned().unwrap_or(Type::Nil),
+                        _ => {}
+                    }
+                }
                 let element = elements
                     .iter()
                     .fold(Type::Never, |current, element| current.join(element));
