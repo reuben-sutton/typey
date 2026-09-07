@@ -4387,6 +4387,12 @@ impl<'src> Analyzer<'src> {
                 let known_length = multi
                     .value()
                     .as_array_node()
+                    .filter(|array| {
+                        array
+                            .elements()
+                            .iter()
+                            .all(|element| element.as_splat_node().is_none())
+                    })
                     .map(|array| array.elements().len());
                 for (index, target) in lefts.iter().enumerate() {
                     self.bind_for_target(

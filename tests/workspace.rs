@@ -397,3 +397,35 @@ fn unsigned_rbi_declarations_are_untyped_not_noreturn() {
         result.diagnostics
     );
 }
+
+#[test]
+fn preserves_unknown_types_through_rbi_splat_multi_assignment() {
+    let files = [
+        WorkspaceFile::new(
+            "tests/fixtures/dynamic_rbi_splat.rbi",
+            std::fs::read_to_string("tests/fixtures/dynamic_rbi_splat.rbi")
+                .expect("fixture exists"),
+        ),
+        WorkspaceFile::new(
+            "tests/fixtures/dynamic_rbi_splat.rb",
+            std::fs::read_to_string("tests/fixtures/dynamic_rbi_splat.rb")
+                .expect("fixture exists"),
+        ),
+    ];
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(
+        !result.has_errors(),
+        "unexpected workspace diagnostics: {:?}",
+        result.diagnostics
+    );
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.diagnostic.message.contains("Revealed type: `T.untyped`"))
+            .count(),
+        3,
+        "unexpected reveals: {:?}",
+        result.diagnostics
+    );
+}
