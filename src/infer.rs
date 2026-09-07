@@ -1,9 +1,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::directives::{effective_typed_mode, is_typed_ignore, typed_mode, TypedMode};
+use crate::hir;
 use crate::prism;
 use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
 use crate::types::{Type, TypeLattice};
-use ruby_prism::{CallNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit};
+use ruby_prism::{
+    ArgumentsNode, CallNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit,
+};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -471,6 +474,10 @@ pub struct CheckerConfig {
     pub strictness: Strictness,
     /// Emit phase and progress information to stderr while checking.
     pub debug: bool,
+    /// Evaluate ordinary calls through the owned HIR call view. This remains
+    /// configurable during migration so fixtures can compare the old Prism
+    /// path with the HIR path.
+    pub use_hir_calls: bool,
 }
 
 impl Default for CheckerConfig {
@@ -478,6 +485,7 @@ impl Default for CheckerConfig {
         Self {
             strictness: Strictness::Ignore,
             debug: false,
+            use_hir_calls: true,
         }
     }
 }
@@ -726,6 +734,33 @@ struct CallSite<'a, 'node> {
     argument_nodes: &'a [Node<'node>],
     argument_types: &'a [Type],
     block: Option<&'a Node<'node>>,
+}
+
+pub(super) enum CallArgumentInput<'node> {
+    Forwarded {
+        node: Node<'node>,
+    },
+    Positional {
+        node: Node<'node>,
+    },
+    Splat {
+        node: Node<'node>,
+        expression: Option<Node<'node>>,
+    },
+    KeywordHash {
+        node: Node<'node>,
+        entries: Vec<KeywordArgumentInput<'node>>,
+    },
+}
+
+pub(super) enum KeywordArgumentInput<'node> {
+    Pair {
+        key: Node<'node>,
+        value: Node<'node>,
+        name: Option<String>,
+    },
+    Splat(Option<Node<'node>>),
+    Forwarded,
 }
 
 struct KeywordArgument<'node> {
@@ -1197,6 +1232,19 @@ pub(crate) fn check_with_policies(
     }
     let parsed = prism::parse(bytes);
     let root = parsed.node();
+    let hir_program = if config.use_hir_calls {
+        hir::lower(hir::FileId(0), bytes)
+    } else {
+        hir::Program::default()
+    };
+    let mut hir_call_ids = HashMap::new();
+    for (index, expression) in hir_program.expressions.iter().enumerate() {
+        if matches!(&expression.kind, hir::ExprKind::Call(_)) {
+            hir_call_ids
+                .entry((expression.span.start as usize, expression.span.end as usize))
+                .or_insert(hir::ExprId(index as u32));
+        }
+    }
     let annotations = signature::collect_for_ast(source, &root);
     let mut diagnostics = parsed
         .errors()
@@ -1222,6 +1270,8 @@ pub(crate) fn check_with_policies(
     }
     let analyzer = Analyzer {
         source: bytes,
+        hir_program,
+        hir_call_ids,
         line_map: prism::LineMap::new(bytes),
         has_inline_assertions: !annotations.assertions.is_empty(),
         annotations,
@@ -1271,6 +1321,8 @@ fn source_strictness_ranges(source: &str) -> Vec<(usize, usize, Strictness)> {
 
 struct Analyzer<'src> {
     source: &'src [u8],
+    hir_program: hir::Program,
+    hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     line_map: prism::LineMap,
     has_inline_assertions: bool,
     annotations: AnnotationTable,
@@ -1305,7 +1357,215 @@ struct Analyzer<'src> {
     suppress_diagnostics: bool,
 }
 
+/// A call shape whose semantic fields come from owned HIR. During this
+/// migration the Prism call is retained only as a child-node bridge so the
+/// existing evaluator can still evaluate receiver and argument expressions.
+/// The evaluator itself never asks the Prism node to decide the call shape.
+pub(super) struct HirCallView<'node> {
+    pub(super) call: hir::Call,
+    prism_call: CallNode<'node>,
+}
+
+pub(super) trait CallShape<'node> {
+    fn name(&self) -> String;
+    fn argument_inputs(&self) -> Vec<CallArgumentInput<'node>>;
+    fn receiver(&self) -> Option<Node<'node>>;
+    fn block(&self) -> Option<Node<'node>>;
+    fn is_safe_navigation(&self) -> bool;
+}
+
+impl<'node> CallShape<'node> for CallNode<'node> {
+    fn name(&self) -> String {
+        prism::constant_name(self.name())
+    }
+
+    fn argument_inputs(&self) -> Vec<CallArgumentInput<'node>> {
+        prism_call_argument_inputs(self.arguments())
+    }
+
+    fn receiver(&self) -> Option<Node<'node>> {
+        self.receiver()
+    }
+
+    fn block(&self) -> Option<Node<'node>> {
+        self.block()
+    }
+
+    fn is_safe_navigation(&self) -> bool {
+        self.is_safe_navigation()
+    }
+}
+
+impl<'node> CallShape<'node> for HirCallView<'node> {
+    fn name(&self) -> String {
+        self.call.name.as_str().to_owned()
+    }
+
+    fn argument_inputs(&self) -> Vec<CallArgumentInput<'node>> {
+        hir_call_argument_inputs(&self.call.arguments, self.prism_call.arguments())
+    }
+
+    fn receiver(&self) -> Option<Node<'node>> {
+        self.prism_call.receiver()
+    }
+
+    fn block(&self) -> Option<Node<'node>> {
+        self.prism_call.block()
+    }
+
+    fn is_safe_navigation(&self) -> bool {
+        self.call.safe_navigation
+    }
+}
+
+fn prism_call_argument_inputs<'node>(
+    arguments: Option<ArgumentsNode<'node>>,
+) -> Vec<CallArgumentInput<'node>> {
+    arguments.map_or_else(Vec::new, |arguments| {
+        arguments
+            .arguments()
+            .into_iter()
+            .map(|argument| {
+                if argument.as_forwarding_arguments_node().is_some() {
+                    return CallArgumentInput::Forwarded { node: argument };
+                }
+                if let Some(splat) = argument.as_splat_node() {
+                    return CallArgumentInput::Splat {
+                        node: argument,
+                        expression: splat.expression(),
+                    };
+                }
+                if let Some(keyword_hash) = argument.as_keyword_hash_node() {
+                    let entries = keyword_hash
+                        .elements()
+                        .into_iter()
+                        .map(|child| {
+                            if let Some(assoc) = child.as_assoc_node() {
+                                let key = assoc.key();
+                                let name = key.as_symbol_node().map(|symbol| {
+                                    String::from_utf8_lossy(symbol.unescaped()).into_owned()
+                                });
+                                KeywordArgumentInput::Pair {
+                                    key,
+                                    value: assoc.value(),
+                                    name,
+                                }
+                            } else if let Some(splat) = child.as_assoc_splat_node() {
+                                splat
+                                    .value()
+                                    .map_or(KeywordArgumentInput::Forwarded, |value| {
+                                        KeywordArgumentInput::Splat(Some(value))
+                                    })
+                            } else {
+                                KeywordArgumentInput::Forwarded
+                            }
+                        })
+                        .collect();
+                    return CallArgumentInput::KeywordHash {
+                        node: argument,
+                        entries,
+                    };
+                }
+                CallArgumentInput::Positional { node: argument }
+            })
+            .collect()
+    })
+}
+
+fn hir_call_argument_inputs<'node>(
+    arguments: &[hir::Argument],
+    prism_arguments: Option<ArgumentsNode<'node>>,
+) -> Vec<CallArgumentInput<'node>> {
+    let raw = prism_call_argument_inputs(prism_arguments);
+    let mut hir_index = 0;
+    let mut result = Vec::with_capacity(raw.len());
+    for input in raw {
+        match input {
+            CallArgumentInput::KeywordHash { node, entries } => {
+                let mut entries = entries.into_iter();
+                let mut hir_entries = Vec::new();
+                while let Some(argument) = arguments.get(hir_index) {
+                    match argument {
+                        hir::Argument::Keyword { name, .. } => {
+                            let Some(KeywordArgumentInput::Pair { key, value, .. }) =
+                                entries.next()
+                            else {
+                                break;
+                            };
+                            hir_entries.push(KeywordArgumentInput::Pair {
+                                key,
+                                value,
+                                name: Some(name.as_str().to_owned()),
+                            });
+                            hir_index += 1;
+                        }
+                        hir::Argument::KeywordSplat(_) => {
+                            let Some(KeywordArgumentInput::Splat(value)) = entries.next() else {
+                                break;
+                            };
+                            hir_entries.push(KeywordArgumentInput::Splat(value));
+                            hir_index += 1;
+                        }
+                        hir::Argument::Forwarded => {
+                            let Some(KeywordArgumentInput::Forwarded) = entries.next() else {
+                                break;
+                            };
+                            hir_entries.push(KeywordArgumentInput::Forwarded);
+                            hir_index += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                result.push(CallArgumentInput::KeywordHash {
+                    node,
+                    entries: hir_entries,
+                });
+            }
+            CallArgumentInput::Forwarded { node } => {
+                if matches!(arguments.get(hir_index), Some(hir::Argument::Forwarded)) {
+                    hir_index += 1;
+                }
+                result.push(CallArgumentInput::Forwarded { node });
+            }
+            CallArgumentInput::Splat { node, expression } => {
+                if matches!(arguments.get(hir_index), Some(hir::Argument::Splat(_))) {
+                    hir_index += 1;
+                }
+                result.push(CallArgumentInput::Splat { node, expression });
+            }
+            CallArgumentInput::Positional { node } => {
+                if matches!(arguments.get(hir_index), Some(hir::Argument::Positional(_))) {
+                    hir_index += 1;
+                }
+                result.push(CallArgumentInput::Positional { node });
+            }
+        }
+    }
+    result
+}
+
 impl<'src> Analyzer<'src> {
+    fn hir_call_view<'node>(
+        &self,
+        node: &Node<'_>,
+        prism_call: CallNode<'node>,
+    ) -> Option<HirCallView<'node>> {
+        let span = prism::span(node);
+        let expression_id = self.hir_call_ids.get(&span)?;
+        let hir::ExprKind::Call(call) = &self
+            .hir_program
+            .expressions
+            .get(expression_id.0 as usize)?
+            .kind
+        else {
+            return None;
+        };
+        Some(HirCallView {
+            call: call.clone(),
+            prism_call,
+        })
+    }
+
     fn is_send_node(node: &Node<'_>) -> bool {
         node.as_call_node().is_some()
             || node.as_call_and_write_node().is_some()
@@ -2287,10 +2547,8 @@ impl<'src> Analyzer<'src> {
             || Eval::value(Type::Object),
             |receiver| self.eval_node(receiver, environment),
         );
-        let argument_nodes = arguments
-            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
-            .unwrap_or_default();
-        let evaluated = self.evaluate_call_arguments(argument_nodes, environment);
+        let argument_inputs = prism_call_argument_inputs(arguments);
+        let evaluated = self.evaluate_call_arguments(argument_inputs, environment);
         let receiver_type = receiver_result.normal_type.clone().unwrap_or(Type::Never);
         IndexAccess {
             receiver_type,
@@ -2527,6 +2785,12 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, Type::Nil));
         }
         if let Some(call) = node.as_call_node() {
+            if self.config.use_hir_calls && self.hir_call_ids.contains_key(&prism::span(node)) {
+                let hir_call = self
+                    .hir_call_view(node, call)
+                    .expect("HIR call index must resolve to a call expression");
+                return self.eval_call_result(node, &hir_call, environment);
+            }
             return self.eval_call_result(node, &call, environment);
         }
         if let Some(multi) = node.as_multi_write_node() {
@@ -3368,11 +3632,8 @@ impl<'src> Analyzer<'src> {
             return Eval::continued(self.record(node, type_));
         }
         if let Some(yield_node) = node.as_yield_node() {
-            let argument_nodes = yield_node
-                .arguments()
-                .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
-                .unwrap_or_default();
-            let evaluated = self.evaluate_call_arguments(argument_nodes, environment);
+            let argument_inputs = prism_call_argument_inputs(yield_node.arguments());
+            let evaluated = self.evaluate_call_arguments(argument_inputs, environment);
             let arguments = evaluated.arguments;
             let argument_types = arguments.argument_types.clone();
             let method_key = environment.method_key.clone();
@@ -3561,10 +3822,10 @@ impl<'src> Analyzer<'src> {
         Eval::value(self.record(node, type_))
     }
 
-    fn eval_call_result<'node>(
+    fn eval_call_result<'node, C: CallShape<'node>>(
         &mut self,
         node: &Node<'node>,
-        call: &CallNode<'node>,
+        call: &C,
         environment: &mut Environment,
     ) -> Eval {
         let mut result = self.eval_call(node, call, environment);
@@ -4872,10 +5133,7 @@ impl<'src> Analyzer<'src> {
                 forwards_arguments: true,
             }
         } else {
-            let argument_nodes = arguments
-                .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
-                .unwrap_or_default();
-            self.evaluate_call_arguments(argument_nodes, environment)
+            self.evaluate_call_arguments(prism_call_argument_inputs(arguments), environment)
                 .arguments
         };
         let Some(target) = target else {
@@ -6789,14 +7047,14 @@ impl<'src> Analyzer<'src> {
                 && self.nominal_subtype(current_owner, &resolved_owner))
     }
 
-    fn call_terminates<'node>(
+    fn call_terminates<'node, C: CallShape<'node>>(
         &self,
-        call: &CallNode<'node>,
+        call: &C,
         environment: &Environment,
         receiver_type: &Type,
         type_: &Type,
     ) -> bool {
-        let name = prism::constant_name(call.name());
+        let name = call.name();
         if call.receiver().is_none()
             && matches!(name.as_str(), "raise" | "fail" | "abort" | "exit" | "exit!")
         {

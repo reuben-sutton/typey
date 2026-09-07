@@ -1,5 +1,5 @@
 use super::{
-    name_matches, prism, Analyzer, CallNode, CallSite, Environment, Eval, Flow, FlowKind, Node,
+    name_matches, prism, Analyzer, CallShape, CallSite, Environment, Eval, Flow, FlowKind, Node,
     OutcomeTypes, UntypedOrigin, Visibility,
 };
 use crate::types::Type;
@@ -106,18 +106,15 @@ impl<'src> Analyzer<'src> {
         }
     }
 
-    pub(super) fn eval_call<'node>(
+    pub(super) fn eval_call<'node, C: CallShape<'node>>(
         &mut self,
         node: &Node<'node>,
-        call: &CallNode<'node>,
+        call: &C,
         environment: &mut Environment,
     ) -> Eval {
-        let name = prism::constant_name(call.name());
-        let argument_nodes = call
-            .arguments()
-            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
-            .unwrap_or_default();
-        let evaluated = self.evaluate_call_arguments(argument_nodes, environment);
+        let name = call.name();
+        let argument_inputs = call.argument_inputs();
+        let evaluated = self.evaluate_call_arguments(argument_inputs, environment);
         let arguments = evaluated.arguments;
         let argument_types = &arguments.argument_types;
         let mut abrupt = evaluated.abrupt;
