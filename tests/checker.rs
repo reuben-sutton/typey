@@ -6517,6 +6517,16 @@ fn models_dynamic_struct_subclasses() {
 }
 
 #[test]
+fn checks_to_enum_return_contracts() {
+    let result = check_fixture("tests/fixtures/to_enum_return_contract.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Expected method `select` to return `Parameters`")
+    }));
+}
+
+#[test]
 fn infers_array_coercions_from_scalar_types() {
     let result = check(
         r#"

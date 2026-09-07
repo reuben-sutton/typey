@@ -12122,7 +12122,8 @@ impl<'src> Analyzer<'src> {
                 Type::Hash(Box::new(Type::Any), Box::new(Type::Any))
             }
             "lambda" | "proc" => Type::Proc(Vec::new(), Box::new(Type::Any)),
-            "enum_for" => Type::named("Enumerator"),
+            "to_enum" | "enum_for" => Type::named("Enumerator"),
+            "block_given?" => Type::bool(),
             "binding" => Type::named("Binding"),
             "gem" => Type::named("Gem::Specification"),
             "rand" => Type::Float,
@@ -13750,6 +13751,7 @@ impl<'src> Analyzer<'src> {
     fn eval_common_method(&self, name: &str) -> Type {
         match name {
             "to_s" | "inspect" => Type::String,
+            "to_enum" | "enum_for" => Type::named("Enumerator"),
             "id" | "object_id" | "hash" => Type::Integer,
             "respond_to?" | "frozen?" => Type::bool(),
             "nil?" | "to_a" => {
