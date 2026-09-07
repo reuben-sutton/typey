@@ -13214,7 +13214,16 @@ impl<'src> Analyzer<'src> {
             let superclass = info
                 .superclass
                 .as_deref()
-                .map(|name| self.resolve_name(name, Some(&owner)))
+                .map(|name| {
+                    let name = name.trim_start_matches("::");
+                    if name.contains("::")
+                        && (self.classes.contains_key(name) || self.constants.contains_key(name))
+                    {
+                        name.to_owned()
+                    } else {
+                        self.resolve_name(name, Some(&owner))
+                    }
+                })
                 .or_else(|| {
                     // Ruby classes without an explicit superclass inherit
                     // from Object.  Keeping that implicit edge matters for

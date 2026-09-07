@@ -106,6 +106,20 @@ fn models_sorbet_abstract_helper_declarations() {
 }
 
 #[test]
+fn resolves_qualified_gem_rbi_superclasses_from_the_root() {
+    let result = check_fixture("tests/fixtures/qualified_gem_rbi_superclass.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `Symbol`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn reports_missing_methods_in_typed_true_files() {
     check_fixture("tests/fixtures/typed_true_missing_api.rb");
 }
