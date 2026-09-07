@@ -23,3 +23,13 @@ class ExampleTest < TestBase
     assert_equal 1, 1
   end
 end
+
+class DynamicMethods
+  def self.install
+    define_method(:value) do |options|
+      options.key?(:value)
+    end
+  end
+end
+
+DynamicMethods.install

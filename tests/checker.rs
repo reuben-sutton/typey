@@ -1503,6 +1503,19 @@ fn widens_recursive_inferred_returns_to_a_finite_concrete_type() {
 }
 
 #[test]
+fn preserves_concrete_accumulators_through_recursive_calls() {
+    let result = check_fixture("tests/fixtures/recursive_accumulator.rb");
+    assert!(!result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error));
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
 fn ignores_provisional_any_writes_after_a_concrete_ivar_observation() {
     let result = check_fixture("tests/fixtures/provisional_ivar_writes.rb");
     assert!(result
@@ -6590,6 +6603,34 @@ fn records_block_argument_expressions_for_dynamic_callees() {
         "block argument expression was not recorded: {:?}",
         result.types
     );
+}
+
+#[test]
+fn traverses_direct_define_method_bodies() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/dynamic_define_method_bound_block.rb").unwrap();
+    let result = check_fixture("tests/fixtures/dynamic_define_method_bound_block.rb");
+    let start = source
+        .rfind("options.key?")
+        .expect("dynamic method body send");
+    assert!(
+        result
+            .types
+            .iter()
+            .any(|inferred| inferred.start == start && inferred.is_send),
+        "dynamic method body was not traversed: {:?}",
+        result.types
+    );
+}
+
+#[test]
+fn does_not_treat_concern_class_methods_as_module_instances() {
+    check_fixture("tests/fixtures/concern_class_methods_self.rb");
+}
+
+#[test]
+fn narrows_class_hierarchies_using_symbol_discriminators() {
+    check_fixture("tests/fixtures/discriminated_node_case.rb");
 }
 
 #[test]

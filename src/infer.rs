@@ -2583,6 +2583,7 @@ pub(crate) fn check_with_policies(
         method_callers: BTreeMap::new(),
         method_shared_reads: BTreeMap::new(),
         shared_readers: BTreeMap::new(),
+        symbol_method_returns: BTreeMap::new(),
         changed_shared: BTreeSet::new(),
         debug_phase: "idle",
         debug_round: 0,
@@ -2655,6 +2656,7 @@ struct Analyzer<'src> {
     method_callers: BTreeMap<MethodKey, BTreeSet<MethodKey>>,
     method_shared_reads: BTreeMap<MethodKey, BTreeSet<SharedKey>>,
     shared_readers: BTreeMap<SharedKey, BTreeSet<MethodKey>>,
+    symbol_method_returns: BTreeMap<MethodKey, String>,
     changed_shared: BTreeSet<SharedKey>,
     debug_phase: &'static str,
     debug_round: usize,
@@ -2854,6 +2856,17 @@ impl<'src> Analyzer<'src> {
             .borrow_mut()
             .insert(owner.to_owned(), type_.clone());
         type_
+    }
+
+    fn is_concern_class_methods_module(&self, owner: &str) -> bool {
+        let Some(concern_owner) = owner.strip_suffix("::ClassMethods") else {
+            return false;
+        };
+        self.classes.get(concern_owner).is_some_and(|info| {
+            info.extends
+                .iter()
+                .any(|extension| extension == "ActiveSupport::Concern")
+        })
     }
 
     fn attached_class_type(&self, receiver_type: Option<&Type>) -> Type {
@@ -6210,10 +6223,11 @@ impl<'src> Analyzer<'src> {
             let Some(when_node) = condition.as_when_node() else {
                 continue;
             };
+            let conditions = when_node.conditions().into_iter().collect::<Vec<_>>();
             let mut when_environment = base.clone();
             let mut condition_type = Type::Never;
             let mut condition_is_type_test = true;
-            for value in &when_node.conditions() {
+            for value in &conditions {
                 let value_type = self.eval_node(&value, &mut when_environment).type_;
                 let is_type_test = Self::is_case_type_test(&value, &value_type);
                 all_conditions_are_type_tests &= is_type_test;
@@ -6224,6 +6238,11 @@ impl<'src> Analyzer<'src> {
             covered_type = covered_type.join(&condition_type);
             if let Some(predicate) = predicate.as_ref() {
                 self.narrow_case_target(predicate, &mut when_environment, &condition_type);
+                self.narrow_discriminated_case_target(
+                    predicate,
+                    &conditions,
+                    &mut when_environment,
+                );
             }
             let when_result = if let Some(statements) = when_node.statements() {
                 self.eval_statements(&statements, &mut when_environment)
@@ -6328,6 +6347,59 @@ impl<'src> Analyzer<'src> {
         if let Some(name) = Self::case_target_name(predicate) {
             let current = environment.get(&name);
             environment.bind(name, self.meet_predicate_type(&current, condition_type));
+        }
+    }
+
+    fn narrow_discriminated_case_target<'node>(
+        &self,
+        predicate: &Node<'node>,
+        conditions: &[Node<'node>],
+        environment: &mut Environment,
+    ) {
+        let Some(call) = predicate.as_call_node() else {
+            return;
+        };
+        if prism::constant_name(call.name()) != "type" {
+            return;
+        }
+        let Some(receiver) = call.receiver() else {
+            return;
+        };
+        let Some(local) = receiver.as_local_variable_read_node() else {
+            return;
+        };
+        let local_name = prism::constant_name(local.name());
+        let current = environment.get(&local_name);
+        let Some(current_name) = Self::named_type_name(&current) else {
+            return;
+        };
+        let symbols = conditions
+            .iter()
+            .filter_map(|condition| {
+                condition
+                    .as_symbol_node()
+                    .map(|symbol| String::from_utf8_lossy(symbol.unescaped()).into_owned())
+            })
+            .collect::<BTreeSet<_>>();
+        if symbols.is_empty() {
+            return;
+        }
+        let narrowed = self
+            .symbol_method_returns
+            .iter()
+            .filter_map(|(key, symbol)| {
+                (key.name == "type"
+                    && !key.singleton
+                    && symbols.contains(symbol)
+                    && key
+                        .owner
+                        .as_deref()
+                        .is_some_and(|owner| self.nominal_subtype(owner, &current_name)))
+                .then(|| Type::named(key.owner.as_ref().expect("owner checked").clone()))
+            })
+            .collect::<Vec<_>>();
+        if !narrowed.is_empty() {
+            environment.bind(local_name, Type::union(narrowed));
         }
     }
 
@@ -7001,14 +7073,27 @@ impl<'src> Analyzer<'src> {
             .get(&key)
             .cloned()
             .unwrap_or_else(|| MethodState::inferred(definition.parameters()));
+        if let Some(symbol) = definition
+            .body()
+            .and_then(|body| Self::trailing_symbol_literal(&body))
+        {
+            self.symbol_method_returns.insert(key.clone(), symbol);
+        }
+        let method_self_type = key.owner.as_ref().map_or(Type::Object, |owner| {
+            if key.singleton {
+                Self::class_object_type(owner)
+            } else if self.is_concern_class_methods_module(owner) {
+                // ActiveSupport::Concern copies a `ClassMethods` module into
+                // the eventual including class. Its method bodies therefore
+                // do not have the module object as `self`; the concrete host
+                // is only known at the inclusion site.
+                Type::Any
+            } else {
+                self.instance_self_type(owner)
+            }
+        });
         let mut method_environment = Environment {
-            self_type: key.owner.as_ref().map_or(Type::Object, |owner| {
-                if key.singleton {
-                    Self::class_object_type(owner)
-                } else {
-                    self.instance_self_type(owner)
-                }
-            }),
+            self_type: method_self_type,
             method_key: Some(key.clone()),
             ..Environment::default()
         };
@@ -7128,6 +7213,18 @@ impl<'src> Analyzer<'src> {
         self.substitution_context = previous_substitution_context;
         let _ = outer;
         Eval::value(self.record(node, Type::Nil))
+    }
+
+    fn trailing_symbol_literal<'node>(node: &Node<'node>) -> Option<String> {
+        if let Some(statements) = node.as_statements_node() {
+            return statements
+                .body()
+                .into_iter()
+                .last()
+                .and_then(|last| Self::trailing_symbol_literal(&last));
+        }
+        node.as_symbol_node()
+            .map(|symbol| String::from_utf8_lossy(symbol.unescaped()).into_owned())
     }
 
     fn is_rbi_definition(&self, node: &Node<'_>) -> bool {
@@ -7431,7 +7528,8 @@ impl<'src> Analyzer<'src> {
             .and_then(|signature| signature.params.get(index))
             .cloned()
             .unwrap_or(Type::Any);
-        environment.bind(prism::constant_name(name), type_);
+        let parameter_name = prism::constant_name(name);
+        environment.bind(parameter_name, type_);
     }
 
     fn bind_keyword_parameter<'node>(
@@ -10565,6 +10663,16 @@ impl<'src> Analyzer<'src> {
                     (Type::Any, None)
                 }
             }
+        } else if matches!(
+            key.name.as_str(),
+            "define_method" | "define_singleton_method"
+        ) {
+            // These APIs consume the block as a method body rather than as a
+            // callback.  Their core RBI supplies a generic block signature,
+            // so handle the body here before the ordinary callback path can
+            // accidentally retain the lexical module/class self.
+            self.eval_dynamic_method_body(&key.name, block, environment);
+            (Type::Any, None)
         } else {
             let block_type = if let Some(receiver) = bound_receiver.as_ref() {
                 self.eval_bound_block_node(block, &expected, receiver, environment)
@@ -10947,11 +11055,10 @@ impl<'src> Analyzer<'src> {
     /// Recursive inferred methods need a finite widening point. A direct
     /// recursive call otherwise substitutes the method's current return
     /// summary into itself, so `Array#map { attributes(element) }` grows an
-    /// additional nested `Array[...]` on every worklist round. `Object` is
-    /// the sound concrete upper bound for a recursive result in this small
-    /// algebra: it preserves the fact that the call returns normally without
-    /// manufacturing `T.untyped`, while the non-recursive branches continue
-    /// to contribute their precise types.
+    /// additional nested `Array[...]` on every worklist round. Recursive
+    /// containers use `Object` as a finite concrete upper bound; scalar and
+    /// nominal recursive edges use bottom so non-recursive branches retain
+    /// their precise result without manufacturing `T.untyped`.
     fn widen_recursive_call_return(
         &self,
         key: &MethodKey,
@@ -10977,7 +11084,17 @@ impl<'src> Analyzer<'src> {
                 .is_some_and(|state| state.explicit)
         {
             type_
+        } else if !matches!(type_, Type::Array(_) | Type::Hash(..) | Type::Tuple(_)) {
+            // A recursive call is a provisional edge while its method
+            // summary is being solved. For scalar/nominal results, bottom
+            // lets a concrete non-recursive path determine the method's
+            // result without turning an accumulator expression such as
+            // `accept(..., seed) << suffix` into an `Object#<<` error.
+            Type::Never
         } else {
+            // Recursive containers still need a finite concrete widening
+            // point so nested results do not grow forever
+            // (`[recursive_call]` becomes `Array[Object]`).
             Type::Object
         }
     }
@@ -12287,7 +12404,16 @@ impl<'src> Analyzer<'src> {
             // Module's dynamic method-definition APIs are available through
             // an implicit receiver while evaluating a module method that is
             // later extended onto a class.
-            "define_method" | "define_singleton_method" => Type::Symbol,
+            "define_method" | "define_singleton_method" => {
+                if let Some(block) = block {
+                    // The block becomes a method body at runtime.  Even when
+                    // the method name is dynamic, traverse it now so sends
+                    // inside the body are not silently omitted from the
+                    // analysis.
+                    self.eval_dynamic_method_body(name, block, environment);
+                }
+                Type::Symbol
+            }
             _ => {
                 if let Some(block) = block {
                     // Even when a global call has no modeled signature, Ruby
@@ -12300,6 +12426,47 @@ impl<'src> Analyzer<'src> {
                 Type::Any
             }
         }
+    }
+
+    fn eval_dynamic_method_body(
+        &mut self,
+        name: &str,
+        block: &Node<'_>,
+        environment: &mut Environment,
+    ) {
+        let receiver = environment.method_key.as_ref().and_then(|current| {
+            if name == "define_method" {
+                let class_body_context = matches!(
+                    current.name.as_str(),
+                    "<class-body>" | "<module-body>" | "<bound-block>"
+                );
+                if class_body_context {
+                    return Self::class_object_instance_type(&environment.self_type);
+                }
+                None
+            } else {
+                // `define_singleton_method` executes with the receiver as
+                // `self`, so a statically known class object is already
+                // the correct bound receiver.
+                (!environment.self_type.is_any()).then(|| environment.self_type.clone())
+            }
+        });
+        if let Some(receiver) = receiver {
+            let _ = self.eval_bound_block_node(block, &[Type::Any], &receiver, environment);
+            return;
+        }
+
+        // A module's class methods can call `define_method` for a class that
+        // will only be known when the module is extended. Traverse the body
+        // with an unknown receiver so sends remain visible without inventing
+        // missing-method diagnostics for the module object.
+        let previous_self = environment.self_type.clone();
+        let previous_method = environment.method_key.clone();
+        environment.self_type = Type::Any;
+        environment.method_key = None;
+        let _ = self.eval_block_node(block, &[Type::Any], environment);
+        environment.self_type = previous_self;
+        environment.method_key = previous_method;
     }
 
     fn dynamic_splat_element_type(type_: &Type) -> Option<Type> {
@@ -13045,11 +13212,10 @@ impl<'src> Analyzer<'src> {
                 }
                 self.eval_common_method(name)
             }
-            Type::Never
-            | Type::Proc(_, _)
-            | Type::BoundProc { .. }
-            | Type::Intersection(_)
-            | Type::Union(_) => Type::Any,
+            Type::Never => Type::Never,
+            Type::Proc(_, _) | Type::BoundProc { .. } | Type::Intersection(_) | Type::Union(_) => {
+                Type::Any
+            }
         }
     }
 
