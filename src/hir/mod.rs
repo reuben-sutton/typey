@@ -7,6 +7,10 @@
 
 use std::fmt;
 
+pub mod lower;
+
+pub use lower::lower;
+
 /// The source file containing a span.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileId(pub u32);
@@ -227,6 +231,9 @@ pub enum ExprKind {
     Read(Read),
     Assign {
         target: AssignTarget,
+        /// The source span of the assignment target, excluding the operator
+        /// and assigned value.
+        target_span: Span,
         value: ExprId,
         operator: AssignOperator,
     },
