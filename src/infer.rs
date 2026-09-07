@@ -8138,29 +8138,41 @@ impl<'src> Analyzer<'src> {
             // calls made without an explicit receiver through each member,
             // just like `value.children` on a union, instead of trying to
             // synthesize one method key for the whole union.
-            let site = CallSite {
-                argument_nodes: &arguments.argument_nodes,
-                argument_types,
-                block: block.as_ref(),
-            };
             let receiver_type = environment.self_type.clone();
-            let (type_, fallback_origin) = self.eval_polymorphic_receiver_call(
+            let global_type = self.eval_global_call(
                 node,
-                None,
-                &receiver_type,
                 &name,
-                &arguments,
+                &arguments.argument_nodes,
+                argument_types,
                 block.as_ref(),
-                &site,
                 environment,
             );
-            if type_.contains_any() {
-                untyped_origin = Some(fallback_origin);
+            if !global_type.is_any() {
+                global_type
+            } else {
+                let site = CallSite {
+                    argument_nodes: &arguments.argument_nodes,
+                    argument_types,
+                    block: block.as_ref(),
+                };
+                let (type_, fallback_origin) = self.eval_polymorphic_receiver_call(
+                    node,
+                    None,
+                    &receiver_type,
+                    &name,
+                    &arguments,
+                    block.as_ref(),
+                    &site,
+                    environment,
+                );
+                if type_.contains_any() {
+                    untyped_origin = Some(fallback_origin);
+                }
+                if type_.is_any() {
+                    self.report_missing_method_if_needed(node, &receiver_type, &name, false);
+                }
+                type_
             }
-            if type_.is_any() {
-                self.report_missing_method_if_needed(node, &receiver_type, &name, false);
-            }
-            type_
         } else if receiver_node.is_none() {
             if name == "each"
                 && Self::named_type_name(&environment.self_type)
