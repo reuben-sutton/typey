@@ -315,6 +315,11 @@ fn infers_instance_binding_through_define_method() {
 }
 
 #[test]
+fn binds_active_support_test_dsl_blocks_to_test_instances() {
+    check_fixture("tests/fixtures/active_support_test_dsl_bound_block.rb");
+}
+
+#[test]
 fn models_extend_self_as_module_singleton_methods() {
     let result = check_fixture("tests/fixtures/extend_self.rb");
     assert!(result
