@@ -14261,7 +14261,7 @@ impl<'src> Analyzer<'src> {
 
     fn find_type_alias(&self, name: &str, owner: Option<&str>) -> Option<(String, Type)> {
         let name = name.trim_start_matches("::");
-        let matches = |candidate: &str| candidate.eq_ignore_ascii_case(name);
+        let matches = |candidate: &str| candidate == name;
         if let Some((key, type_)) = self.type_aliases.iter().find(|(key, _)| matches(key)) {
             return Some((key.clone(), type_.clone()));
         }
@@ -14272,7 +14272,7 @@ impl<'src> Analyzer<'src> {
             if let Some((key, type_)) = self
                 .type_aliases
                 .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(&candidate))
+                .find(|(key, _)| key.as_str() == candidate)
             {
                 return Some((key.clone(), type_.clone()));
             }
@@ -14280,10 +14280,10 @@ impl<'src> Analyzer<'src> {
         }
 
         let qualified_suffix = format!("::{name}");
-        let mut qualified = self.type_aliases.iter().filter(|(key, _)| {
-            key.to_ascii_lowercase()
-                .ends_with(&qualified_suffix.to_ascii_lowercase())
-        });
+        let mut qualified = self
+            .type_aliases
+            .iter()
+            .filter(|(key, _)| key.ends_with(&qualified_suffix));
         if let Some((key, type_)) = qualified.next() {
             if qualified.next().is_none() {
                 return Some((key.clone(), type_.clone()));
@@ -14292,9 +14292,12 @@ impl<'src> Analyzer<'src> {
 
         let name_tail = name.rsplit_once("::").map_or(name, |(_, tail)| tail);
         let mut candidates = self.type_aliases.iter().filter(|(key, _)| {
-            key.rsplit_once("::")
-                .map_or(key.as_str(), |(_, tail)| tail)
-                .eq_ignore_ascii_case(name_tail)
+            let candidate_tail = key.rsplit_once("::").map_or(key.as_str(), |(_, tail)| tail);
+            // RBS comments currently retain aliases without their lexical
+            // owner. Preserve the compatibility fallback for an exactly
+            // matching tail, but respect Ruby/RBS case sensitivity: `status`
+            // must not capture `Process::Status`.
+            candidate_tail == name_tail
         });
         let (key, type_) = candidates.next()?;
         if candidates.next().is_some() {

@@ -384,6 +384,34 @@ fn models_delegate_generated_methods() {
 }
 
 #[test]
+fn models_open3_capture_status_tuple() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs read");
+    files.push(WorkspaceFile::new(
+        "tests/fixtures/open3_capture.rb",
+        std::fs::read_to_string("tests/fixtures/open3_capture.rb").expect("fixture exists"),
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    let reveals = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.diagnostic.message.contains("Revealed type:"))
+        .map(|diagnostic| diagnostic.diagnostic.message.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        reveals.iter().any(|message| message.contains("String")),
+        "{reveals:?}"
+    );
+    assert!(
+        reveals
+            .iter()
+            .any(|message| message.contains("Process::Status")),
+        "{reveals:?}"
+    );
+}
+
+#[test]
 fn handles_packwerk_false_positive_patterns() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs read");
