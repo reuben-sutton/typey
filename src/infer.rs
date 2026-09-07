@@ -8963,6 +8963,20 @@ impl<'src> Analyzer<'src> {
         } else {
             Type::Object
         };
+        // A block argument is an ordinary Ruby expression.  Evaluate it even
+        // when the callee is dynamic and therefore has no block signature to
+        // consume it; otherwise expressions such as `klass.new(&block)` leave
+        // the `block` send unrecorded and hide its type from the caller.
+        if let Some(expression) = block
+            .as_ref()
+            .and_then(|block| block.as_block_argument_node())
+            .and_then(|block| block.expression())
+        {
+            let result = self.eval_node(&expression, environment);
+            abrupt = abrupt.join(&result.abrupt);
+            abrupt_flow = abrupt_flow.union(result.flow.without(FlowKind::Normal));
+            all_normal &= result.flow.contains(FlowKind::Normal);
+        }
         let array_write_receiver_type = receiver_type.clone();
         if matches!(name.as_str(), "push" | "<<" | "prepend") {
             if let Some(local) = receiver_node

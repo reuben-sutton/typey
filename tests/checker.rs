@@ -6577,6 +6577,22 @@ fn models_methods_declared_in_dynamic_struct_blocks() {
 }
 
 #[test]
+fn records_block_argument_expressions_for_dynamic_callees() {
+    let source = std::fs::read_to_string("tests/fixtures/forwarded_block_expression.rb").unwrap();
+    let result = check_fixture("tests/fixtures/forwarded_block_expression.rb");
+    let start = source.rfind("&block").expect("block argument") + 1;
+    let end = start + "block".len();
+    assert!(
+        result
+            .types
+            .iter()
+            .any(|inferred| inferred.start == start && inferred.end == end),
+        "block argument expression was not recorded: {:?}",
+        result.types
+    );
+}
+
+#[test]
 fn checks_to_enum_return_contracts() {
     let result = check_fixture("tests/fixtures/to_enum_return_contract.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| {

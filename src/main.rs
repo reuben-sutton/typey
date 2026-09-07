@@ -532,6 +532,13 @@ impl<'pr> Visit<'pr> for SyntacticSendVisitor {
         if is_sorbet_declaration {
             return;
         }
+        // Prism represents a bare local read using the same call visitor as a
+        // no-argument send. Once a parameter or local assignment has made the
+        // binding unambiguous, Ruby evaluates this as a variable read, not a
+        // method call. Keep it out of send metrics (for example `&block`).
+        if node.receiver().is_none() && node.as_node().as_local_variable_read_node().is_some() {
+            return;
+        }
         self.record(&node.as_node());
         ruby_prism::visit_call_node(self, node);
     }
