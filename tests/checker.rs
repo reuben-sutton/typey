@@ -379,6 +379,11 @@ fn models_class_attribute_generated_accessors() {
 }
 
 #[test]
+fn models_delegate_generated_methods() {
+    check_fixture("tests/fixtures/delegate_macro.rb");
+}
+
+#[test]
 fn handles_packwerk_false_positive_patterns() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs read");

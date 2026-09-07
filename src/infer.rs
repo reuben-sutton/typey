@@ -1688,6 +1688,88 @@ impl MethodRegistrar<'_> {
         state.return_type = Some(Type::bool());
         self.methods.entry(key).or_insert(state);
     }
+
+    fn register_delegate_methods(&mut self, arguments: &ruby_prism::ArgumentsNode<'_>) {
+        let Some(owner) = self.current_owner() else {
+            return;
+        };
+
+        let mut methods = Vec::new();
+        let mut target = None;
+        let mut prefix = None;
+        let mut automatic_prefix = false;
+        let mut private = false;
+
+        for argument in &arguments.arguments() {
+            if let Some(symbol) = argument.as_symbol_node() {
+                methods.push(String::from_utf8_lossy(symbol.unescaped()).into_owned());
+                continue;
+            }
+            if let Some(string) = argument.as_string_node() {
+                methods.push(String::from_utf8_lossy(string.unescaped()).into_owned());
+                continue;
+            }
+            let Some(keywords) = argument.as_keyword_hash_node() else {
+                continue;
+            };
+            for element in &keywords.elements() {
+                let Some(association) = element.as_assoc_node() else {
+                    continue;
+                };
+                let Some(key) = association.key().as_symbol_node() else {
+                    continue;
+                };
+                let key = String::from_utf8_lossy(key.unescaped());
+                let value = association.value();
+                match key.as_ref() {
+                    "to" => {
+                        target = Some(self.method_name(&value));
+                    }
+                    "prefix" => {
+                        if let Some(symbol) = value.as_symbol_node() {
+                            prefix = Some(String::from_utf8_lossy(symbol.unescaped()).into_owned());
+                        } else if let Some(string) = value.as_string_node() {
+                            prefix = Some(String::from_utf8_lossy(string.unescaped()).into_owned());
+                        } else if value.as_true_node().is_some() {
+                            automatic_prefix = true;
+                        }
+                    }
+                    "private" => {
+                        private = value.as_true_node().is_some();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if automatic_prefix {
+            prefix = target;
+        }
+
+        for method in methods {
+            let name = prefix
+                .as_ref()
+                .filter(|prefix| !prefix.is_empty())
+                .map_or_else(|| method.clone(), |prefix| format!("{prefix}_{method}"));
+            let key = MethodKey {
+                owner: Some(owner.clone()),
+                name,
+                singleton: self.current_singleton(),
+            };
+            let mut state = MethodState::inferred(None);
+            // Rails' generated method forwards positional, keyword, and block
+            // arguments. The delegated return type depends on the runtime
+            // target, so Any is the same conservative boundary as an
+            // unresolved generated method body.
+            state.return_type = Some(Type::Any);
+            state.accepts_rest = true;
+            state.rest_index = Some(0);
+            state.accepts_keyword_rest = true;
+            if private {
+                state.visibility = Visibility::Private;
+            }
+            self.methods.entry(key).or_insert(state);
+        }
+    }
 }
 
 impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
@@ -1902,6 +1984,11 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             if name == "class_attribute" {
                 if let Some(nodes) = node.arguments() {
                     self.register_class_attribute_methods(&nodes);
+                }
+            }
+            if name == "delegate" {
+                if let Some(nodes) = node.arguments() {
+                    self.register_delegate_methods(&nodes);
                 }
             }
             if name == "has_attached_class!" && arguments.is_none() {
