@@ -1479,6 +1479,19 @@ fn carries_explicit_flow_outcomes_through_loops_and_rescues() {
 }
 
 #[test]
+fn does_not_treat_observed_untyped_parameters_as_exhaustive_predicates() {
+    let result = check_fixture("tests/fixtures/inferred_parameter_predicate.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T.any(Integer, String)`")),
+        "missing union reveal: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn covers_unless_until_and_begin_else_flow() {
     let result = check(
         r#"

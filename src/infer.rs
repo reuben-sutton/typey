@@ -498,6 +498,11 @@ impl CheckResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Environment {
     locals: BTreeMap<String, Type>,
+    /// Types learned from observed calls to an unsigiled method are useful
+    /// for expression inference, but they are not a proof about every future
+    /// call. Keep their provenance so control-flow predicates do not treat a
+    /// sample argument as exhaustive.
+    inferred_locals: BTreeSet<String>,
     open_array_locals: BTreeSet<String>,
     predicate_aliases: BTreeMap<String, PredicateAlias>,
     known_truthiness: BTreeMap<String, bool>,
@@ -509,6 +514,7 @@ impl Default for Environment {
     fn default() -> Self {
         Self {
             locals: BTreeMap::new(),
+            inferred_locals: BTreeSet::new(),
             open_array_locals: BTreeSet::new(),
             predicate_aliases: BTreeMap::new(),
             known_truthiness: BTreeMap::new(),
@@ -532,9 +538,21 @@ impl Environment {
     pub fn bind(&mut self, name: impl Into<String>, type_: Type) {
         let name = name.into();
         self.open_array_locals.remove(&name);
+        self.inferred_locals.remove(&name);
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.remove(&name);
         self.known_truthiness.remove(&name);
+    }
+
+    fn mark_inferred(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        if self.locals.contains_key(&name) {
+            self.inferred_locals.insert(name);
+        }
+    }
+
+    fn is_inferred(&self, name: &str) -> bool {
+        self.inferred_locals.contains(name)
     }
 
     fn bind_predicate_alias(
@@ -545,6 +563,7 @@ impl Environment {
     ) {
         let name = name.into();
         self.open_array_locals.remove(&name);
+        self.inferred_locals.remove(&name);
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.insert(name.clone(), alias);
         self.known_truthiness.remove(&name);
@@ -570,6 +589,11 @@ impl Environment {
         let lattice = TypeLattice;
         let mut result = Self {
             locals: BTreeMap::new(),
+            inferred_locals: self
+                .inferred_locals
+                .union(&other.inferred_locals)
+                .cloned()
+                .collect(),
             open_array_locals: self
                 .open_array_locals
                 .intersection(&other.open_array_locals)
@@ -6409,6 +6433,35 @@ impl<'src> Analyzer<'src> {
             &mut method_environment,
             !state.explicit,
         );
+        if !state.explicit {
+            if let Some(shape) = self.parameter_shapes.get(&prism::span(node).0) {
+                let mut positional_index = 0;
+                for (name, kind) in &shape.parameter_kinds {
+                    match kind {
+                        signature::ParameterKind::Positional
+                        | signature::ParameterKind::OptionalPositional
+                        | signature::ParameterKind::RestPositional => {
+                            if state
+                                .params
+                                .get(positional_index)
+                                .is_some_and(Option::is_some)
+                            {
+                                method_environment.mark_inferred(name.clone());
+                            }
+                            positional_index += 1;
+                        }
+                        signature::ParameterKind::Keyword
+                        | signature::ParameterKind::OptionalKeyword => {
+                            if state.keywords.get(name).is_some_and(Option::is_some) {
+                                method_environment.mark_inferred(name.clone());
+                            }
+                        }
+                        signature::ParameterKind::RestKeyword | signature::ParameterKind::Block => {
+                        }
+                    }
+                }
+            }
+        }
         if let Some(parameters) = definition.parameters() {
             if let Some(block) = parameters.block() {
                 if let Some(name) = block.name() {
@@ -6895,6 +6948,9 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(local) = node.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
+            if environment.is_inferred(&name) {
+                return (true, true);
+            }
             if let Some(truthy) = environment.known_truthiness(&name) {
                 return (truthy, !truthy);
             }
@@ -6951,6 +7007,24 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(call) = node.as_call_node() {
             let name = prism::constant_name(call.name());
+            if call.receiver().is_some_and(|receiver| {
+                receiver.as_local_variable_read_node().is_some_and(|local| {
+                    environment.is_inferred(&prism::constant_name(local.name()))
+                })
+            }) {
+                return (true, true);
+            }
+            if name == "==="
+                && call.arguments().is_some_and(|arguments| {
+                    arguments.arguments().into_iter().any(|argument| {
+                        argument.as_local_variable_read_node().is_some_and(|local| {
+                            environment.is_inferred(&prism::constant_name(local.name()))
+                        })
+                    })
+                })
+            {
+                return (true, true);
+            }
             if name == "!" {
                 if let Some(receiver) = call.receiver() {
                     let can_refine_receiver = receiver.as_local_variable_read_node().is_some()
@@ -7050,8 +7124,9 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(local) = node.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
-            return environment.known_truthiness(&name).is_some()
-                || !environment.get(&name).is_any();
+            return !environment.is_inferred(&name)
+                && (environment.known_truthiness(&name).is_some()
+                    || !environment.get(&name).is_any());
         }
         if let Some(and) = node.as_and_node() {
             return self.predicate_is_precise(&and.left(), environment)
@@ -7065,6 +7140,24 @@ impl<'src> Analyzer<'src> {
             return false;
         };
         let name = prism::constant_name(call.name());
+        if call.receiver().is_some_and(|receiver| {
+            receiver
+                .as_local_variable_read_node()
+                .is_some_and(|local| environment.is_inferred(&prism::constant_name(local.name())))
+        }) {
+            return false;
+        }
+        if name == "==="
+            && call.arguments().is_some_and(|arguments| {
+                arguments.arguments().into_iter().any(|argument| {
+                    argument.as_local_variable_read_node().is_some_and(|local| {
+                        environment.is_inferred(&prism::constant_name(local.name()))
+                    })
+                })
+            })
+        {
+            return false;
+        }
         if name == "!" {
             return call
                 .receiver()
@@ -7230,6 +7323,9 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(local) = node.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
+            if environment.is_inferred(&name) {
+                return;
+            }
             if let Some(alias) = environment.predicate_alias(&name).cloned() {
                 let source_current = environment.get(&alias.source);
                 let source_truthy = if alias.negated { !truthy } else { truthy };
@@ -7316,10 +7412,13 @@ impl<'src> Analyzer<'src> {
             if let Some(receiver) = receiver {
                 if truthy && name == "===" && arguments.len() == 1 {
                     if let Some(local) = arguments[0].as_local_variable_read_node() {
+                        let local_name = prism::constant_name(local.name());
+                        if environment.is_inferred(&local_name) {
+                            return;
+                        }
                         let class_type = self.node_type(&receiver, environment);
                         let expected = Self::class_object_value_type(&class_type)
                             .unwrap_or_else(|| class_type.clone());
-                        let local_name = prism::constant_name(local.name());
                         let current = environment.get(&local_name);
                         environment.bind(local_name, self.meet_predicate_type(&current, &expected));
                         return;
@@ -7339,6 +7438,9 @@ impl<'src> Analyzer<'src> {
                 }
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
+                    if environment.is_inferred(&local_name) {
+                        return;
+                    }
                     let current = environment.get(&local_name);
                     if matches!(name.as_str(), "<" | "<=") && arguments.len() == 1 {
                         let expected = self.resolve_type_names(
@@ -7471,7 +7573,14 @@ impl<'src> Analyzer<'src> {
             .and_then(|arguments| arguments.arguments().into_iter().next())?;
         let local = match call.receiver() {
             None => "<self>".to_owned(),
-            Some(receiver) => prism::constant_name(receiver.as_local_variable_read_node()?.name()),
+            Some(receiver) => {
+                let local = receiver.as_local_variable_read_node()?;
+                let name = prism::constant_name(local.name());
+                if environment.is_inferred(&name) {
+                    return None;
+                }
+                name
+            }
         };
         Some((local, self.predicate_expected_type(&argument, environment)))
     }
