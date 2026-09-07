@@ -5,10 +5,12 @@ use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
 use crate::types::{Type, TypeLattice};
 use ruby_prism::{CallNode, ClassNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+mod declarations;
 mod flow;
 
+use declarations::DeclarationState;
 use flow::{Eval, Flow, FlowKind, OutcomeTypes};
 
 const DEBUG_NODE_INTERVAL: usize = 1_000;
@@ -1137,16 +1139,9 @@ impl MethodState {
 struct MethodRegistrar<'a> {
     source: &'a [u8],
     diagnostics: &'a mut Vec<Diagnostic>,
-    methods: &'a mut BTreeMap<MethodKey, MethodState>,
-    definitions: &'a mut BTreeMap<usize, MethodKey>,
-    parameter_shapes: &'a mut BTreeMap<usize, ParameterShape>,
-    classes: &'a mut BTreeMap<String, ClassInfo>,
-    aliases: &'a mut BTreeMap<MethodKey, MethodKey>,
-    accessors: &'a mut BTreeMap<MethodKey, AccessorKind>,
+    declarations: &'a mut DeclarationState,
     attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
     class_type_parameters: &'a BTreeMap<usize, Vec<String>>,
-    type_aliases: &'a mut BTreeMap<String, Type>,
-    constants: &'a mut BTreeMap<String, Type>,
     class_stack: Vec<String>,
     singleton_stack: Vec<String>,
     dynamic_definition_stack: Vec<(String, bool)>,
@@ -1232,6 +1227,7 @@ impl MethodRegistrar<'_> {
                 return true;
             }
             current = self
+                .declarations
                 .classes
                 .get(&name)
                 .and_then(|info| info.superclass.clone());
@@ -1274,8 +1270,10 @@ impl MethodRegistrar<'_> {
             singleton: false,
         };
         let reader_signature = MethodSig::new(Vec::new(), type_);
-        self.accessors.insert(reader.clone(), AccessorKind::Reader);
-        self.methods.entry(reader).or_insert_with(|| {
+        self.declarations
+            .accessors
+            .insert(reader.clone(), AccessorKind::Reader);
+        self.declarations.methods.entry(reader).or_insert_with(|| {
             MethodState::explicit_overloads(std::slice::from_ref(&reader_signature))
         });
 
@@ -1286,8 +1284,10 @@ impl MethodRegistrar<'_> {
                 singleton: false,
             };
             let writer_signature = attribute_writer_signature(&reader_signature);
-            self.accessors.insert(writer.clone(), AccessorKind::Writer);
-            self.methods.entry(writer).or_insert_with(|| {
+            self.declarations
+                .accessors
+                .insert(writer.clone(), AccessorKind::Writer);
+            self.declarations.methods.entry(writer).or_insert_with(|| {
                 MethodState::explicit_overloads(std::slice::from_ref(&writer_signature))
             });
         }
@@ -1306,7 +1306,7 @@ impl MethodRegistrar<'_> {
         dsl_signature.accepts_rest = true;
         dsl_signature.rest_index = Some(0);
         dsl_signature.accepts_keyword_rest = true;
-        self.methods.entry(dsl_key).or_insert_with(|| {
+        self.declarations.methods.entry(dsl_key).or_insert_with(|| {
             MethodState::explicit_overloads(std::slice::from_ref(&dsl_signature))
         });
     }
@@ -1322,7 +1322,8 @@ impl MethodRegistrar<'_> {
         signature.accepts_rest = true;
         signature.rest_index = Some(0);
         signature.accepts_keyword_rest = true;
-        self.methods
+        self.declarations
+            .methods
             .entry(key)
             .or_insert_with(|| MethodState::explicit_overloads(std::slice::from_ref(&signature)));
     }
@@ -1442,8 +1443,12 @@ impl MethodRegistrar<'_> {
     }
 
     fn register_generated_accessor(&mut self, key: MethodKey, kind: AccessorKind) {
-        self.accessors.entry(key.clone()).or_insert(kind);
-        self.methods
+        self.declarations
+            .accessors
+            .entry(key.clone())
+            .or_insert(kind);
+        self.declarations
+            .methods
             .entry(key)
             .or_insert_with(|| MethodState::inferred_accessor(kind));
     }
@@ -1451,7 +1456,7 @@ impl MethodRegistrar<'_> {
     fn register_generated_predicate(&mut self, key: MethodKey) {
         let mut state = MethodState::inferred(None);
         state.return_type = Some(Type::bool());
-        self.methods.entry(key).or_insert(state);
+        self.declarations.methods.entry(key).or_insert(state);
     }
 
     fn register_delegate_methods(&mut self, arguments: &ruby_prism::ArgumentsNode<'_>) {
@@ -1532,7 +1537,7 @@ impl MethodRegistrar<'_> {
             if private {
                 state.visibility = Visibility::Private;
             }
-            self.methods.entry(key).or_insert(state);
+            self.declarations.methods.entry(key).or_insert(state);
         }
     }
 }
@@ -1541,8 +1546,10 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     fn visit_def_node(&mut self, node: &DefNode<'pr>) {
         let definition_start = prism::span(&node.as_node()).0;
         let key = self.definition_key(node);
-        self.definitions.insert(definition_start, key.clone());
-        self.parameter_shapes.insert(
+        self.declarations
+            .definitions
+            .insert(definition_start, key.clone());
+        self.declarations.parameter_shapes.insert(
             definition_start,
             ParameterShape::from_parameters(self.source, node.parameters()),
         );
@@ -1553,6 +1560,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             .or_else(|| self.visibility_stack.last().copied())
             .unwrap_or(Visibility::Public);
         let state = self
+            .declarations
             .methods
             .entry(key)
             .or_insert_with(|| MethodState::inferred(node.parameters()));
@@ -1580,7 +1588,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                 self.scope_reference(&superclass)
             }
         });
-        let info = self.classes.entry(name.clone()).or_default();
+        let info = self.declarations.classes.entry(name.clone()).or_default();
         if let Some(parameters) = self
             .class_type_parameters
             .get(&prism::span(&node.as_node()).0)
@@ -1611,7 +1619,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode<'pr>) {
         let name = self.scope_name(&node.constant_path());
         let required_ancestors = self.required_ancestors(&node.as_node());
-        let info = self.classes.entry(name.clone()).or_default();
+        let info = self.declarations.classes.entry(name.clone()).or_default();
         info.is_module = true;
         info.requires_ancestors.extend(required_ancestors);
         self.class_stack.push(name);
@@ -1659,7 +1667,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             let singleton = self.singleton_stack.last().is_some();
             let old_name = self.method_name(&node.old_name());
             let new_name = self.method_name(&node.new_name());
-            self.aliases.insert(
+            self.declarations.aliases.insert(
                 MethodKey {
                     owner: owner.clone(),
                     name: new_name,
@@ -1679,7 +1687,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         let target = node.target();
         let name = self.constant_assignment_name(&prism::text(self.source, &target.as_node()));
         if let Some(type_) = self.parse_typed_constant(&node.value()) {
-            self.constants.insert(name.clone(), type_);
+            self.declarations.constants.insert(name.clone(), type_);
         }
         self.register_type_alias(name, &node.value());
         ruby_prism::visit_constant_path_write_node(self, node);
@@ -1689,7 +1697,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         let constant_name = prism::constant_name(node.name());
         if let Some(owner) = self.class_stack.last() {
             if let Some(member) = self.parse_generic_member(&node.value()) {
-                let info = self.classes.entry(owner.clone()).or_default();
+                let info = self.declarations.classes.entry(owner.clone()).or_default();
                 let index = info.type_members.len();
                 info.type_members
                     .insert(constant_name.clone(), GenericMember { index, ..member });
@@ -1697,7 +1705,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         }
         let name = self.constant_assignment_name(&constant_name);
         if let Some(type_) = self.parse_typed_constant(&node.value()) {
-            self.constants.insert(name.clone(), type_);
+            self.declarations.constants.insert(name.clone(), type_);
         }
         self.register_type_alias(name, &node.value());
 
@@ -1707,7 +1715,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         // checked and dispatched later.
         if let Some(fields) = self.struct_superclass_fields(&node.value()) {
             let owner = self.constant_assignment_name(&constant_name);
-            let info = self.classes.entry(owner.clone()).or_default();
+            let info = self.declarations.classes.entry(owner.clone()).or_default();
             info.superclass = Some("Struct".to_owned());
             info.struct_fields = Some(fields);
             self.class_stack.push(owner);
@@ -1751,7 +1759,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                let info = self.classes.entry(owner).or_default();
+                let info = self.declarations.classes.entry(owner).or_default();
                 match prism::constant_name(node.name()).as_str() {
                     "include" => info.includes.extend(modules),
                     "prepend" => info.prepends.extend(modules),
@@ -1799,7 +1807,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                     .cloned()
                     .or_else(|| self.class_stack.last().cloned())
                 {
-                    let info = self.classes.entry(owner).or_default();
+                    let info = self.declarations.classes.entry(owner).or_default();
                     let index = info
                         .type_members
                         .get("out")
@@ -1871,7 +1879,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                         .iter()
                         .map(|module| self.scope_reference_text(module))
                         .collect::<Vec<_>>();
-                    let info = self.classes.entry(owner.clone()).or_default();
+                    let info = self.declarations.classes.entry(owner.clone()).or_default();
                     for module in modules {
                         match name.as_str() {
                             "include" => info.includes.push(module),
@@ -1892,7 +1900,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                         .cloned()
                         .or_else(|| self.class_stack.last().cloned());
                     let singleton = self.singleton_stack.last().is_some();
-                    self.aliases.insert(
+                    self.declarations.aliases.insert(
                         MethodKey {
                             owner: owner.clone(),
                             name: arguments[0].clone(),
@@ -1918,7 +1926,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                                     .as_def_node()
                                     .map(|definition| prism::constant_name(definition.name()))
                                     .unwrap_or_else(|| self.method_name(&argument));
-                                self.aliases.insert(
+                                self.declarations.aliases.insert(
                                     MethodKey {
                                         owner: Some(owner.clone()),
                                         name: method_name.clone(),
@@ -1945,7 +1953,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                             .first()
                             .cloned()
                             .unwrap_or_else(|| "out".to_owned());
-                        let info = self.classes.entry(owner).or_default();
+                        let info = self.declarations.classes.entry(owner).or_default();
                         let index = info
                             .type_members
                             .get(&member_name)
@@ -1977,7 +1985,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                                     name,
                                     singleton,
                                 };
-                                registrar.accessors.insert(key.clone(), kind);
+                                registrar.declarations.accessors.insert(key.clone(), kind);
                                 let state = signatures.map_or_else(
                                     || MethodState::inferred_accessor(kind),
                                     |signatures| {
@@ -1992,7 +2000,7 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                                         MethodState::explicit_overloads(&signatures)
                                     },
                                 );
-                                registrar.methods.entry(key).or_insert(state);
+                                registrar.declarations.methods.entry(key).or_insert(state);
                             };
                         match name.as_str() {
                             "attr_reader" => {
@@ -2118,7 +2126,7 @@ impl MethodRegistrar<'_> {
                 name: name.clone(),
                 singleton,
             };
-            if let Some(state) = self.methods.get_mut(&key) {
+            if let Some(state) = self.declarations.methods.get_mut(&key) {
                 state.visibility = visibility;
             }
         }
@@ -2169,9 +2177,13 @@ impl MethodRegistrar<'_> {
         }
         let first = raw.split("::").next().unwrap_or(raw);
         let nested_first = format!("{scope}::{first}");
-        if self.classes.contains_key(&nested_first) || self.constants.contains_key(&nested_first) {
+        if self.declarations.classes.contains_key(&nested_first)
+            || self.declarations.constants.contains_key(&nested_first)
+        {
             format!("{scope}::{raw}")
-        } else if self.classes.contains_key(raw) || self.constants.contains_key(raw) {
+        } else if self.declarations.classes.contains_key(raw)
+            || self.declarations.constants.contains_key(raw)
+        {
             raw.to_owned()
         } else {
             format!("{scope}::{raw}")
@@ -2234,7 +2246,7 @@ impl MethodRegistrar<'_> {
                 "{}::{raw}",
                 self.class_stack.last().expect("stack is not empty")
             );
-            if self.classes.contains_key(&candidate) {
+            if self.declarations.classes.contains_key(&candidate) {
                 candidate
             } else {
                 raw.to_owned()
@@ -2257,7 +2269,7 @@ impl MethodRegistrar<'_> {
 
     fn register_type_alias<'node>(&mut self, name: String, value: &Node<'node>) {
         if let Some(type_) = signature::parse_sorbet_type_alias(&prism::text(self.source, value)) {
-            self.type_aliases.insert(name, type_);
+            self.declarations.type_aliases.insert(name, type_);
         }
     }
 
@@ -2363,25 +2375,12 @@ pub(crate) fn check_with_policies(
         has_inline_assertions: !annotations.assertions.is_empty(),
         annotations,
         config,
-        methods: BTreeMap::new(),
+        declarations: DeclarationState::default(),
         method_resolution_cache: RefCell::new(BTreeMap::new()),
         global_name_cache: RefCell::new(HashMap::new()),
         instance_self_type_cache: RefCell::new(HashMap::new()),
-        definitions: BTreeMap::new(),
-        parameter_shapes: BTreeMap::new(),
-        classes: BTreeMap::new(),
-        class_name_set: HashSet::new(),
-        aliases: BTreeMap::new(),
-        accessors: BTreeMap::new(),
-        type_aliases: BTreeMap::new(),
         ivars: BTreeMap::new(),
         provisional_ivars: BTreeSet::new(),
-        constants: BTreeMap::new(),
-        constant_name_set: HashSet::new(),
-        class_name_suffixes: BTreeMap::new(),
-        constant_name_suffixes: BTreeMap::new(),
-        struct_fields: BTreeMap::new(),
-        struct_field_types: BTreeMap::new(),
         class_vars: BTreeMap::new(),
         globals: BTreeMap::new(),
         report: true,
@@ -2436,25 +2435,12 @@ struct Analyzer<'src> {
     has_inline_assertions: bool,
     annotations: AnnotationTable,
     config: CheckerConfig,
-    methods: BTreeMap<MethodKey, MethodState>,
+    declarations: DeclarationState,
     method_resolution_cache: RefCell<BTreeMap<MethodKey, Option<MethodKey>>>,
     global_name_cache: RefCell<HashMap<String, String>>,
     instance_self_type_cache: RefCell<HashMap<String, Type>>,
-    definitions: BTreeMap<usize, MethodKey>,
-    parameter_shapes: BTreeMap<usize, ParameterShape>,
-    classes: BTreeMap<String, ClassInfo>,
-    class_name_set: HashSet<String>,
-    class_name_suffixes: BTreeMap<String, Vec<String>>,
-    aliases: BTreeMap<MethodKey, MethodKey>,
-    accessors: BTreeMap<MethodKey, AccessorKind>,
-    type_aliases: BTreeMap<String, Type>,
     ivars: BTreeMap<IvarKey, Type>,
     provisional_ivars: BTreeSet<IvarKey>,
-    constants: BTreeMap<String, Type>,
-    constant_name_set: HashSet<String>,
-    constant_name_suffixes: BTreeMap<String, Vec<String>>,
-    struct_fields: BTreeMap<String, Vec<String>>,
-    struct_field_types: BTreeMap<(String, String), Type>,
     class_vars: BTreeMap<ClassVarKey, Type>,
     globals: BTreeMap<String, Type>,
     report: bool,
@@ -2600,7 +2586,7 @@ impl<'src> Analyzer<'src> {
         if !arguments.is_empty() {
             return type_;
         }
-        let Some(info) = self.classes.get(name) else {
+        let Some(info) = self.declarations.classes.get(name) else {
             return type_;
         };
         if info.type_members.is_empty() {
@@ -2651,8 +2637,14 @@ impl<'src> Analyzer<'src> {
         if let Some(type_) = self.instance_self_type_cache.borrow().get(owner) {
             return type_.clone();
         }
-        let type_ = if self.classes.get(owner).is_some_and(|info| info.is_module) {
+        let type_ = if self
+            .declarations
+            .classes
+            .get(owner)
+            .is_some_and(|info| info.is_module)
+        {
             let hosts = self
+                .declarations
                 .classes
                 .iter()
                 .filter_map(|(candidate, info)| {
@@ -2671,7 +2663,7 @@ impl<'src> Analyzer<'src> {
             }
         } else {
             let mut descendants = Vec::new();
-            for (candidate, info) in &self.classes {
+            for (candidate, info) in &self.declarations.classes {
                 let mut superclass = info.superclass.clone();
                 let mut visited = BTreeSet::new();
                 while let Some(current) = superclass {
@@ -2683,6 +2675,7 @@ impl<'src> Analyzer<'src> {
                         break;
                     }
                     superclass = self
+                        .declarations
                         .classes
                         .get(&current)
                         .and_then(|info| info.superclass.clone());
@@ -2704,11 +2697,14 @@ impl<'src> Analyzer<'src> {
         let Some(concern_owner) = owner.strip_suffix("::ClassMethods") else {
             return false;
         };
-        self.classes.get(concern_owner).is_some_and(|info| {
-            info.extends
-                .iter()
-                .any(|extension| extension == "ActiveSupport::Concern")
-        })
+        self.declarations
+            .classes
+            .get(concern_owner)
+            .is_some_and(|info| {
+                info.extends
+                    .iter()
+                    .any(|extension| extension == "ActiveSupport::Concern")
+            })
     }
 
     fn attached_class_type(&self, receiver_type: Option<&Type>) -> Type {
@@ -2729,6 +2725,7 @@ impl<'src> Analyzer<'src> {
                 .find_map(|member| self.attached_class_member_type(member))
                 .unwrap_or_else(|| Self::receiver_instance_type(receiver_type)),
             Type::Named(name, arguments) => self
+                .declarations
                 .classes
                 .get(name)
                 .and_then(|info| info.attached_class_member)
@@ -2745,7 +2742,7 @@ impl<'src> Analyzer<'src> {
         let Type::Named(name, arguments) = receiver_type else {
             return None;
         };
-        let index = self.classes.get(name)?.attached_class_member?;
+        let index = self.declarations.classes.get(name)?.attached_class_member?;
         arguments.get(index).cloned()
     }
 
@@ -3170,9 +3167,10 @@ impl<'src> Analyzer<'src> {
             _ => return None,
         };
         let (declared_owner, member_name) = name.rsplit_once("::")?;
-        let info = self.classes.get(declared_owner)?;
+        let info = self.declarations.classes.get(declared_owner)?;
         let related = receiver_owner.as_str() == declared_owner
             || self
+                .declarations
                 .classes
                 .get(&receiver_owner)
                 .is_some_and(|receiver_info| {
@@ -3194,6 +3192,7 @@ impl<'src> Analyzer<'src> {
             return None;
         }
         let member = self
+            .declarations
             .classes
             .get(&receiver_owner)
             .and_then(|receiver_info| receiver_info.type_members.get(member_name))
@@ -3208,7 +3207,8 @@ impl<'src> Analyzer<'src> {
         let Some((declared_owner, member_name)) = name.rsplit_once("::") else {
             return false;
         };
-        self.classes
+        self.declarations
+            .classes
             .get(declared_owner)
             .and_then(|info| info.type_members.get(member_name))
             .is_some_and(|member| {
@@ -3630,7 +3630,7 @@ impl<'src> Analyzer<'src> {
     fn commit_inferred_returns(&mut self) {
         let pending_returns = std::mem::take(&mut self.pending_returns);
         for (key, (return_type, return_terminates)) in pending_returns {
-            if let Some(state) = self.methods.get_mut(&key) {
+            if let Some(state) = self.declarations.methods.get_mut(&key) {
                 if !state.explicit {
                     let changed = state.return_type.as_ref() != Some(&return_type)
                         || state.return_terminates != return_terminates;
@@ -3654,9 +3654,9 @@ impl<'src> Analyzer<'src> {
         if self.config.debug {
             eprintln!(
                 "[typey] registered {} methods, {} classes, and {} type aliases",
-                self.methods.len(),
-                self.classes.len(),
-                self.type_aliases.len()
+                self.declarations.methods.len(),
+                self.declarations.classes.len(),
+                self.declarations.type_aliases.len()
             );
             eprintln!(
                 "[typey] registration complete in {:?}",
@@ -3692,7 +3692,12 @@ impl<'src> Analyzer<'src> {
         self.changed_methods.clear();
         self.changed_shared.clear();
 
-        let mut pending_methods = self.methods.keys().cloned().collect::<BTreeSet<_>>();
+        let mut pending_methods = self
+            .declarations
+            .methods
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let mut round = 0;
         // The worklist is driven solely by actual summary changes. There is
         // no arbitrary round limit: once no method or shared value changes,
@@ -3820,6 +3825,7 @@ impl<'src> Analyzer<'src> {
         }
 
         let gaps = self
+            .declarations
             .definitions
             .iter()
             .filter_map(|(offset, key)| {
@@ -3827,7 +3833,7 @@ impl<'src> Analyzer<'src> {
                 if strictness_rank(strictness) < strictness_rank(Strictness::Strict) {
                     return None;
                 }
-                let state = self.methods.get(key)?;
+                let state = self.declarations.methods.get(key)?;
                 if state.explicit {
                     return None;
                 }
@@ -3909,12 +3915,12 @@ impl<'src> Analyzer<'src> {
         }
         let owner = self.lexical_owner(environment);
         let resolved = self.resolve_name(name, owner.as_deref());
-        self.classes.contains_key(&resolved)
-            || self.constants.contains_key(&resolved)
-            || self.type_aliases.contains_key(&resolved)
+        self.declarations.classes.contains_key(&resolved)
+            || self.declarations.constants.contains_key(&resolved)
+            || self.declarations.type_aliases.contains_key(&resolved)
             || self.known_nominal_name(name)
-            || self.class_name_suffixes.contains_key(name)
-            || self.constant_name_suffixes.contains_key(name)
+            || self.declarations.class_name_suffixes.contains_key(name)
+            || self.declarations.constant_name_suffixes.contains_key(name)
     }
 
     fn report_missing_constant_if_needed<'node>(
@@ -3998,21 +4004,14 @@ impl<'src> Analyzer<'src> {
     }
 
     fn register_methods<'node>(&mut self, root: &Node<'node>) {
-        self.methods.clear();
-        self.type_aliases = self.annotations.type_aliases.clone();
+        self.declarations.methods.clear();
+        self.declarations.type_aliases = self.annotations.type_aliases.clone();
         let mut registrar = MethodRegistrar {
             source: self.source,
             diagnostics: &mut self.diagnostics,
-            methods: &mut self.methods,
-            definitions: &mut self.definitions,
-            parameter_shapes: &mut self.parameter_shapes,
-            classes: &mut self.classes,
-            aliases: &mut self.aliases,
-            accessors: &mut self.accessors,
+            declarations: &mut self.declarations,
             attribute_annotations: &self.annotations.attribute_annotations,
             class_type_parameters: &self.annotations.class_type_parameters,
-            type_aliases: &mut self.type_aliases,
-            constants: &mut self.constants,
             class_stack: Vec::new(),
             singleton_stack: Vec::new(),
             dynamic_definition_stack: Vec::new(),
@@ -4028,6 +4027,7 @@ impl<'src> Analyzer<'src> {
         // constructor and fields in the workspace graph just as for
         // `Result = Struct.new(...)`.
         let struct_subclasses = self
+            .declarations
             .classes
             .iter()
             .filter_map(|(owner, info)| {
@@ -4037,17 +4037,21 @@ impl<'src> Analyzer<'src> {
             })
             .collect::<Vec<_>>();
         for (owner, fields) in struct_subclasses {
-            self.struct_fields.insert(owner.clone(), fields.clone());
+            self.declarations
+                .struct_fields
+                .insert(owner.clone(), fields.clone());
             for field in &fields {
                 let reader = MethodKey {
                     owner: Some(owner.clone()),
                     name: field.clone(),
                     singleton: false,
                 };
-                self.accessors
+                self.declarations
+                    .accessors
                     .entry(reader.clone())
                     .or_insert(AccessorKind::Reader);
-                self.methods
+                self.declarations
+                    .methods
                     .entry(reader)
                     .or_insert_with(|| MethodState::inferred_accessor(AccessorKind::Reader));
 
@@ -4056,10 +4060,12 @@ impl<'src> Analyzer<'src> {
                     name: format!("{field}="),
                     singleton: false,
                 };
-                self.accessors
+                self.declarations
+                    .accessors
                     .entry(writer.clone())
                     .or_insert(AccessorKind::Writer);
-                self.methods
+                self.declarations
+                    .methods
                     .entry(writer)
                     .or_insert_with(|| MethodState::inferred_accessor(AccessorKind::Writer));
             }
@@ -4068,7 +4074,7 @@ impl<'src> Analyzer<'src> {
                 name: "initialize".to_owned(),
                 singleton: false,
             };
-            self.methods.entry(key).or_insert_with(|| {
+            self.declarations.methods.entry(key).or_insert_with(|| {
                 let mut state = MethodState::inferred(None);
                 state.params = vec![Some(Type::Any); fields.len()];
                 state.required_params = fields.len();
@@ -4080,9 +4086,15 @@ impl<'src> Analyzer<'src> {
         // Attribute annotations are registered while walking the AST, before
         // the analyzer has its final class table. Resolve their relative
         // names just like method annotations once all declarations are known.
-        let accessor_keys = self.accessors.keys().cloned().collect::<Vec<_>>();
+        let accessor_keys = self
+            .declarations
+            .accessors
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         for key in accessor_keys {
             let Some(signatures) = self
+                .declarations
                 .methods
                 .get(&key)
                 .filter(|state| state.explicit)
@@ -4094,7 +4106,7 @@ impl<'src> Analyzer<'src> {
                 .iter()
                 .map(|signature| self.resolve_signature_names(signature, key.owner.as_deref()))
                 .collect::<Vec<_>>();
-            if let Some(state) = self.methods.get_mut(&key) {
+            if let Some(state) = self.declarations.methods.get_mut(&key) {
                 *state = MethodState::explicit_overloads(&signatures);
             }
         }
@@ -4108,14 +4120,14 @@ impl<'src> Analyzer<'src> {
         let mut builtin_rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let method_annotations = self.annotations.method_annotations.clone();
         for (offset, signatures) in &method_annotations {
-            let Some(key) = self.definitions.get(offset).cloned() else {
+            let Some(key) = self.declarations.definitions.get(offset).cloned() else {
                 continue;
             };
             let raw_signatures = signatures.clone();
             let signatures = signatures
                 .iter()
                 .map(|signature| {
-                    let signature = self.parameter_shapes.get(offset).map_or_else(
+                    let signature = self.declarations.parameter_shapes.get(offset).map_or_else(
                         || signature.clone(),
                         |shape| apply_parameter_shape(signature, shape),
                     );
@@ -4123,6 +4135,7 @@ impl<'src> Analyzer<'src> {
                 })
                 .collect::<Vec<_>>();
             let ruby_parameter_kinds = self
+                .declarations
                 .parameter_shapes
                 .get(offset)
                 .map(|shape| shape.parameter_kinds.clone());
@@ -4143,7 +4156,7 @@ impl<'src> Analyzer<'src> {
                         }
                     }
                 }
-                if let Some(shape) = self.parameter_shapes.get(offset).cloned() {
+                if let Some(shape) = self.declarations.parameter_shapes.get(offset).cloned() {
                     for signature in &raw_signatures {
                         if !signature.param_names.is_empty() {
                             self.validate_sorbet_parameter_names(*offset, &shape, signature);
@@ -4174,14 +4187,14 @@ impl<'src> Analyzer<'src> {
             target.entry(key.clone()).or_default().extend(signatures);
         }
         for (key, signatures) in source_signatures.into_iter().chain(rbi_signatures) {
-            if let Some(state) = self.methods.get_mut(&key) {
+            if let Some(state) = self.declarations.methods.get_mut(&key) {
                 if !state.explicit {
                     *state = MethodState::explicit_overloads(&signatures);
                 }
             }
         }
         for (key, signatures) in builtin_rbi_signatures {
-            if let Some(state) = self.methods.get_mut(&key) {
+            if let Some(state) = self.declarations.methods.get_mut(&key) {
                 if !state.explicit {
                     *state = MethodState::explicit_overloads(&signatures);
                 }
@@ -4196,13 +4209,14 @@ impl<'src> Analyzer<'src> {
         // with Sorbet's gradual fallback instead of leaking `T.noreturn` into
         // callers and making ordinary branches appear unreachable.
         let rbi_definition_keys = self
+            .declarations
             .definitions
             .iter()
             .filter(|(offset, _)| self.is_rbi_offset(**offset))
             .map(|(_, key)| key.clone())
             .collect::<BTreeSet<_>>();
         for key in rbi_definition_keys {
-            if let Some(state) = self.methods.get_mut(&key) {
+            if let Some(state) = self.declarations.methods.get_mut(&key) {
                 if !state.explicit && state.return_type.is_none() {
                     state.return_type = Some(Type::Any);
                 }
@@ -4244,7 +4258,7 @@ impl<'src> Analyzer<'src> {
         let Some(owner) = key.owner.as_deref() else {
             return false;
         };
-        let Some(info) = self.classes.get(owner) else {
+        let Some(info) = self.declarations.classes.get(owner) else {
             return false;
         };
         (key.singleton && !info.is_module)
@@ -4275,7 +4289,7 @@ impl<'src> Analyzer<'src> {
         }
 
         let owner = key.owner.as_deref().unwrap_or("the module");
-        let info = self.classes.get(owner);
+        let info = self.declarations.classes.get(owner);
         let is_module = info.is_some_and(|info| info.is_module);
         let has_attached_class = info.is_some_and(|info| info.attached_class_member.is_some());
         let message = if key.singleton && is_module {
@@ -5632,7 +5646,7 @@ impl<'src> Analyzer<'src> {
             let method_key = environment.method_key.clone();
             let expected_block_parameters = method_key
                 .as_ref()
-                .and_then(|key| self.methods.get(key))
+                .and_then(|key| self.declarations.methods.get(key))
                 .and_then(|state| state.block.as_ref())
                 .and_then(|block| proc_parts(block).map(|(parameters, _)| parameters.to_vec()));
             if let Some(expected) = expected_block_parameters {
@@ -5659,7 +5673,7 @@ impl<'src> Analyzer<'src> {
                 }
             }
             if let Some(key) = method_key.as_ref() {
-                if let Some(state) = self.methods.get_mut(key) {
+                if let Some(state) = self.declarations.methods.get_mut(key) {
                     if state.observe_yield_arguments(&argument_types) {
                         self.changed_methods.insert(key.clone());
                     }
@@ -5667,7 +5681,7 @@ impl<'src> Analyzer<'src> {
             }
             let block_return_type = method_key
                 .as_ref()
-                .and_then(|key| self.methods.get(key))
+                .and_then(|key| self.declarations.methods.get(key))
                 .and_then(|state| state.block_return_type.clone())
                 .unwrap_or(Type::Any);
             let normal_type = evaluated.all_normal.then_some(block_return_type);
@@ -6889,6 +6903,7 @@ impl<'src> Analyzer<'src> {
     ) -> Eval {
         let name = prism::constant_name(definition.name());
         let registered_key = self
+            .declarations
             .definitions
             .get(&prism::span(node).0)
             .cloned()
@@ -6914,6 +6929,7 @@ impl<'src> Analyzer<'src> {
         self.begin_method_evaluation(&key);
         let previous_substitution_context = self.substitution_context.replace(key.clone());
         let state = self
+            .declarations
             .methods
             .get(&key)
             .cloned()
@@ -6953,7 +6969,7 @@ impl<'src> Analyzer<'src> {
             !state.explicit,
         );
         if !state.explicit {
-            if let Some(shape) = self.parameter_shapes.get(&prism::span(node).0) {
+            if let Some(shape) = self.declarations.parameter_shapes.get(&prism::span(node).0) {
                 let mut positional_index = 0;
                 for (name, kind) in &shape.parameter_kinds {
                     match kind {
@@ -7099,6 +7115,7 @@ impl<'src> Analyzer<'src> {
         let target = self.super_method_key(&current);
         let arguments = if forwarding.is_some() {
             let types = self
+                .declarations
                 .methods
                 .get(&current)
                 .map(|state| state.call_signature().params)
@@ -7177,10 +7194,10 @@ impl<'src> Analyzer<'src> {
                 }
                 continue;
             }
-            if self.methods.contains_key(&candidate) {
+            if self.declarations.methods.contains_key(&candidate) {
                 return Some(candidate);
             }
-            if self.aliases.contains_key(&candidate) {
+            if self.declarations.aliases.contains_key(&candidate) {
                 if let Some(resolved) = self.resolve_method_key_inner(&candidate, &mut visited) {
                     return Some(resolved);
                 }
@@ -7200,7 +7217,7 @@ impl<'src> Analyzer<'src> {
         let inferred_context = environment
             .method_key
             .as_ref()
-            .and_then(|key| self.methods.get(key))
+            .and_then(|key| self.declarations.methods.get(key))
             .is_some_and(|state| !state.explicit);
         let mut index = 0;
         for parameter in &parameters.requireds() {
@@ -7650,7 +7667,7 @@ impl<'src> Analyzer<'src> {
                 let required = environment
                     .method_key
                     .as_ref()
-                    .and_then(|key| self.methods.get(key))
+                    .and_then(|key| self.declarations.methods.get(key))
                     .is_some_and(|state| state.explicit && state.block.is_some());
                 if required {
                     return (true, false);
@@ -7797,7 +7814,7 @@ impl<'src> Analyzer<'src> {
                 {
                     return self
                         .resolve_method_key(&key)
-                        .and_then(|resolved| self.methods.get(&resolved))
+                        .and_then(|resolved| self.declarations.methods.get(&resolved))
                         .is_some_and(|state| state.explicit);
                 }
             }
@@ -7805,7 +7822,7 @@ impl<'src> Analyzer<'src> {
             let key = self.implicit_method_key(&name, environment);
             return self
                 .resolve_method_key(&key)
-                .and_then(|resolved| self.methods.get(&resolved))
+                .and_then(|resolved| self.declarations.methods.get(&resolved))
                 .is_some_and(|state| state.explicit);
         }
         false
@@ -8343,10 +8360,12 @@ impl<'src> Analyzer<'src> {
         // this refinement is impossible. Sorbet keeps the class-object
         // intersection in cases such as `klass < Exportable`.
         if self
+            .declarations
             .classes
             .get(&actual_name)
             .is_some_and(|info| info.is_module)
             || self
+                .declarations
                 .classes
                 .get(&expected_name)
                 .is_some_and(|info| info.is_module)
@@ -8370,7 +8389,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn known_nominal_name(&self, name: &str) -> bool {
-        self.classes.contains_key(name)
+        self.declarations.classes.contains_key(name)
             || matches!(name, "ActiveSupport::Inflector")
             || matches!(
                 name.rsplit_once("::").map_or(name, |(_, tail)| tail),
@@ -8591,7 +8610,7 @@ impl<'src> Analyzer<'src> {
             self.receiver_method_key(Some(receiver), &receiver_type, name, environment)
         {
             if let Some(resolved) = self.resolve_method_key(&key) {
-                if let Some(state) = self.methods.get(&resolved) {
+                if let Some(state) = self.declarations.methods.get(&resolved) {
                     let return_type = state.call_signature().return_type;
                     return !return_type.is_any() && return_type.without(&Type::Nil) == return_type;
                 }
@@ -9179,12 +9198,14 @@ impl<'src> Analyzer<'src> {
             } else if let Some((accessor_key, accessor)) = self
                 .resolve_method_key(&key)
                 .filter(|resolved| {
-                    self.methods
+                    self.declarations
+                        .methods
                         .get(resolved)
                         .is_some_and(|state| !state.explicit)
                 })
                 .and_then(|resolved| {
-                    self.accessors
+                    self.declarations
+                        .accessors
                         .get(&resolved)
                         .copied()
                         .map(|accessor| (resolved, accessor))
@@ -9233,7 +9254,7 @@ impl<'src> Analyzer<'src> {
             {
                 let declared = self
                     .resolve_method_key(&key)
-                    .and_then(|resolved| self.methods.get(&resolved))
+                    .and_then(|resolved| self.declarations.methods.get(&resolved))
                     .is_some_and(|state| state.explicit);
                 let block_return_type = self.observe_block_call(
                     &key,
@@ -9532,7 +9553,7 @@ impl<'src> Analyzer<'src> {
                 self.record_method_dependency(&key, environment);
                 if self
                     .resolve_method_key(&key)
-                    .and_then(|resolved| self.methods.get(&resolved))
+                    .and_then(|resolved| self.declarations.methods.get(&resolved))
                     .is_some_and(|state| state.visibility == Visibility::Private)
                     && !self.private_call_allowed(&key, environment)
                 {
@@ -9558,7 +9579,7 @@ impl<'src> Analyzer<'src> {
                 } else if matches!(&dispatch_receiver_type, Type::Array(_) | Type::Tuple(_))
                     && self
                         .resolve_method_key(&key)
-                        .and_then(|resolved| self.methods.get(&resolved))
+                        .and_then(|resolved| self.declarations.methods.get(&resolved))
                         .is_some_and(|state| !state.explicit)
                 {
                     // The core Array RBI declares many methods without a
@@ -9591,12 +9612,14 @@ impl<'src> Analyzer<'src> {
                     let inferred_accessor = self
                         .resolve_method_key(&key)
                         .filter(|resolved| {
-                            self.methods
+                            self.declarations
+                                .methods
                                 .get(resolved)
                                 .is_some_and(|state| !state.explicit)
                         })
                         .and_then(|resolved| {
-                            self.accessors
+                            self.declarations
+                                .accessors
                                 .get(&resolved)
                                 .copied()
                                 .map(|accessor| (resolved, accessor))
@@ -9618,7 +9641,7 @@ impl<'src> Analyzer<'src> {
                     {
                         let declared = self
                             .resolve_method_key(&key)
-                            .and_then(|resolved| self.methods.get(&resolved))
+                            .and_then(|resolved| self.declarations.methods.get(&resolved))
                             .is_some_and(|state| state.explicit);
                         let block_return_type = self.observe_block_call(
                             &key,
@@ -10097,7 +10120,7 @@ impl<'src> Analyzer<'src> {
             .and_then(|resolved| resolved.owner);
         if self
             .resolve_method_key(key)
-            .and_then(|resolved| self.methods.get(&resolved))
+            .and_then(|resolved| self.declarations.methods.get(&resolved))
             .is_some_and(|state| state.visibility == Visibility::Private)
             && !self.private_call_allowed(key, environment)
         {
@@ -10137,12 +10160,14 @@ impl<'src> Analyzer<'src> {
         let inferred_accessor = self
             .resolve_method_key(key)
             .filter(|resolved| {
-                self.methods
+                self.declarations
+                    .methods
                     .get(resolved)
                     .is_some_and(|state| !state.explicit)
             })
             .and_then(|resolved| {
-                self.accessors
+                self.declarations
+                    .accessors
                     .get(&resolved)
                     .copied()
                     .map(|accessor| (resolved, accessor))
@@ -10163,7 +10188,7 @@ impl<'src> Analyzer<'src> {
         let signature = self.widen_overridable_noreturn(key, signature);
         let declared = self
             .resolve_method_key(key)
-            .and_then(|resolved| self.methods.get(&resolved))
+            .and_then(|resolved| self.declarations.methods.get(&resolved))
             .is_some_and(|state| state.explicit);
         let block_return_type = self.observe_block_call(
             key,
@@ -10201,7 +10226,7 @@ impl<'src> Analyzer<'src> {
         let Some(resolved) = self.resolve_method_key(key) else {
             return signature;
         };
-        let Some(state) = self.methods.get(&resolved) else {
+        let Some(state) = self.declarations.methods.get(&resolved) else {
             return signature;
         };
         if state.explicit
@@ -10216,7 +10241,7 @@ impl<'src> Analyzer<'src> {
 
         let mut override_type = Type::Never;
         let mut found_override = false;
-        for (candidate, candidate_state) in &self.methods {
+        for (candidate, candidate_state) in &self.declarations.methods {
             if candidate.singleton != resolved.singleton
                 || candidate.name != resolved.name
                 || candidate.owner.as_deref() == Some(owner)
@@ -10308,7 +10333,7 @@ impl<'src> Analyzer<'src> {
         let Some(key) = self.resolve_method_key(&key) else {
             return false;
         };
-        self.methods.get(&key).is_some_and(|state| {
+        self.declarations.methods.get(&key).is_some_and(|state| {
             state.return_terminates && state.return_type.as_ref().is_some_and(Type::is_never)
         })
     }
@@ -10320,7 +10345,7 @@ impl<'src> Analyzer<'src> {
         let Some(target) = self.super_method_key(current) else {
             return false;
         };
-        self.methods.get(&target).is_some_and(|state| {
+        self.declarations.methods.get(&target).is_some_and(|state| {
             state.return_terminates && state.return_type.as_ref().is_some_and(Type::is_never)
         })
     }
@@ -10332,7 +10357,12 @@ impl<'src> Analyzer<'src> {
         has_block: bool,
     ) -> Option<MethodSig> {
         let key = self.resolve_method_key(key)?;
-        if let Some(state) = self.methods.get(&key).filter(|state| state.explicit) {
+        if let Some(state) = self
+            .declarations
+            .methods
+            .get(&key)
+            .filter(|state| state.explicit)
+        {
             let fallback = state.call_signature();
             let overloads = if state.overloads.is_empty() {
                 vec![fallback.clone()]
@@ -10352,11 +10382,12 @@ impl<'src> Analyzer<'src> {
                 .is_some_and(|current| {
                     current == key
                         && self
+                            .declarations
                             .methods
                             .get(&current)
                             .is_some_and(|state| !state.explicit)
                 });
-            let state = self.methods.get_mut(&key)?;
+            let state = self.declarations.methods.get_mut(&key)?;
             let mut changed = false;
             let positional_types = if state.accepts_keyword_rest || !state.keywords.is_empty() {
                 &arguments.positional_types
@@ -10416,7 +10447,7 @@ impl<'src> Analyzer<'src> {
         let Some(current) = environment.method_key.as_ref() else {
             return;
         };
-        let Some(state) = self.methods.get_mut(current) else {
+        let Some(state) = self.declarations.methods.get_mut(current) else {
             return;
         };
         if !state.explicit && !state.binds_block_to_receiver {
@@ -10455,7 +10486,8 @@ impl<'src> Analyzer<'src> {
             .and_then(optional_proc_type)
             .and_then(|block| proc_parts(&block).map(|(parameters, _)| parameters.to_vec()))
             .unwrap_or_else(|| {
-                self.methods
+                self.declarations
+                    .methods
                     .get(&key)
                     .map_or_else(Vec::new, MethodState::block_parameters)
             });
@@ -10486,6 +10518,7 @@ impl<'src> Analyzer<'src> {
         })
         .flatten();
         let binds_block_to_receiver = self
+            .declarations
             .methods
             .get(&key)
             .is_some_and(|state| state.binds_block_to_receiver);
@@ -10575,6 +10608,7 @@ impl<'src> Analyzer<'src> {
             receiver_type,
         ));
         let checked_block_signature = self
+            .declarations
             .methods
             .get(&key)
             .is_some_and(|state| state.explicit)
@@ -10618,8 +10652,13 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
-        if self.methods.get(&key).is_some_and(|state| !state.explicit)
+        if self
+            .declarations
+            .methods
+            .get(&key)
+            .is_some_and(|state| !state.explicit)
             && self
+                .declarations
                 .methods
                 .get_mut(&key)
                 .is_some_and(|state| state.observe_block_return(&block_type))
@@ -10678,6 +10717,7 @@ impl<'src> Analyzer<'src> {
 
     fn rails_application_instance_type(&self) -> Option<Type> {
         let applications = self
+            .declarations
             .classes
             .iter()
             .filter(|(name, info)| {
@@ -10690,7 +10730,8 @@ impl<'src> Analyzer<'src> {
         if !applications.is_empty() {
             return Some(Type::union(applications));
         }
-        self.classes
+        self.declarations
+            .classes
             .contains_key("Rails::Application")
             .then(|| Type::named("Rails::Application"))
     }
@@ -11010,7 +11051,7 @@ impl<'src> Analyzer<'src> {
         let Some(caller) = environment.method_key.as_ref() else {
             return;
         };
-        if self.methods.contains_key(caller) {
+        if self.declarations.methods.contains_key(caller) {
             self.method_callers
                 .entry(callee)
                 .or_default()
@@ -11045,6 +11086,7 @@ impl<'src> Analyzer<'src> {
         };
         if current != callee
             || self
+                .declarations
                 .methods
                 .get(&current)
                 .is_some_and(|state| state.explicit)
@@ -11114,10 +11156,10 @@ impl<'src> Analyzer<'src> {
             candidates.push(key.clone());
         }
         for candidate in candidates {
-            if self.methods.contains_key(&candidate) {
+            if self.declarations.methods.contains_key(&candidate) {
                 return Some(candidate);
             }
-            if let Some(target) = self.aliases.get(&candidate) {
+            if let Some(target) = self.declarations.aliases.get(&candidate) {
                 if let Some(resolved) = self.resolve_method_key_inner(target, visited) {
                     return Some(resolved);
                 }
@@ -11137,7 +11179,7 @@ impl<'src> Analyzer<'src> {
         if !visited.insert(owner.to_owned()) {
             return;
         }
-        let info = self.classes.get(owner);
+        let info = self.declarations.classes.get(owner);
         if !singleton {
             if let Some(info) = info {
                 for module in info.prepends.iter().rev() {
@@ -11204,7 +11246,7 @@ impl<'src> Analyzer<'src> {
             let receiver_type = Type::named(owner.to_owned());
             let initializer_requires_block = self
                 .resolve_method_key(&key)
-                .and_then(|resolved| self.methods.get(&resolved))
+                .and_then(|resolved| self.declarations.methods.get(&resolved))
                 .is_some_and(|state| state.explicit);
             let previous_checking_initializer = self.checking_initializer;
             let previous_initializer_has_block = self.initializer_has_block;
@@ -11227,17 +11269,20 @@ impl<'src> Analyzer<'src> {
     }
 
     fn observe_struct_constructor(&mut self, owner: &str, arguments: &CallArguments<'_>) {
-        let Some(fields) = self.struct_fields.get(owner).cloned() else {
+        let Some(fields) = self.declarations.struct_fields.get(owner).cloned() else {
             return;
         };
         for (field, actual) in fields.iter().zip(&arguments.positional_types) {
             let key = (owner.to_owned(), field.clone());
             let next = self
+                .declarations
                 .struct_field_types
                 .get(&key)
                 .map_or_else(|| actual.clone(), |current| current.join(actual));
-            if self.struct_field_types.get(&key) != Some(&next) {
-                self.struct_field_types.insert(key.clone(), next);
+            if self.declarations.struct_field_types.get(&key) != Some(&next) {
+                self.declarations
+                    .struct_field_types
+                    .insert(key.clone(), next);
                 self.changed_shared
                     .insert(SharedKey::StructField(key.0, key.1));
             }
@@ -11251,6 +11296,7 @@ impl<'src> Analyzer<'src> {
         environment: &Environment,
     ) -> Option<Type> {
         if !self
+            .declarations
             .struct_fields
             .get(owner)
             .is_some_and(|fields| fields.iter().any(|field| field == name))
@@ -11263,7 +11309,8 @@ impl<'src> Analyzer<'src> {
             environment,
         );
         Some(
-            self.struct_field_types
+            self.declarations
+                .struct_field_types
                 .get(&key)
                 .cloned()
                 .unwrap_or(Type::Any),
@@ -11300,7 +11347,7 @@ impl<'src> Analyzer<'src> {
         } else if let Type::Named(owner, _) = receiver_type {
             let owner = owner
                 .strip_prefix("T::")
-                .filter(|bare| self.classes.contains_key(*bare))
+                .filter(|bare| self.declarations.classes.contains_key(*bare))
                 .map_or_else(|| owner.clone(), str::to_owned);
             (owner, false)
         } else {
@@ -11434,7 +11481,7 @@ impl<'src> Analyzer<'src> {
         let Some(method) = environment.method_key.as_ref() else {
             return;
         };
-        if !self.methods.contains_key(method) {
+        if !self.declarations.methods.contains_key(method) {
             return;
         }
         self.method_shared_reads
@@ -11598,6 +11645,7 @@ impl<'src> Analyzer<'src> {
             return environment.get(&refinement);
         }
         let owner_is_module = self
+            .declarations
             .classes
             .get(&key.owner)
             .is_some_and(|info| info.is_module);
@@ -11615,7 +11663,7 @@ impl<'src> Analyzer<'src> {
                     continue;
                 }
                 hosts.insert(owner.clone());
-                for (candidate, info) in &self.classes {
+                for (candidate, info) in &self.declarations.classes {
                     if info.includes.contains(&owner)
                         || info.prepends.contains(&owner)
                         || info.extends.contains(&owner)
@@ -11645,7 +11693,7 @@ impl<'src> Analyzer<'src> {
                 self.record_shared_read(SharedKey::Ivar(candidate), environment);
                 return type_;
             }
-            if let Some(info) = self.classes.get(&owner_name) {
+            if let Some(info) = self.declarations.classes.get(&owner_name) {
                 // A module extended into a class runs its instance methods
                 // with the class object as `self`.  Dynamic APIs such as
                 // `instance_variable_set` therefore record the field under
@@ -11686,7 +11734,12 @@ impl<'src> Analyzer<'src> {
         singleton: bool,
         environment: &Environment,
     ) -> Option<Type> {
-        let mut pending = if self.classes.get(class).is_some_and(|info| info.is_module) {
+        let mut pending = if self
+            .declarations
+            .classes
+            .get(class)
+            .is_some_and(|info| info.is_module)
+        {
             let mut reverse_pending = vec![class.to_owned()];
             let mut reverse_visited = BTreeSet::new();
             let mut hosts = BTreeSet::new();
@@ -11695,7 +11748,7 @@ impl<'src> Analyzer<'src> {
                     continue;
                 }
                 hosts.insert(owner.clone());
-                for (candidate, info) in &self.classes {
+                for (candidate, info) in &self.declarations.classes {
                     if info.includes.contains(&owner)
                         || info.prepends.contains(&owner)
                         || info.extends.contains(&owner)
@@ -11725,7 +11778,7 @@ impl<'src> Analyzer<'src> {
                 self.record_shared_read(SharedKey::Ivar(key), environment);
                 return Some(type_);
             }
-            if let Some(info) = self.classes.get(&current) {
+            if let Some(info) = self.declarations.classes.get(&current) {
                 if info.extends.iter().any(|module| module == class) {
                     let extended_key = IvarKey {
                         owner: current.clone(),
@@ -11820,7 +11873,8 @@ impl<'src> Analyzer<'src> {
             })
             .unwrap_or_default();
         if !fields.is_empty() {
-            self.struct_fields
+            self.declarations
+                .struct_fields
                 .entry(self.constant_key(environment, constant_name))
                 .or_insert(fields);
         }
@@ -11856,15 +11910,16 @@ impl<'src> Analyzer<'src> {
 
     fn observe_constant(&mut self, environment: &Environment, name: String, actual: &Type) {
         let key = self.constant_key(environment, &name);
-        let is_new_constant = !self.constants.contains_key(&key);
+        let is_new_constant = !self.declarations.constants.contains_key(&key);
         let next = self
+            .declarations
             .constants
             .get(&key)
             .map_or_else(|| actual.clone(), |current| current.join(actual));
-        if self.constants.get(&key) != Some(&next) {
-            self.constants.insert(key.clone(), next);
+        if self.declarations.constants.get(&key) != Some(&next) {
+            self.declarations.constants.insert(key.clone(), next);
             if is_new_constant {
-                Self::add_name_suffixes(&mut self.constant_name_suffixes, &key);
+                Self::add_name_suffixes(&mut self.declarations.constant_name_suffixes, &key);
             }
             self.changed_shared.insert(SharedKey::Constant(key));
         }
@@ -11887,6 +11942,7 @@ impl<'src> Analyzer<'src> {
         if name.contains("::") {
             let suffix = format!("::{name}");
             let mut matches = self
+                .declarations
                 .constants
                 .keys()
                 .filter(|candidate| candidate.ends_with(&suffix));
@@ -11907,6 +11963,7 @@ impl<'src> Analyzer<'src> {
                 candidates.push(key);
             }
             owner = self
+                .declarations
                 .classes
                 .get(&current)
                 .and_then(|info| info.superclass.clone());
@@ -11917,24 +11974,24 @@ impl<'src> Analyzer<'src> {
         // because a workspace may contain another `Color::BLUE` (for example
         // `Thor::Shell::Color::BLUE`) that makes the suffix ambiguous.
         let resolved = self.resolve_name(name, result_owner.as_deref());
-        if self.constants.contains_key(&resolved) && !candidates.contains(&resolved) {
+        if self.declarations.constants.contains_key(&resolved) && !candidates.contains(&resolved) {
             candidates.push(resolved.clone());
         }
 
         let selected = candidates
             .iter()
-            .position(|candidate| self.constants.contains_key(candidate));
+            .position(|candidate| self.declarations.constants.contains_key(candidate));
         let read_count = selected.map_or(candidates.len(), |index| index + 1);
         for candidate in candidates.iter().take(read_count) {
             self.record_shared_read(SharedKey::Constant(candidate.clone()), environment);
         }
         if let Some(index) = selected {
-            if let Some(type_) = self.constants.get(&candidates[index]) {
+            if let Some(type_) = self.declarations.constants.get(&candidates[index]) {
                 return self.resolve_type_names(type_, result_owner.as_deref());
             }
         }
         if resolved != name
-            || self.classes.contains_key(&resolved)
+            || self.declarations.classes.contains_key(&resolved)
             || Self::looks_like_class_name(&resolved)
         {
             Self::class_object_type(&resolved)
@@ -11976,6 +12033,7 @@ impl<'src> Analyzer<'src> {
                 name: name.to_owned(),
             });
             owner = self
+                .declarations
                 .classes
                 .get(&current)
                 .and_then(|info| info.superclass.clone());
@@ -12100,10 +12158,10 @@ impl<'src> Analyzer<'src> {
                     .as_ref()
                     .is_some_and(|key| key.singleton);
                 let is_module = owner
-                    .and_then(|owner| self.classes.get(owner))
+                    .and_then(|owner| self.declarations.classes.get(owner))
                     .is_some_and(|info| info.is_module);
                 let has_attached_class = owner
-                    .and_then(|owner| self.classes.get(owner))
+                    .and_then(|owner| self.declarations.classes.get(owner))
                     .is_some_and(|info| info.attached_class_member.is_some());
                 if is_singleton && is_module {
                     self.error(
@@ -12210,12 +12268,17 @@ impl<'src> Analyzer<'src> {
             let Some(base_type) = Self::named_type_name(&base_type) else {
                 continue;
             };
-            let info = self.classes.entry(base_type.clone()).or_default();
+            let info = self
+                .declarations
+                .classes
+                .entry(base_type.clone())
+                .or_default();
             if !info.extends.contains(&module_name) {
                 info.extends.push(module_name.clone());
                 self.method_resolution_cache.borrow_mut().clear();
                 self.instance_self_type_cache.borrow_mut().clear();
-                self.changed_methods.extend(self.methods.keys().cloned());
+                self.changed_methods
+                    .extend(self.declarations.methods.keys().cloned());
             }
             let hook = MethodKey {
                 owner: Some(module_name.clone()),
@@ -12281,12 +12344,17 @@ impl<'src> Analyzer<'src> {
             let Some(base_type) = Self::named_type_name(&base_type) else {
                 continue;
             };
-            let info = self.classes.entry(base_type.clone()).or_default();
+            let info = self
+                .declarations
+                .classes
+                .entry(base_type.clone())
+                .or_default();
             if !info.includes.contains(&module_name) {
                 info.includes.push(module_name.clone());
                 self.method_resolution_cache.borrow_mut().clear();
                 self.instance_self_type_cache.borrow_mut().clear();
-                self.changed_methods.extend(self.methods.keys().cloned());
+                self.changed_methods
+                    .extend(self.declarations.methods.keys().cloned());
             }
             let hook = MethodKey {
                 owner: Some(module_name.clone()),
@@ -12616,7 +12684,7 @@ impl<'src> Analyzer<'src> {
             if self.nominal_names_match(&current, mixin) {
                 return true;
             }
-            let Some(info) = self.classes.get(&current) else {
+            let Some(info) = self.declarations.classes.get(&current) else {
                 continue;
             };
             pending.extend(info.includes.iter().cloned());
@@ -12842,10 +12910,10 @@ impl<'src> Analyzer<'src> {
                         &constant_name,
                         (!constant_name.starts_with("::")).then_some(owner.as_str()),
                     );
-                    if self.classes.contains_key(&resolved) {
+                    if self.declarations.classes.contains_key(&resolved) {
                         return Self::class_object_type(&resolved);
                     }
-                    if let Some(type_) = self.constants.get(&resolved).cloned() {
+                    if let Some(type_) = self.declarations.constants.get(&resolved).cloned() {
                         return self.resolve_type_names(&type_, Some(&owner));
                     }
                 }
@@ -13080,6 +13148,7 @@ impl<'src> Analyzer<'src> {
             }
             Type::Named(class, arguments) if name == "new" => {
                 if self
+                    .declarations
                     .classes
                     .get(class)
                     .is_some_and(|info| !info.type_members.is_empty())
@@ -14906,7 +14975,7 @@ impl<'src> Analyzer<'src> {
                 if owner
                     .and_then(|owner| {
                         let resolved = self.resolve_name("Symbol", Some(owner));
-                        (resolved != "Symbol" && self.classes.contains_key(&resolved))
+                        (resolved != "Symbol" && self.declarations.classes.contains_key(&resolved))
                             .then_some(resolved)
                     })
                     .is_some() =>
@@ -14918,7 +14987,8 @@ impl<'src> Analyzer<'src> {
                     .iter()
                     .any(|parameter| parameter == name)
                     && owner.is_some_and(|owner| {
-                        self.classes
+                        self.declarations
+                            .classes
                             .get(owner)
                             .is_some_and(|info| info.type_members.contains_key(name))
                     }) =>
@@ -14932,14 +15002,16 @@ impl<'src> Analyzer<'src> {
                 if !local_type_parameters
                     .iter()
                     .any(|parameter| parameter == name)
-                    && (self.classes.contains_key(name) || self.constants.contains_key(name)) =>
+                    && (self.declarations.classes.contains_key(name)
+                        || self.declarations.constants.contains_key(name)) =>
             {
                 Type::Named(self.resolve_name(name, owner), Vec::new())
             }
             Type::Named(name, arguments) => {
                 if arguments.is_empty()
                     && owner.is_some_and(|owner| {
-                        self.classes
+                        self.declarations
+                            .classes
                             .get(owner)
                             .is_some_and(|info| info.type_members.contains_key(name))
                     })
@@ -15045,7 +15117,12 @@ impl<'src> Analyzer<'src> {
     fn find_type_alias(&self, name: &str, owner: Option<&str>) -> Option<(String, Type)> {
         let name = name.trim_start_matches("::");
         let matches = |candidate: &str| candidate == name;
-        if let Some((key, type_)) = self.type_aliases.iter().find(|(key, _)| matches(key)) {
+        if let Some((key, type_)) = self
+            .declarations
+            .type_aliases
+            .iter()
+            .find(|(key, _)| matches(key))
+        {
             return Some((key.clone(), type_.clone()));
         }
 
@@ -15053,6 +15130,7 @@ impl<'src> Analyzer<'src> {
         while let Some(current) = scope {
             let candidate = format!("{current}::{name}");
             if let Some((key, type_)) = self
+                .declarations
                 .type_aliases
                 .iter()
                 .find(|(key, _)| key.as_str() == candidate)
@@ -15064,6 +15142,7 @@ impl<'src> Analyzer<'src> {
 
         let qualified_suffix = format!("::{name}");
         let mut qualified = self
+            .declarations
             .type_aliases
             .iter()
             .filter(|(key, _)| key.ends_with(&qualified_suffix));
@@ -15074,7 +15153,7 @@ impl<'src> Analyzer<'src> {
         }
 
         let name_tail = name.rsplit_once("::").map_or(name, |(_, tail)| tail);
-        let mut candidates = self.type_aliases.iter().filter(|(key, _)| {
+        let mut candidates = self.declarations.type_aliases.iter().filter(|(key, _)| {
             let candidate_tail = key.rsplit_once("::").map_or(key.as_str(), |(_, tail)| tail);
             // RBS comments currently retain aliases without their lexical
             // owner. Preserve the compatibility fallback for an exactly
@@ -15099,12 +15178,16 @@ impl<'src> Analyzer<'src> {
         let mut scope = owner;
         while let Some(current) = scope {
             let candidate = format!("{current}::{name}");
-            if self.classes.contains_key(&candidate) || self.constants.contains_key(&candidate) {
+            if self.declarations.classes.contains_key(&candidate)
+                || self.declarations.constants.contains_key(&candidate)
+            {
                 return candidate;
             }
             scope = current.rsplit_once("::").map(|(parent, _)| parent);
         }
-        if self.classes.contains_key(name) || self.constants.contains_key(name) {
+        if self.declarations.classes.contains_key(name)
+            || self.declarations.constants.contains_key(name)
+        {
             return name.to_owned();
         }
         name.to_owned()
@@ -15125,30 +15208,42 @@ impl<'src> Analyzer<'src> {
     }
 
     fn rebuild_nominal_name_indexes(&mut self) {
-        self.class_name_set.clear();
-        self.constant_name_set.clear();
-        self.class_name_suffixes.clear();
-        self.constant_name_suffixes.clear();
-        let class_names = self.classes.keys().cloned().collect::<Vec<_>>();
+        self.declarations.class_name_set.clear();
+        self.declarations.constant_name_set.clear();
+        self.declarations.class_name_suffixes.clear();
+        self.declarations.constant_name_suffixes.clear();
+        let class_names = self
+            .declarations
+            .classes
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         for name in class_names {
-            self.class_name_set.insert(name.clone());
-            Self::add_name_suffixes(&mut self.class_name_suffixes, &name);
+            self.declarations.class_name_set.insert(name.clone());
+            Self::add_name_suffixes(&mut self.declarations.class_name_suffixes, &name);
         }
-        let constant_names = self.constants.keys().cloned().collect::<Vec<_>>();
+        let constant_names = self
+            .declarations
+            .constants
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         for name in constant_names {
-            self.constant_name_set.insert(name.clone());
-            Self::add_name_suffixes(&mut self.constant_name_suffixes, &name);
+            self.declarations.constant_name_set.insert(name.clone());
+            Self::add_name_suffixes(&mut self.declarations.constant_name_suffixes, &name);
         }
     }
 
     fn resolve_global_name(&self, name: &str) -> String {
-        if self.class_name_set.contains(name) || self.constant_name_set.contains(name) {
+        if self.declarations.class_name_set.contains(name)
+            || self.declarations.constant_name_set.contains(name)
+        {
             return name.to_owned();
         }
         if let Some(resolved) = self.global_name_cache.borrow().get(name) {
             return resolved.clone();
         }
-        let resolved = if let Some(matches) = self.class_name_suffixes.get(name) {
+        let resolved = if let Some(matches) = self.declarations.class_name_suffixes.get(name) {
             if matches.len() == 1 {
                 matches[0].clone()
             } else {
@@ -15167,12 +15262,14 @@ impl<'src> Analyzer<'src> {
     where
         F: FnMut(&str) -> bool,
     {
-        if self.class_name_set.contains(name) || self.constant_name_set.contains(name) {
+        if self.declarations.class_name_set.contains(name)
+            || self.declarations.constant_name_set.contains(name)
+        {
             return visit(name);
         }
 
         let mut found = false;
-        if let Some(candidates) = self.class_name_suffixes.get(name) {
+        if let Some(candidates) = self.declarations.class_name_suffixes.get(name) {
             found = true;
             for candidate in candidates {
                 if visit(candidate) {
@@ -15180,7 +15277,7 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
-        if let Some(candidates) = self.constant_name_suffixes.get(name) {
+        if let Some(candidates) = self.declarations.constant_name_suffixes.get(name) {
             found = true;
             for candidate in candidates {
                 if visit(candidate) {
@@ -15209,9 +15306,9 @@ impl<'src> Analyzer<'src> {
         let actual = self.resolve_global_name(actual);
         let expected = self.resolve_global_name(expected);
         actual == expected
-            || (self.class_name_set.contains(&actual)
+            || (self.declarations.class_name_set.contains(&actual)
                 && Self::qualified_name_ends_with(&expected, &actual))
-            || (self.class_name_set.contains(&expected)
+            || (self.declarations.class_name_set.contains(&expected)
                 && Self::qualified_name_ends_with(&actual, &expected))
     }
 
@@ -15222,9 +15319,14 @@ impl<'src> Analyzer<'src> {
     }
 
     fn normalize_class_graph(&mut self) {
-        let owners = self.classes.keys().cloned().collect::<Vec<_>>();
+        let owners = self
+            .declarations
+            .classes
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         for owner in owners {
-            let Some(info) = self.classes.get(&owner).cloned() else {
+            let Some(info) = self.declarations.classes.get(&owner).cloned() else {
                 continue;
             };
             let superclass = info
@@ -15233,7 +15335,8 @@ impl<'src> Analyzer<'src> {
                 .map(|name| {
                     let name = name.trim_start_matches("::");
                     if name.contains("::")
-                        && (self.classes.contains_key(name) || self.constants.contains_key(name))
+                        && (self.declarations.classes.contains_key(name)
+                            || self.declarations.constants.contains_key(name))
                     {
                         name.to_owned()
                     } else {
@@ -15273,7 +15376,7 @@ impl<'src> Analyzer<'src> {
                 .iter()
                 .map(|name| self.resolve_name(name, Some(&owner)))
                 .collect();
-            if let Some(info) = self.classes.get_mut(&owner) {
+            if let Some(info) = self.declarations.classes.get_mut(&owner) {
                 info.superclass = superclass;
                 info.includes = includes;
                 info.prepends = prepends;
@@ -15284,6 +15387,7 @@ impl<'src> Analyzer<'src> {
         }
 
         let concern_class_methods = self
+            .declarations
             .classes
             .iter()
             .filter_map(|(owner, info)| {
@@ -15292,11 +15396,12 @@ impl<'src> Analyzer<'src> {
                     .iter()
                     .any(|extension| extension == "ActiveSupport::Concern");
                 let class_methods = format!("{owner}::ClassMethods");
-                (is_concern && self.classes.contains_key(&class_methods))
+                (is_concern && self.declarations.classes.contains_key(&class_methods))
                     .then_some((owner.clone(), class_methods))
             })
             .collect::<BTreeMap<_, _>>();
         let mixins = self
+            .declarations
             .classes
             .iter()
             .map(|(owner, info)| {
@@ -15309,7 +15414,8 @@ impl<'src> Analyzer<'src> {
             let explicit_class_methods = includes
                 .iter()
                 .flat_map(|included| {
-                    self.classes
+                    self.declarations
+                        .classes
                         .get(included)
                         .into_iter()
                         .flat_map(|info| info.class_methods.iter().cloned())
@@ -15319,7 +15425,7 @@ impl<'src> Analyzer<'src> {
                 .iter()
                 .filter_map(|included| concern_class_methods.get(included).cloned())
                 .collect::<Vec<_>>();
-            if let Some(info) = self.classes.get_mut(&owner) {
+            if let Some(info) = self.declarations.classes.get_mut(&owner) {
                 for class_method in explicit_class_methods
                     .into_iter()
                     .chain(concern_mixin_methods)
@@ -15586,7 +15692,7 @@ impl<'src> Analyzer<'src> {
             if let Some(superclass) = Self::builtin_superclass(&name) {
                 pending.push(superclass.to_owned());
             }
-            let Some(info) = self.classes.get(&name) else {
+            let Some(info) = self.declarations.classes.get(&name) else {
                 continue;
             };
             if let Some(superclass) = &info.superclass {
@@ -15748,7 +15854,7 @@ impl<'src> Analyzer<'src> {
             Type::Symbol => owner
                 .and_then(|owner| {
                     let resolved = self.resolve_name("Symbol", Some(owner));
-                    (resolved != "Symbol" && self.classes.contains_key(&resolved))
+                    (resolved != "Symbol" && self.declarations.classes.contains_key(&resolved))
                         .then_some(Type::named(resolved))
                 })
                 .unwrap_or(Type::Symbol),
