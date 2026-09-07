@@ -134,6 +134,36 @@ fn narrows_proc_arity_in_zero_arity_branch() {
 }
 
 #[test]
+fn treats_a_default_parameter_as_initialized_inside_the_method() {
+    check_fixture("tests/fixtures/default_parameter_flow.rb");
+}
+
+#[test]
+fn knows_extrema_of_a_nonempty_array_are_non_nil() {
+    let result = check_fixture("tests/fixtures/nonempty_array_extrema.rb");
+    let reveals = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("Revealed type:"))
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reveals
+            .iter()
+            .filter(|message| message.contains("Revealed type: `Integer`"))
+            .count(),
+        2,
+        "{reveals:?}"
+    );
+    assert!(
+        reveals
+            .iter()
+            .any(|message| message.contains("Revealed type: `T.untyped`")),
+        "{reveals:?}"
+    );
+}
+
+#[test]
 fn models_sorbet_abstract_helper_declarations() {
     let result = check_fixture("tests/fixtures/sorbet_abstract_helper.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

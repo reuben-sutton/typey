@@ -8785,6 +8785,13 @@ impl<'src> Analyzer<'src> {
                 argument_types,
                 block: block.as_ref(),
             };
+            let nonempty_literal_extremum = matches!(name.as_str(), "min" | "max")
+                && argument_types.is_empty()
+                && receiver_node.as_ref().is_some_and(|receiver| {
+                    receiver
+                        .as_array_node()
+                        .is_some_and(|array| !array.elements().is_empty())
+                });
             let dispatch_receiver_type = if call.is_safe_navigation() {
                 receiver_type.without(&Type::Nil)
             } else {
@@ -9044,6 +9051,9 @@ impl<'src> Analyzer<'src> {
                 }
                 type_
             };
+            if nonempty_literal_extremum {
+                result = result.without(&Type::Nil);
+            }
             self.refine_local_array_write(
                 receiver_node.as_ref(),
                 &name,
