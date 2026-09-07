@@ -8,9 +8,11 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 mod declarations;
+mod fixpoint;
 mod flow;
 
 use declarations::DeclarationState;
+use fixpoint::FixpointState;
 use flow::{Eval, Flow, FlowKind, OutcomeTypes};
 
 const DEBUG_NODE_INTERVAL: usize = 1_000;
@@ -2389,18 +2391,7 @@ pub(crate) fn check_with_policies(
         builtin_rbi_ranges: builtin_rbi_ranges.to_vec(),
         strictness_ranges: strictness_ranges.to_vec(),
         filter_method_bodies: false,
-        active_methods: BTreeSet::new(),
-        changed_methods: BTreeSet::new(),
-        pending_returns: BTreeMap::new(),
-        collecting_returns: false,
-        method_callers: BTreeMap::new(),
-        method_shared_reads: BTreeMap::new(),
-        shared_readers: BTreeMap::new(),
-        symbol_method_returns: BTreeMap::new(),
-        changed_shared: BTreeSet::new(),
-        debug_phase: "idle",
-        debug_round: 0,
-        debug_nodes: 0,
+        fixpoint: FixpointState::default(),
         defer_inline_assertions: false,
         preserve_literal_tuples: false,
         preserve_nested_literal_tuples: false,
@@ -2449,18 +2440,7 @@ struct Analyzer<'src> {
     builtin_rbi_ranges: Vec<(usize, usize)>,
     strictness_ranges: Vec<(usize, usize, Strictness)>,
     filter_method_bodies: bool,
-    active_methods: BTreeSet<MethodKey>,
-    changed_methods: BTreeSet<MethodKey>,
-    pending_returns: BTreeMap<MethodKey, (Type, bool)>,
-    collecting_returns: bool,
-    method_callers: BTreeMap<MethodKey, BTreeSet<MethodKey>>,
-    method_shared_reads: BTreeMap<MethodKey, BTreeSet<SharedKey>>,
-    shared_readers: BTreeMap<SharedKey, BTreeSet<MethodKey>>,
-    symbol_method_returns: BTreeMap<MethodKey, String>,
-    changed_shared: BTreeSet<SharedKey>,
-    debug_phase: &'static str,
-    debug_round: usize,
-    debug_nodes: usize,
+    fixpoint: FixpointState,
     defer_inline_assertions: bool,
     preserve_literal_tuples: bool,
     preserve_nested_literal_tuples: bool,
@@ -3615,7 +3595,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn record_inferred_return(&mut self, key: MethodKey, actual: Type, terminates: bool) {
-        match self.pending_returns.entry(key) {
+        match self.fixpoint.pending_returns.entry(key) {
             std::collections::btree_map::Entry::Vacant(entry) => {
                 entry.insert((actual, terminates));
             }
@@ -3628,7 +3608,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn commit_inferred_returns(&mut self) {
-        let pending_returns = std::mem::take(&mut self.pending_returns);
+        let pending_returns = std::mem::take(&mut self.fixpoint.pending_returns);
         for (key, (return_type, return_terminates)) in pending_returns {
             if let Some(state) = self.declarations.methods.get_mut(&key) {
                 if !state.explicit {
@@ -3637,7 +3617,7 @@ impl<'src> Analyzer<'src> {
                     state.return_type = Some(return_type);
                     state.return_terminates = return_terminates;
                     if changed {
-                        self.changed_methods.insert(key);
+                        self.fixpoint.changed_methods.insert(key);
                     }
                 }
             }
@@ -3671,26 +3651,26 @@ impl<'src> Analyzer<'src> {
         self.report = false;
         self.seed_calls = true;
         self.filter_method_bodies = false;
-        self.debug_phase = "seed";
-        self.debug_round = 0;
+        self.fixpoint.debug_phase = "seed";
+        self.fixpoint.debug_round = 0;
         self.types.clear();
-        self.debug_nodes = 0;
+        self.fixpoint.debug_nodes = 0;
         if self.config.debug {
             eprintln!("[typey] seeding top-level call sites");
         }
-        self.pending_returns.clear();
-        self.collecting_returns = true;
+        self.fixpoint.pending_returns.clear();
+        self.fixpoint.collecting_returns = true;
         let seed_started = std::time::Instant::now();
         let mut environment = Environment::default();
         self.eval_node(root, &mut environment);
-        self.collecting_returns = false;
+        self.fixpoint.collecting_returns = false;
         self.commit_inferred_returns();
         if self.config.debug {
             eprintln!("[typey] seed complete in {:?}", seed_started.elapsed());
         }
         self.seed_calls = false;
-        self.changed_methods.clear();
-        self.changed_shared.clear();
+        self.fixpoint.changed_methods.clear();
+        self.fixpoint.changed_shared.clear();
 
         let mut pending_methods = self
             .declarations
@@ -3709,14 +3689,14 @@ impl<'src> Analyzer<'src> {
             }
 
             round += 1;
-            self.active_methods = pending_methods.clone();
+            self.fixpoint.active_methods = pending_methods.clone();
             self.filter_method_bodies = true;
-            self.changed_methods.clear();
-            self.changed_shared.clear();
-            self.debug_phase = "inference";
-            self.debug_round = round;
+            self.fixpoint.changed_methods.clear();
+            self.fixpoint.changed_shared.clear();
+            self.fixpoint.debug_phase = "inference";
+            self.fixpoint.debug_round = round;
             self.types.clear();
-            self.debug_nodes = 0;
+            self.fixpoint.debug_nodes = 0;
             if self.config.debug {
                 eprintln!(
                     "[typey] worklist round {round}: evaluating {} scheduled methods",
@@ -3729,24 +3709,24 @@ impl<'src> Analyzer<'src> {
             // candidates from this round are committed together below. This
             // avoids source-order effects when a caller appears before its
             // callee or when conditional branches define the same method.
-            self.pending_returns.clear();
-            self.collecting_returns = true;
+            self.fixpoint.pending_returns.clear();
+            self.fixpoint.collecting_returns = true;
             let mut environment = Environment::default();
             self.eval_node(root, &mut environment);
-            self.collecting_returns = false;
+            self.fixpoint.collecting_returns = false;
             self.commit_inferred_returns();
 
-            let changed_methods = std::mem::take(&mut self.changed_methods);
-            let changed_shared = std::mem::take(&mut self.changed_shared);
+            let changed_methods = std::mem::take(&mut self.fixpoint.changed_methods);
+            let changed_shared = std::mem::take(&mut self.fixpoint.changed_shared);
             let mut next_pending = BTreeSet::new();
             for method in &changed_methods {
                 next_pending.insert(method.clone());
-                if let Some(callers) = self.method_callers.get(method) {
+                if let Some(callers) = self.fixpoint.method_callers.get(method) {
                     next_pending.extend(callers.iter().cloned());
                 }
             }
             for shared_key in &changed_shared {
-                if let Some(readers) = self.shared_readers.get(shared_key) {
+                if let Some(readers) = self.fixpoint.shared_readers.get(shared_key) {
                     next_pending.extend(readers.iter().cloned());
                 }
             }
@@ -3772,10 +3752,10 @@ impl<'src> Analyzer<'src> {
         self.seed_calls = false;
         self.types.clear();
         self.filter_method_bodies = false;
-        self.active_methods.clear();
-        self.debug_phase = "final";
-        self.debug_round = 0;
-        self.debug_nodes = 0;
+        self.fixpoint.active_methods.clear();
+        self.fixpoint.debug_phase = "final";
+        self.fixpoint.debug_round = 0;
+        self.fixpoint.debug_nodes = 0;
         if self.config.debug {
             eprintln!("[typey] final reporting pass");
         }
@@ -4668,18 +4648,25 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         if self.config.debug {
-            self.debug_nodes += 1;
-            if self.debug_nodes.is_multiple_of(DEBUG_NODE_INTERVAL) {
+            self.fixpoint.debug_nodes += 1;
+            if self
+                .fixpoint
+                .debug_nodes
+                .is_multiple_of(DEBUG_NODE_INTERVAL)
+            {
                 let (start, _) = prism::span(node);
-                if self.debug_round == 0 {
+                if self.fixpoint.debug_round == 0 {
                     eprintln!(
                         "[typey] {} pass: visited {} nodes (source offset {})",
-                        self.debug_phase, self.debug_nodes, start
+                        self.fixpoint.debug_phase, self.fixpoint.debug_nodes, start
                     );
                 } else {
                     eprintln!(
                         "[typey] fixpoint round {} {} pass: visited {} nodes (source offset {})",
-                        self.debug_round, self.debug_phase, self.debug_nodes, start
+                        self.fixpoint.debug_round,
+                        self.fixpoint.debug_phase,
+                        self.fixpoint.debug_nodes,
+                        start
                     );
                 }
             }
@@ -5675,7 +5662,7 @@ impl<'src> Analyzer<'src> {
             if let Some(key) = method_key.as_ref() {
                 if let Some(state) = self.declarations.methods.get_mut(key) {
                     if state.observe_yield_arguments(&argument_types) {
-                        self.changed_methods.insert(key.clone());
+                        self.fixpoint.changed_methods.insert(key.clone());
                     }
                 }
             }
@@ -6242,6 +6229,7 @@ impl<'src> Analyzer<'src> {
             return;
         }
         let narrowed = self
+            .fixpoint
             .symbol_method_returns
             .iter()
             .filter_map(|(key, symbol)| {
@@ -6923,7 +6911,7 @@ impl<'src> Analyzer<'src> {
         } else {
             registered_key
         };
-        if self.filter_method_bodies && !self.active_methods.contains(&key) {
+        if self.filter_method_bodies && !self.fixpoint.active_methods.contains(&key) {
             return Eval::value(Type::Nil);
         }
         self.begin_method_evaluation(&key);
@@ -6938,7 +6926,9 @@ impl<'src> Analyzer<'src> {
             .body()
             .and_then(|body| Self::trailing_symbol_literal(&body))
         {
-            self.symbol_method_returns.insert(key.clone(), symbol);
+            self.fixpoint
+                .symbol_method_returns
+                .insert(key.clone(), symbol);
         }
         let method_self_type = key.owner.as_ref().map_or(Type::Object, |owner| {
             if key.singleton {
@@ -7064,7 +7054,7 @@ impl<'src> Analyzer<'src> {
                     ),
                 );
             }
-        } else if self.collecting_returns {
+        } else if self.fixpoint.collecting_returns {
             self.record_inferred_return(
                 key,
                 inferred_return,
@@ -10418,7 +10408,7 @@ impl<'src> Analyzer<'src> {
             (state.call_signature(), changed)
         };
         if changed {
-            self.changed_methods.insert(key);
+            self.fixpoint.changed_methods.insert(key);
         }
         Some(signature)
     }
@@ -10452,7 +10442,7 @@ impl<'src> Analyzer<'src> {
         };
         if !state.explicit && !state.binds_block_to_receiver {
             state.binds_block_to_receiver = true;
-            self.changed_methods.insert(current.clone());
+            self.fixpoint.changed_methods.insert(current.clone());
         }
     }
 
@@ -10663,7 +10653,7 @@ impl<'src> Analyzer<'src> {
                 .get_mut(&key)
                 .is_some_and(|state| state.observe_block_return(&block_type))
         {
-            self.changed_methods.insert(key);
+            self.fixpoint.changed_methods.insert(key);
         }
         Some(block_type)
     }
@@ -11052,7 +11042,8 @@ impl<'src> Analyzer<'src> {
             return;
         };
         if self.declarations.methods.contains_key(caller) {
-            self.method_callers
+            self.fixpoint
+                .method_callers
                 .entry(callee)
                 .or_default()
                 .insert(caller.clone());
@@ -11072,7 +11063,7 @@ impl<'src> Analyzer<'src> {
         type_: Type,
         environment: &Environment,
     ) -> Type {
-        if !self.collecting_returns || type_.is_never() {
+        if !self.fixpoint.collecting_returns || type_.is_never() {
             return type_;
         }
         let Some(current) = environment.method_key.as_ref() else {
@@ -11283,7 +11274,8 @@ impl<'src> Analyzer<'src> {
                 self.declarations
                     .struct_field_types
                     .insert(key.clone(), next);
-                self.changed_shared
+                self.fixpoint
+                    .changed_shared
                     .insert(SharedKey::StructField(key.0, key.1));
             }
         }
@@ -11460,11 +11452,12 @@ impl<'src> Analyzer<'src> {
     }
 
     fn begin_method_evaluation(&mut self, method: &MethodKey) {
-        let Some(shared_keys) = self.method_shared_reads.remove(method) else {
+        let Some(shared_keys) = self.fixpoint.method_shared_reads.remove(method) else {
             return;
         };
         for shared_key in shared_keys {
             let empty = self
+                .fixpoint
                 .shared_readers
                 .get_mut(&shared_key)
                 .is_some_and(|readers| {
@@ -11472,7 +11465,7 @@ impl<'src> Analyzer<'src> {
                     readers.is_empty()
                 });
             if empty {
-                self.shared_readers.remove(&shared_key);
+                self.fixpoint.shared_readers.remove(&shared_key);
             }
         }
     }
@@ -11484,11 +11477,13 @@ impl<'src> Analyzer<'src> {
         if !self.declarations.methods.contains_key(method) {
             return;
         }
-        self.method_shared_reads
+        self.fixpoint
+            .method_shared_reads
             .entry(method.clone())
             .or_default()
             .insert(key.clone());
-        self.shared_readers
+        self.fixpoint
+            .shared_readers
             .entry(key)
             .or_default()
             .insert(method.clone());
@@ -11536,7 +11531,7 @@ impl<'src> Analyzer<'src> {
         }
         if self.ivars.get(&key) != Some(&next) {
             self.ivars.insert(key.clone(), next);
-            self.changed_shared.insert(SharedKey::Ivar(key));
+            self.fixpoint.changed_shared.insert(SharedKey::Ivar(key));
         }
     }
 
@@ -11558,7 +11553,7 @@ impl<'src> Analyzer<'src> {
             .map_or_else(|| actual.clone(), |current| current.join(actual));
         if self.ivars.get(&key) != Some(&next) {
             self.ivars.insert(key.clone(), next);
-            self.changed_shared.insert(SharedKey::Ivar(key));
+            self.fixpoint.changed_shared.insert(SharedKey::Ivar(key));
         }
     }
 
@@ -11808,7 +11803,7 @@ impl<'src> Analyzer<'src> {
             .map_or_else(|| actual.clone(), |current| current.join(actual));
         if self.ivars.get(&key) != Some(&next) {
             self.ivars.insert(key.clone(), next);
-            self.changed_shared.insert(SharedKey::Ivar(key));
+            self.fixpoint.changed_shared.insert(SharedKey::Ivar(key));
         }
     }
 
@@ -11921,7 +11916,9 @@ impl<'src> Analyzer<'src> {
             if is_new_constant {
                 Self::add_name_suffixes(&mut self.declarations.constant_name_suffixes, &key);
             }
-            self.changed_shared.insert(SharedKey::Constant(key));
+            self.fixpoint
+                .changed_shared
+                .insert(SharedKey::Constant(key));
         }
     }
 
@@ -12016,7 +12013,9 @@ impl<'src> Analyzer<'src> {
             .map_or_else(|| actual.clone(), |current| current.join(actual));
         if self.class_vars.get(&key) != Some(&next) {
             self.class_vars.insert(key.clone(), next);
-            self.changed_shared.insert(SharedKey::ClassVar(key));
+            self.fixpoint
+                .changed_shared
+                .insert(SharedKey::ClassVar(key));
         }
     }
 
@@ -12060,7 +12059,7 @@ impl<'src> Analyzer<'src> {
             .map_or_else(|| actual.clone(), |current| current.join(actual));
         if self.globals.get(&name) != Some(&next) {
             self.globals.insert(name.clone(), next);
-            self.changed_shared.insert(SharedKey::Global(name));
+            self.fixpoint.changed_shared.insert(SharedKey::Global(name));
         }
     }
 
@@ -12277,7 +12276,8 @@ impl<'src> Analyzer<'src> {
                 info.extends.push(module_name.clone());
                 self.method_resolution_cache.borrow_mut().clear();
                 self.instance_self_type_cache.borrow_mut().clear();
-                self.changed_methods
+                self.fixpoint
+                    .changed_methods
                     .extend(self.declarations.methods.keys().cloned());
             }
             let hook = MethodKey {
@@ -12353,7 +12353,8 @@ impl<'src> Analyzer<'src> {
                 info.includes.push(module_name.clone());
                 self.method_resolution_cache.borrow_mut().clear();
                 self.instance_self_type_cache.borrow_mut().clear();
-                self.changed_methods
+                self.fixpoint
+                    .changed_methods
                     .extend(self.declarations.methods.keys().cloned());
             }
             let hook = MethodKey {
