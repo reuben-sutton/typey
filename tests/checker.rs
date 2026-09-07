@@ -6523,7 +6523,13 @@ fn models_struct_new_as_a_generated_class() {
 
 #[test]
 fn models_dynamic_struct_subclasses() {
-    check_fixture("tests/fixtures/struct_subclass.rb");
+    let result = check_fixture("tests/fixtures/struct_subclass.rb");
+    let source = std::fs::read_to_string("tests/fixtures/struct_subclass.rb").unwrap();
+    let send = "Struct.new(:status_code, :message)";
+    let send_start = source.find(send).expect("dynamic superclass send");
+    assert!(result.types.iter().any(|inferred| {
+        inferred.is_send && inferred.start == send_start && inferred.end == send_start + send.len()
+    }));
 }
 
 #[test]

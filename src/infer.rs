@@ -4828,6 +4828,13 @@ impl<'src> Analyzer<'src> {
                     .constant_reference_name(&class.constant_path())
                     .unwrap_or_else(|| prism::text(self.source, &class.constant_path())),
             );
+            if let Some(superclass) = class.superclass() {
+                // The registrar models dynamic superclasses such as
+                // `Struct.new(...)`, but the expression is still evaluated
+                // at runtime and must contribute its send sites and type
+                // effects to the final pass.
+                let _ = self.eval_node(&superclass, environment);
+            }
             if let Some(body) = class.body() {
                 let mut class_environment = environment.clone();
                 class_environment.self_type = Self::class_object_type(&class_name);
