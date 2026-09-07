@@ -179,6 +179,11 @@ fn permits_appending_to_an_untyped_empty_array_before_inference() {
 }
 
 #[test]
+fn does_not_treat_observed_argument_types_as_exhaustive_validation() {
+    check_fixture("tests/fixtures/inferred_argument_validation.rb");
+}
+
+#[test]
 fn models_sorbet_abstract_helper_declarations() {
     let result = check_fixture("tests/fixtures/sorbet_abstract_helper.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

@@ -6772,6 +6772,11 @@ impl<'src> Analyzer<'src> {
         block_optional: bool,
     ) {
         let Some(parameters) = parameters else { return };
+        let inferred_context = environment
+            .method_key
+            .as_ref()
+            .and_then(|key| self.methods.get(key))
+            .is_some_and(|state| !state.explicit);
         let mut index = 0;
         for parameter in &parameters.requireds() {
             let type_ = signature
@@ -6865,6 +6870,69 @@ impl<'src> Analyzer<'src> {
                     type_
                 };
                 environment.bind(prism::constant_name(name), type_);
+            }
+        }
+        if inferred_context {
+            for parameter in &parameters.requireds() {
+                self.mark_inferred_parameter(&parameter, environment);
+            }
+            for parameter in &parameters.optionals() {
+                self.mark_inferred_parameter(&parameter, environment);
+            }
+            if let Some(rest) = parameters.rest() {
+                self.mark_inferred_parameter(&rest, environment);
+            }
+            for parameter in &parameters.posts() {
+                self.mark_inferred_parameter(&parameter, environment);
+            }
+            for parameter in &parameters.keywords() {
+                self.mark_inferred_parameter(&parameter, environment);
+            }
+            if let Some(rest) = parameters.keyword_rest() {
+                self.mark_inferred_parameter(&rest, environment);
+            }
+            if let Some(block) = parameters.block() {
+                if let Some(name) = block.name() {
+                    environment.mark_inferred(prism::constant_name(name));
+                }
+            }
+        }
+    }
+
+    fn mark_inferred_parameter<'node>(
+        &self,
+        parameter: &Node<'node>,
+        environment: &mut Environment,
+    ) {
+        if let Some(required) = parameter.as_required_parameter_node() {
+            environment.mark_inferred(prism::constant_name(required.name()));
+        } else if let Some(optional) = parameter.as_optional_parameter_node() {
+            environment.mark_inferred(prism::constant_name(optional.name()));
+        } else if let Some(rest) = parameter.as_rest_parameter_node() {
+            if let Some(name) = rest.name() {
+                environment.mark_inferred(prism::constant_name(name));
+            }
+        } else if let Some(keyword) = parameter.as_required_keyword_parameter_node() {
+            environment.mark_inferred(prism::constant_name(keyword.name()));
+        } else if let Some(keyword) = parameter.as_optional_keyword_parameter_node() {
+            environment.mark_inferred(prism::constant_name(keyword.name()));
+        } else if let Some(rest) = parameter.as_keyword_rest_parameter_node() {
+            if let Some(name) = rest.name() {
+                environment.mark_inferred(prism::constant_name(name));
+            }
+        } else if let Some(block) = parameter.as_block_parameter_node() {
+            if let Some(name) = block.name() {
+                environment.mark_inferred(prism::constant_name(name));
+            }
+        } else if let Some(multi) = parameter.as_multi_target_node() {
+            for target in &multi.lefts() {
+                self.mark_inferred_parameter(&target, environment);
+            }
+            if let Some(rest) = multi.rest() {
+                self.mark_inferred_parameter(&rest, environment);
+            }
+            for target in &multi.rights() {
+                self.mark_inferred_parameter(&target, environment);
             }
         }
     }
