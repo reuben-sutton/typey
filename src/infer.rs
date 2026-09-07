@@ -1023,6 +1023,7 @@ struct MethodState {
     yield_params: Vec<Option<Type>>,
     block_return_type: Option<Type>,
     block: Option<Type>,
+    binds_block_to_receiver: bool,
     required_keywords: BTreeSet<String>,
     return_type: Option<Type>,
     return_terminates: bool,
@@ -1062,6 +1063,7 @@ impl MethodState {
             yield_params,
             block_return_type,
             block: signature.block.clone(),
+            binds_block_to_receiver: false,
             required_keywords: signature
                 .keywords
                 .iter()
@@ -1123,6 +1125,7 @@ impl MethodState {
                 yield_params: Vec::new(),
                 block_return_type: None,
                 block: None,
+                binds_block_to_receiver: false,
                 required_keywords,
                 return_type: None,
                 return_terminates: false,
@@ -1147,6 +1150,7 @@ impl MethodState {
             yield_params: Vec::new(),
             block_return_type: None,
             block: None,
+            binds_block_to_receiver: false,
             required_keywords,
             return_type: None,
             return_terminates: false,
@@ -1164,6 +1168,7 @@ impl MethodState {
     fn inferred_accessor(kind: AccessorKind) -> Self {
         let mut state = Self::inferred(None);
         state.return_type = Some(Type::Any);
+        state.binds_block_to_receiver = false;
         if kind == AccessorKind::Writer {
             state.params = vec![Some(Type::Any)];
             state.required_params = 1;
@@ -8779,6 +8784,7 @@ impl<'src> Analyzer<'src> {
         let mut all_normal = evaluated.all_normal;
         let receiver_node = call.receiver();
         let block = call.block();
+        self.observe_define_method_binding(&name, &arguments, block.as_ref(), environment);
         let preserve_nested_literal_tuples = receiver_node.as_ref().is_some_and(|receiver| {
             receiver.as_array_node().is_some()
                 && block
@@ -10195,6 +10201,39 @@ impl<'src> Analyzer<'src> {
         Some(signature)
     }
 
+    /// `define_method` binds its block to instances of the receiver's class.
+    /// Preserve that runtime fact when an inferred helper such as a test DSL
+    /// forwards `&block`; otherwise a class-level declaration block is checked
+    /// with the declaring class object as `self` instead of the eventual
+    /// instance.
+    fn observe_define_method_binding(
+        &mut self,
+        name: &str,
+        arguments: &CallArguments<'_>,
+        block: Option<&Node<'_>>,
+        environment: &Environment,
+    ) {
+        if name != "define_method"
+            || (block.is_none()
+                && !arguments
+                    .argument_nodes
+                    .iter()
+                    .any(|argument| argument.as_block_argument_node().is_some()))
+        {
+            return;
+        }
+        let Some(current) = environment.method_key.as_ref() else {
+            return;
+        };
+        let Some(state) = self.methods.get_mut(current) else {
+            return;
+        };
+        if !state.explicit && !state.binds_block_to_receiver {
+            state.binds_block_to_receiver = true;
+            self.changed_methods.insert(current.clone());
+        }
+    }
+
     fn observe_block_call<'node>(
         &mut self,
         key: &MethodKey,
@@ -10255,12 +10294,22 @@ impl<'src> Analyzer<'src> {
                 .cloned()
         })
         .flatten();
-        let bound_receiver = class_new_receiver.or_else(|| {
-            block_signature
-                .as_ref()
-                .and_then(optional_proc_type)
-                .and_then(|block| proc_receiver(&block).cloned())
-        });
+        let binds_block_to_receiver = self
+            .methods
+            .get(&key)
+            .is_some_and(|state| state.binds_block_to_receiver);
+        let bound_receiver = class_new_receiver
+            .or_else(|| {
+                block_signature
+                    .as_ref()
+                    .and_then(optional_proc_type)
+                    .and_then(|block| proc_receiver(&block).cloned())
+            })
+            .or_else(|| {
+                binds_block_to_receiver
+                    .then(|| receiver_type.and_then(Self::class_object_instance_type))
+                    .flatten()
+            });
         let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
             if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
             {
@@ -11842,6 +11891,10 @@ impl<'src> Analyzer<'src> {
             | "public_constant"
             | "refine" => Type::Nil,
             "id" | "object_id" | "hash" => Type::Integer,
+            // Module's dynamic method-definition APIs are available through
+            // an implicit receiver while evaluating a module method that is
+            // later extended onto a class.
+            "define_method" | "define_singleton_method" => Type::Symbol,
             _ => {
                 let _ = (node, argument_nodes, environment);
                 Type::Any

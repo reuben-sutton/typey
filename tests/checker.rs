@@ -310,6 +310,11 @@ fn tracks_constant_mixins_and_binds_dsl_blocks_to_instances() {
 }
 
 #[test]
+fn infers_instance_binding_through_define_method() {
+    check_fixture("tests/fixtures/dynamic_define_method_bound_block.rb");
+}
+
+#[test]
 fn models_extend_self_as_module_singleton_methods() {
     let result = check_fixture("tests/fixtures/extend_self.rb");
     assert!(result
