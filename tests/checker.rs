@@ -1456,6 +1456,27 @@ fn resolves_method_summaries_across_fixpoint_rounds() {
 }
 
 #[test]
+fn widens_recursive_inferred_returns_to_a_finite_concrete_type() {
+    let result = check_fixture("tests/fixtures/recursive_inferred_return.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Note && diagnostic.message.contains("T::Array[Object]")
+    }));
+    assert!(!result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("T.untyped")));
+}
+
+#[test]
+fn ignores_provisional_any_writes_after_a_concrete_ivar_observation() {
+    let result = check_fixture("tests/fixtures/provisional_ivar_writes.rb");
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
 fn joins_conditional_method_definitions_instead_of_overwriting() {
     let result = check(
         r#"

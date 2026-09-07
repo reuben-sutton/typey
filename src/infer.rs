@@ -9088,6 +9088,7 @@ impl<'src> Analyzer<'src> {
                     Some(&environment.self_type),
                     block_return_type.as_ref(),
                 );
+                let type_ = self.widen_recursive_call_return(&key, type_, environment);
                 if type_.contains_any() {
                     untyped_origin = Some(if declared {
                         UntypedOrigin::DeclaredSignature
@@ -9465,6 +9466,7 @@ impl<'src> Analyzer<'src> {
                                 block_return_type.as_ref(),
                             )
                         };
+                        let type_ = self.widen_recursive_call_return(&key, type_, environment);
                         let type_ = if name == "new"
                             && Self::class_object_instance_type(&dispatch_receiver_type).is_some()
                         {
@@ -9988,6 +9990,7 @@ impl<'src> Analyzer<'src> {
                 block_return_type.as_ref(),
             )
         };
+        let type_ = self.widen_recursive_call_return(key, type_, environment);
         Some((type_, declared))
     }
 
@@ -10145,6 +10148,17 @@ impl<'src> Analyzer<'src> {
             );
         }
         let (signature, changed) = {
+            let recursive_inferred = self
+                .substitution_context
+                .as_ref()
+                .and_then(|current| self.resolve_method_key(current))
+                .is_some_and(|current| {
+                    current == key
+                        && self
+                            .methods
+                            .get(&current)
+                            .is_some_and(|state| !state.explicit)
+                });
             let state = self.methods.get_mut(&key)?;
             let mut changed = false;
             let positional_types = if state.accepts_keyword_rest || !state.keywords.is_empty() {
@@ -10152,7 +10166,17 @@ impl<'src> Analyzer<'src> {
             } else {
                 &arguments.argument_types
             };
-            if !arguments.forwards_arguments
+            // A direct recursive call often passes a value derived from the
+            // current method parameter. Observing that provisional `Any`
+            // argument would permanently poison the parameter summary before
+            // an external call can provide concrete evidence.
+            let recursive_arguments_concrete = !positional_types.iter().any(Type::contains_any)
+                && arguments
+                    .keyword_arguments
+                    .iter()
+                    .all(|argument| !argument.type_.contains_any());
+            if (!recursive_inferred || recursive_arguments_concrete)
+                && !arguments.forwards_arguments
                 && !arguments.has_unknown_positional_splat
                 && !arguments.has_unknown_keyword_splat
             {
@@ -10623,6 +10647,44 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    /// Recursive inferred methods need a finite widening point. A direct
+    /// recursive call otherwise substitutes the method's current return
+    /// summary into itself, so `Array#map { attributes(element) }` grows an
+    /// additional nested `Array[...]` on every worklist round. `Object` is
+    /// the sound concrete upper bound for a recursive result in this small
+    /// algebra: it preserves the fact that the call returns normally without
+    /// manufacturing `T.untyped`, while the non-recursive branches continue
+    /// to contribute their precise types.
+    fn widen_recursive_call_return(
+        &self,
+        key: &MethodKey,
+        type_: Type,
+        environment: &Environment,
+    ) -> Type {
+        if !self.collecting_returns || type_.is_never() {
+            return type_;
+        }
+        let Some(current) = environment.method_key.as_ref() else {
+            return type_;
+        };
+        let Some(current) = self.resolve_method_key(current) else {
+            return type_;
+        };
+        let Some(callee) = self.resolve_method_key(key) else {
+            return type_;
+        };
+        if current != callee
+            || self
+                .methods
+                .get(&current)
+                .is_some_and(|state| state.explicit)
+        {
+            type_
+        } else {
+            Type::Object
+        }
+    }
+
     fn resolve_method_key(&self, key: &MethodKey) -> Option<MethodKey> {
         if let Some(resolved) = self.method_resolution_cache.borrow().get(key) {
             return resolved.clone();
@@ -11015,6 +11077,20 @@ impl<'src> Analyzer<'src> {
         let Some(key) = self.ivar_key(environment, &name) else {
             return;
         };
+        // A provisional `Any` write means the assigned expression has not
+        // been inferred yet. It must not erase a concrete value learned in a
+        // previous pass; doing so makes a later concrete write restore the
+        // value, causing the shared-ivar worklist to oscillate forever.
+        if provisional
+            && actual.is_any()
+            && self
+                .ivars
+                .get(&key)
+                .is_some_and(|current| !current.is_any())
+        {
+            self.provisional_ivars.remove(&key);
+            return;
+        }
         let next = match self.ivars.get(&key) {
             Some(current)
                 if !actual.is_any()
