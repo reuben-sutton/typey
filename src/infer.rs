@@ -1940,6 +1940,23 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             self.constants.insert(name.clone(), type_);
         }
         self.register_type_alias(name, &node.value());
+
+        // `Parameter = Struct.new(:name) do ... end` creates a real class
+        // whose block is a class body. Give methods declared in that block
+        // the generated constant's owner so their instance bodies can be
+        // checked and dispatched later.
+        if let Some(fields) = self.struct_superclass_fields(&node.value()) {
+            let owner = self.constant_assignment_name(&constant_name);
+            let info = self.classes.entry(owner.clone()).or_default();
+            info.superclass = Some("Struct".to_owned());
+            info.struct_fields = Some(fields);
+            self.class_stack.push(owner);
+            self.visibility_stack.push(Visibility::Public);
+            ruby_prism::visit_constant_write_node(self, node);
+            self.visibility_stack.pop();
+            self.class_stack.pop();
+            return;
+        }
         ruby_prism::visit_constant_write_node(self, node);
     }
 
@@ -5017,9 +5034,11 @@ impl<'src> Analyzer<'src> {
             let value = write.value();
             let actual = Self::normal_type(self.eval_node(&value, environment));
             let name = prism::constant_name(write.name());
-            let actual = self
-                .struct_subclass_type(environment, &value, &name)
-                .unwrap_or(actual);
+            let struct_type = self.struct_subclass_type(environment, &value, &name);
+            if let Some(struct_type) = struct_type.as_ref() {
+                self.eval_dynamic_struct_block(&value, struct_type, environment);
+            }
+            let actual = struct_type.unwrap_or(actual);
             let type_ = self.apply_inline_assertion(node, actual);
             self.observe_constant(environment, name, &type_);
             return Eval::value(self.record(node, type_));
@@ -5072,9 +5091,11 @@ impl<'src> Analyzer<'src> {
             let value = write.value();
             let actual = Self::normal_type(self.eval_node(&value, environment));
             let name = self.constant_path_name(&write.target());
-            let actual = self
-                .struct_subclass_type(environment, &value, &name)
-                .unwrap_or(actual);
+            let struct_type = self.struct_subclass_type(environment, &value, &name);
+            if let Some(struct_type) = struct_type.as_ref() {
+                self.eval_dynamic_struct_block(&value, struct_type, environment);
+            }
+            let actual = struct_type.unwrap_or(actual);
             let type_ = self.apply_inline_assertion(node, actual);
             self.observe_constant(environment, name, &type_);
             return Eval::value(self.record(node, type_));
@@ -9180,6 +9201,26 @@ impl<'src> Analyzer<'src> {
                 )
             } else if let Some(type_) = tsort_type {
                 type_
+            } else if let Some((accessor_key, accessor)) = self
+                .resolve_method_key(&key)
+                .filter(|resolved| {
+                    self.methods
+                        .get(resolved)
+                        .is_some_and(|state| !state.explicit)
+                })
+                .and_then(|resolved| {
+                    self.accessors
+                        .get(&resolved)
+                        .copied()
+                        .map(|accessor| (resolved, accessor))
+                })
+            {
+                let type_ =
+                    self.eval_accessor_call(&accessor_key, accessor, argument_types, environment);
+                if type_.contains_any() {
+                    untyped_origin = Some(UntypedOrigin::InferredMethod);
+                }
+                type_
             } else if name == "autoload"
                 && Self::class_object_instance_type(&receiver_type).is_some()
             {
@@ -11653,6 +11694,33 @@ impl<'src> Analyzer<'src> {
                 .or_insert(fields);
         }
         Some(Type::named(self.constant_key(environment, constant_name)))
+    }
+
+    fn eval_dynamic_struct_block<'node>(
+        &mut self,
+        value: &Node<'node>,
+        struct_type: &Type,
+        environment: &mut Environment,
+    ) {
+        let Some(call) = value.as_call_node() else {
+            return;
+        };
+        if prism::constant_name(call.name()) != "new"
+            || call
+                .receiver()
+                .and_then(|receiver| self.constant_reference_name(&receiver))
+                .is_none_or(|name| name.trim_start_matches("::") != "Struct")
+        {
+            return;
+        }
+        let Some(block) = call.block() else {
+            return;
+        };
+        let Some(owner) = Self::named_type_name(struct_type) else {
+            return;
+        };
+        let receiver = Self::class_object_type(&owner);
+        let _ = self.eval_bound_block_node(&block, &[], &receiver, environment);
     }
 
     fn observe_constant(&mut self, environment: &Environment, name: String, actual: &Type) {

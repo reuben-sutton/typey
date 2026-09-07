@@ -6533,6 +6533,50 @@ fn models_dynamic_struct_subclasses() {
 }
 
 #[test]
+fn models_methods_declared_in_dynamic_struct_blocks() {
+    let result = check_fixture("tests/fixtures/dynamic_struct_block.rb");
+    let source = std::fs::read_to_string("tests/fixtures/dynamic_struct_block.rb").unwrap();
+    let field_start = source.rfind("escaper.call").expect("struct field send");
+    assert!(
+        result.types.iter().any(|inferred| {
+            inferred.is_send
+                && inferred.start == field_start
+                && inferred.end == field_start + "escaper".len()
+        }),
+        "missing struct field send: {:?}",
+        result.types
+    );
+    let call_start = source.find("escaper.call").expect("struct field call");
+    assert!(
+        result.types.iter().any(|inferred| {
+            inferred.is_send
+                && inferred.start == call_start
+                && inferred.end == call_start + "escaper.call(value)".len()
+        }),
+        "missing struct field call: {:?}",
+        result.types
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T.proc.params(T.untyped).returns(String)`")
+        }),
+        "missing concrete struct field type: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "missing concrete struct field call type: {:?}",
+        result.diagnostics
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn checks_to_enum_return_contracts() {
     let result = check_fixture("tests/fixtures/to_enum_return_contract.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| {
