@@ -61,6 +61,17 @@ fn discovers_files_using_command_line_sorbet_ignore_options() {
 }
 
 #[test]
+fn command_line_ignore_matches_sorbets_unanchored_substring_semantics() {
+    let paths = discover_ruby_files_with_ignores(
+        Path::new("tests/workspace_cli_ignore_repo"),
+        &["vendor/bundle".to_owned()],
+    )
+    .expect("workspace exists");
+    assert_eq!(paths.len(), 1);
+    assert!(paths[0].ends_with("tests/workspace_cli_ignore_repo/app/kept.rb"));
+}
+
+#[test]
 fn directory_cli_honors_equals_style_sorbet_ignore_after_path() {
     let output = Command::new(env!("CARGO_BIN_EXE_typey"))
         .args(["tests/workspace_cli_ignore_repo", "--ignore=vendor/bundle"])

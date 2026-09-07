@@ -410,30 +410,21 @@ fn is_ignored_path(base: &Path, path: &Path, ignores: &[String]) -> bool {
     let Ok(relative) = path.strip_prefix(base) else {
         return false;
     };
-    let components = relative
+    let relative = relative
         .components()
         .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>();
-    let relative = components.join("/");
+        .collect::<Vec<_>>()
+        .join("/");
     ignores.iter().any(|pattern| {
         let anchored = pattern.starts_with('/');
         let pattern = pattern.trim_matches('/');
         if pattern.is_empty() {
             return false;
         }
-        let pattern_components = pattern.split('/').collect::<Vec<_>>();
-        if pattern_components.len() == 1 {
-            if anchored {
-                return components.first().copied() == Some(pattern);
-            }
-            return components.iter().any(|component| *component == pattern);
-        }
         if anchored {
-            relative == pattern || relative.starts_with(&format!("{pattern}/"))
+            relative.starts_with(pattern)
         } else {
-            components
-                .windows(pattern_components.len())
-                .any(|window| window == pattern_components.as_slice())
+            relative.contains(pattern)
         }
     })
 }
