@@ -1981,18 +1981,22 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                 .trim_start_matches("::")
                 .to_owned();
             if owner != "self" && owner != "super" {
-                if let Some(argument) = node
+                let modules = node
                     .arguments()
-                    .and_then(|arguments| arguments.arguments().into_iter().next())
-                {
-                    let module = self.scope_reference(&argument);
-                    let info = self.classes.entry(owner).or_default();
-                    match prism::constant_name(node.name()).as_str() {
-                        "include" => info.includes.push(module),
-                        "prepend" => info.prepends.push(module),
-                        "extend" => info.extends.push(module),
-                        _ => unreachable!("mixin names are checked above"),
-                    }
+                    .map(|arguments| {
+                        arguments
+                            .arguments()
+                            .into_iter()
+                            .map(|argument| self.scope_reference(&argument))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let info = self.classes.entry(owner).or_default();
+                match prism::constant_name(node.name()).as_str() {
+                    "include" => info.includes.extend(modules),
+                    "prepend" => info.prepends.extend(modules),
+                    "extend" => info.extends.extend(modules),
+                    _ => unreachable!("mixin names are checked above"),
                 }
             }
         }
@@ -2091,7 +2095,10 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                     }
                     _ => {}
                 }
-                if let Some(module) = arguments.first() {
+                if matches!(
+                    name.as_str(),
+                    "include" | "prepend" | "extend" | "mixes_in_class_methods"
+                ) {
                     let Some(owner) = self
                         .singleton_stack
                         .last()
@@ -2100,17 +2107,22 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                         ruby_prism::visit_call_node(self, node);
                         return;
                     };
-                    let module = self.scope_reference_text(module);
+                    let modules = arguments
+                        .iter()
+                        .map(|module| self.scope_reference_text(module))
+                        .collect::<Vec<_>>();
                     let info = self.classes.entry(owner.clone()).or_default();
-                    match name.as_str() {
-                        "include" => info.includes.push(module.clone()),
-                        "prepend" => info.prepends.push(module.clone()),
-                        "extend" if module == "self" && info.is_module => {
-                            info.extend_self = true;
+                    for module in modules {
+                        match name.as_str() {
+                            "include" => info.includes.push(module),
+                            "prepend" => info.prepends.push(module),
+                            "extend" if module == "self" && info.is_module => {
+                                info.extend_self = true;
+                            }
+                            "extend" => info.extends.push(module),
+                            "mixes_in_class_methods" => info.class_methods.push(module),
+                            _ => unreachable!("mixin names are checked above"),
                         }
-                        "extend" => info.extends.push(module.clone()),
-                        "mixes_in_class_methods" => info.class_methods.push(module.clone()),
-                        _ => {}
                     }
                 }
                 if matches!(name.as_str(), "alias_method") && arguments.len() >= 2 {

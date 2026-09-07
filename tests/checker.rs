@@ -6634,6 +6634,14 @@ fn narrows_class_hierarchies_using_symbol_discriminators() {
 }
 
 #[test]
+fn records_all_modules_in_multi_argument_mixins() {
+    let result = check_fixture("tests/fixtures/multiple_mixins.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `T::Array[String]`")));
+}
+
+#[test]
 fn checks_to_enum_return_contracts() {
     let result = check_fixture("tests/fixtures/to_enum_return_contract.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| {
