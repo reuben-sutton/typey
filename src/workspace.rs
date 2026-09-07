@@ -10,6 +10,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::directives::{effective_typed_mode, is_typed_ignore, typed_mode, TypedMode};
 use crate::infer::{check_with_policies, CheckerConfig, Strictness, UntypedOrigin};
+use crate::prism::LineMap;
 use crate::types::Type;
 use std::fs;
 use std::io;
@@ -166,6 +167,10 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
     if files.is_empty() {
         return WorkspaceCheckResult::default();
     }
+    let line_maps = files
+        .iter()
+        .map(|file| LineMap::new(file.source.as_bytes()))
+        .collect::<Vec<_>>();
 
     if config.debug {
         let rbi_count = files.iter().filter(|file| is_rbi_path(&file.path)).count();
@@ -238,7 +243,7 @@ pub fn check_workspace(files: &[WorkspaceFile], config: CheckerConfig) -> Worksp
             typed_mode(&file.source) != Some(TypedMode::False)
                 || parse_diagnostics.contains(diagnostic)
         })
-        .filter_map(|diagnostic| map_diagnostic(diagnostic, &files, &ranges))
+        .filter_map(|diagnostic| map_diagnostic(diagnostic, &files, &ranges, &line_maps))
         .collect();
     let types = result
         .types
@@ -270,6 +275,7 @@ fn map_diagnostic(
     diagnostic: &Diagnostic,
     files: &[WorkspaceFile],
     ranges: &[SourceRange],
+    line_maps: &[LineMap],
 ) -> Option<WorkspaceDiagnostic> {
     let index = locate_offset(diagnostic.start, ranges)?;
     let range = ranges[index];
@@ -284,8 +290,9 @@ fn map_diagnostic(
         .min(file.source.len());
     Some(WorkspaceDiagnostic {
         path: file.path.clone(),
-        diagnostic: Diagnostic::new(
+        diagnostic: Diagnostic::new_with_line_map(
             file.source.as_bytes(),
+            &line_maps[index],
             diagnostic.severity,
             diagnostic.message.clone(),
             start,

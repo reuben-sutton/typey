@@ -4,7 +4,8 @@ use crate::prism;
 use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
 use crate::types::{Type, TypeLattice};
 use ruby_prism::{CallNode, ClassNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit};
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 const DEBUG_NODE_INTERVAL: usize = 1_000;
 
@@ -713,11 +714,21 @@ impl OutcomeTypes {
 
     fn join(&self, other: &Self) -> Self {
         Self {
-            return_type: self.return_type.join(&other.return_type),
-            raise_type: self.raise_type.join(&other.raise_type),
-            break_type: self.break_type.join(&other.break_type),
-            next_type: self.next_type.join(&other.next_type),
-            retry_type: self.retry_type.join(&other.retry_type),
+            return_type: Self::join_type(&self.return_type, &other.return_type),
+            raise_type: Self::join_type(&self.raise_type, &other.raise_type),
+            break_type: Self::join_type(&self.break_type, &other.break_type),
+            next_type: Self::join_type(&self.next_type, &other.next_type),
+            retry_type: Self::join_type(&self.retry_type, &other.retry_type),
+        }
+    }
+
+    fn join_type(left: &Type, right: &Type) -> Type {
+        if left.is_never() {
+            right.clone()
+        } else if right.is_never() {
+            left.clone()
+        } else {
+            left.join(right)
         }
     }
 
@@ -1518,7 +1529,10 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                 .is_some_and(|arguments| !arguments.arguments().is_empty())
         {
             let receiver = node.receiver().expect("receiver was checked");
-            let owner = self.scope_reference(&receiver);
+            let owner = self
+                .scope_reference(&receiver)
+                .trim_start_matches("::")
+                .to_owned();
             if owner != "self" && owner != "super" {
                 if let Some(argument) = node
                     .arguments()
@@ -1893,7 +1907,13 @@ impl MethodRegistrar<'_> {
     fn scope_reference_text(&self, text: &str) -> String {
         let absolute = text.trim_start().starts_with("::");
         let raw = text.trim().trim_start_matches("::");
-        if absolute || raw.contains("::") || self.class_stack.is_empty() {
+        if absolute {
+            // Keep the root marker until name resolution. Without it,
+            // `class Parser::AST::Node < ::AST::Node` can resolve its
+            // superclass back to itself when `Parser::AST::Node` is also a
+            // known lexical candidate.
+            format!("::{raw}")
+        } else if raw.contains("::") || self.class_stack.is_empty() {
             raw.to_owned()
         } else {
             let candidate = format!(
@@ -2020,17 +2040,23 @@ pub(crate) fn check_with_policies(
     let analyzer = Analyzer {
         source: bytes,
         line_map: prism::LineMap::new(bytes),
+        has_inline_assertions: !annotations.assertions.is_empty(),
         annotations,
         config,
         methods: BTreeMap::new(),
+        method_resolution_cache: RefCell::new(BTreeMap::new()),
+        global_name_cache: RefCell::new(HashMap::new()),
+        instance_self_type_cache: RefCell::new(HashMap::new()),
         definitions: BTreeMap::new(),
         parameter_shapes: BTreeMap::new(),
         classes: BTreeMap::new(),
+        class_name_set: HashSet::new(),
         aliases: BTreeMap::new(),
         accessors: BTreeMap::new(),
         type_aliases: BTreeMap::new(),
         ivars: BTreeMap::new(),
         constants: BTreeMap::new(),
+        constant_name_set: HashSet::new(),
         class_name_suffixes: BTreeMap::new(),
         constant_name_suffixes: BTreeMap::new(),
         struct_fields: BTreeMap::new(),
@@ -2081,18 +2107,24 @@ fn source_strictness_ranges(source: &str) -> Vec<(usize, usize, Strictness)> {
 struct Analyzer<'src> {
     source: &'src [u8],
     line_map: prism::LineMap,
+    has_inline_assertions: bool,
     annotations: AnnotationTable,
     config: CheckerConfig,
     methods: BTreeMap<MethodKey, MethodState>,
+    method_resolution_cache: RefCell<BTreeMap<MethodKey, Option<MethodKey>>>,
+    global_name_cache: RefCell<HashMap<String, String>>,
+    instance_self_type_cache: RefCell<HashMap<String, Type>>,
     definitions: BTreeMap<usize, MethodKey>,
     parameter_shapes: BTreeMap<usize, ParameterShape>,
     classes: BTreeMap<String, ClassInfo>,
+    class_name_set: HashSet<String>,
     class_name_suffixes: BTreeMap<String, Vec<String>>,
     aliases: BTreeMap<MethodKey, MethodKey>,
     accessors: BTreeMap<MethodKey, AccessorKind>,
     type_aliases: BTreeMap<String, Type>,
     ivars: BTreeMap<IvarKey, Type>,
     constants: BTreeMap<String, Type>,
+    constant_name_set: HashSet<String>,
     constant_name_suffixes: BTreeMap<String, Vec<String>>,
     struct_fields: BTreeMap<String, Vec<String>>,
     struct_field_types: BTreeMap<(String, String), Type>,
@@ -2259,6 +2291,9 @@ impl<'src> Analyzer<'src> {
     }
 
     fn instance_self_type(&self, owner: &str) -> Type {
+        if let Some(type_) = self.instance_self_type_cache.borrow().get(owner) {
+            return type_.clone();
+        }
         let hosts = self
             .classes
             .iter()
@@ -2269,11 +2304,15 @@ impl<'src> Analyzer<'src> {
                     .then(|| Type::named(candidate.clone()))
             })
             .collect::<Vec<_>>();
-        if hosts.is_empty() {
+        let type_ = if hosts.is_empty() {
             Type::named(owner)
         } else {
             Type::union(hosts)
-        }
+        };
+        self.instance_self_type_cache
+            .borrow_mut()
+            .insert(owner.to_owned(), type_.clone());
+        type_
     }
 
     fn attached_class_type(&self, receiver_type: Option<&Type>) -> Type {
@@ -2465,6 +2504,25 @@ impl<'src> Analyzer<'src> {
         for (index, actual) in positional_types.iter().enumerate() {
             if let Some(expected) = signature.positional_type(index, positional_types.len()) {
                 self.collect_type_parameter_binding(expected, actual, &names, &mut bindings);
+            }
+        }
+        // A call to a generic rest-argument constructor with no arguments
+        // still has a precise element type: there are no elements, so the
+        // result is parameterized by bottom.  Leaving the type variable as
+        // `U` makes an empty `Set[]` fail when passed to `Set[String]`, even
+        // though the set is safely covariant for every possible element type.
+        if signature.accepts_rest
+            && signature.rest_index == Some(0)
+            && positional_types.is_empty()
+            && arguments.dynamic_positional_splat_types.is_empty()
+            && !arguments.forwards_arguments
+        {
+            if let Some(expected) = signature.params.first() {
+                for name in &names {
+                    if Self::contains_type_parameter(expected, &BTreeSet::from([name.clone()])) {
+                        bindings.entry(name.clone()).or_insert(Type::Never);
+                    }
+                }
             }
         }
         if signature.accepts_rest && signature.rest_index == Some(0) {
@@ -3178,14 +3236,20 @@ impl<'src> Analyzer<'src> {
         for (key, (return_type, return_terminates)) in pending_returns {
             if let Some(state) = self.methods.get_mut(&key) {
                 if !state.explicit {
+                    let changed = state.return_type.as_ref() != Some(&return_type)
+                        || state.return_terminates != return_terminates;
                     state.return_type = Some(return_type);
                     state.return_terminates = return_terminates;
+                    if changed {
+                        self.changed_methods.insert(key);
+                    }
                 }
             }
         }
     }
 
     fn run<'node>(mut self, root: &Node<'node>) -> CheckResult {
+        let run_started = std::time::Instant::now();
         if self.config.debug {
             eprintln!("[typey] registering declarations");
         }
@@ -3197,6 +3261,10 @@ impl<'src> Analyzer<'src> {
                 self.methods.len(),
                 self.classes.len(),
                 self.type_aliases.len()
+            );
+            eprintln!(
+                "[typey] registration complete in {:?}",
+                run_started.elapsed()
             );
         }
 
@@ -3216,10 +3284,14 @@ impl<'src> Analyzer<'src> {
         }
         self.pending_returns.clear();
         self.collecting_returns = true;
+        let seed_started = std::time::Instant::now();
         let mut environment = Environment::default();
         self.eval_node(root, &mut environment);
         self.collecting_returns = false;
         self.commit_inferred_returns();
+        if self.config.debug {
+            eprintln!("[typey] seed complete in {:?}", seed_started.elapsed());
+        }
         self.seed_calls = false;
         self.changed_methods.clear();
         self.changed_shared.clear();
@@ -3250,12 +3322,12 @@ impl<'src> Analyzer<'src> {
                     pending_methods.len()
                 );
             }
+            let round_started = std::time::Instant::now();
             // Return summaries are computed synchronously: every method body
             // reads the summaries committed by the previous round, and all
             // candidates from this round are committed together below. This
             // avoids source-order effects when a caller appears before its
             // callee or when conditional branches define the same method.
-            let previous_methods = self.methods.clone();
             self.pending_returns.clear();
             self.collecting_returns = true;
             let mut environment = Environment::default();
@@ -3263,15 +3335,8 @@ impl<'src> Analyzer<'src> {
             self.collecting_returns = false;
             self.commit_inferred_returns();
 
-            let changed_methods = self
-                .methods
-                .iter()
-                .filter_map(|(method, state)| {
-                    (previous_methods.get(method) != Some(state)).then_some(method.clone())
-                })
-                .collect::<BTreeSet<_>>();
-            self.changed_methods = changed_methods.clone();
-            let changed_shared = self.changed_shared.clone();
+            let changed_methods = std::mem::take(&mut self.changed_methods);
+            let changed_shared = std::mem::take(&mut self.changed_shared);
             let mut next_pending = BTreeSet::new();
             for method in &changed_methods {
                 next_pending.insert(method.clone());
@@ -3289,7 +3354,11 @@ impl<'src> Analyzer<'src> {
                     "[typey] worklist round {round} complete: {} changed methods, {} changed shared keys, {} scheduled next",
                     changed_methods.len(),
                     changed_shared.len(),
-                    next_pending.len()
+                    next_pending.len(),
+                );
+                eprintln!(
+                    "[typey] worklist round {round} elapsed {:?}",
+                    round_started.elapsed()
                 );
             }
             pending_methods = next_pending;
@@ -3309,8 +3378,15 @@ impl<'src> Analyzer<'src> {
         if self.config.debug {
             eprintln!("[typey] final reporting pass");
         }
+        let final_started = std::time::Instant::now();
         let mut environment = Environment::default();
         self.eval_node(root, &mut environment);
+        if self.config.debug {
+            eprintln!(
+                "[typey] final pass complete in {:?}",
+                final_started.elapsed()
+            );
+        }
 
         self.report_inference_gaps();
         let types = Self::deduplicate_types(std::mem::take(&mut self.types));
@@ -3321,9 +3397,10 @@ impl<'src> Analyzer<'src> {
         });
         if self.config.debug {
             eprintln!(
-                "[typey] complete: {} diagnostics, {} recorded types",
+                "[typey] complete: {} diagnostics, {} recorded types in {:?}",
                 self.diagnostics.len(),
-                types.len()
+                types.len(),
+                run_started.elapsed()
             );
         }
         CheckResult {
@@ -3759,7 +3836,7 @@ impl<'src> Analyzer<'src> {
             end,
             type_: type_.clone(),
             untyped_origin,
-            is_send: Self::is_send_node(node),
+            is_send: self.report && Self::is_send_node(node),
         });
         type_
     }
@@ -3792,8 +3869,13 @@ impl<'src> Analyzer<'src> {
             return;
         }
         let (start, end) = prism::span(node);
-        self.diagnostics
-            .push(Diagnostic::error(self.source, message, start, end));
+        self.diagnostics.push(Diagnostic::error_with_line_map(
+            self.source,
+            &self.line_map,
+            message,
+            start,
+            end,
+        ));
     }
 
     fn note<'node>(&mut self, node: &Node<'node>, message: impl Into<String>) {
@@ -3801,8 +3883,13 @@ impl<'src> Analyzer<'src> {
             return;
         }
         let (start, end) = prism::span(node);
-        self.diagnostics
-            .push(Diagnostic::note(self.source, message, start, end));
+        self.diagnostics.push(Diagnostic::note_with_line_map(
+            self.source,
+            &self.line_map,
+            message,
+            start,
+            end,
+        ));
     }
 
     fn eval_compound_assignment<'node>(
@@ -4019,6 +4106,28 @@ impl<'src> Analyzer<'src> {
     }
 
     fn eval_node<'node>(&mut self, node: &Node<'node>, environment: &mut Environment) -> Eval {
+        if !self.defer_inline_assertions {
+            if let Some(assertion) = self.inline_assertion_for_node(node) {
+                if assertion.kind == AssertionKind::SelfAs {
+                    let previous_self_type = environment.self_type.clone();
+                    environment.self_type = self.resolve_type_names(
+                        &assertion.type_,
+                        self.lexical_owner(environment).as_deref(),
+                    );
+                    let result = self.eval_node_inner(node, environment);
+                    environment.self_type = previous_self_type;
+                    return result;
+                }
+            }
+        }
+        self.eval_node_inner(node, environment)
+    }
+
+    fn eval_node_inner<'node>(
+        &mut self,
+        node: &Node<'node>,
+        environment: &mut Environment,
+    ) -> Eval {
         if self.config.debug {
             self.debug_nodes += 1;
             if self.debug_nodes.is_multiple_of(DEBUG_NODE_INTERVAL) {
@@ -4138,6 +4247,9 @@ impl<'src> Analyzer<'src> {
                 self.substitution_context = previous_substitution_context;
             }
             return Eval::value(self.record(node, Type::Nil));
+        }
+        if let Some(call) = node.as_call_node() {
+            return self.eval_call_result(node, &call, environment);
         }
         if let Some(multi) = node.as_multi_write_node() {
             let mut result = self.eval_node(&multi.value(), environment);
@@ -5084,16 +5196,6 @@ impl<'src> Analyzer<'src> {
                 environment,
             );
         }
-        if let Some(call) = node.as_call_node() {
-            let mut result = self.eval_call(node, &call, environment);
-            let type_ =
-                self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
-            if result.normal_type.is_some() {
-                result.normal_type = Some(type_.clone());
-            }
-            result.type_ = self.record(node, type_);
-            return result;
-        }
         if let Some(block) = node.as_block_node() {
             let block_type = self.eval_block(&block, &[], environment).type_;
             let type_ = self.apply_inline_assertion_in_environment(node, block_type, environment);
@@ -5130,6 +5232,22 @@ impl<'src> Analyzer<'src> {
 
         let type_ = self.apply_inline_assertion_in_environment(node, Type::Any, environment);
         Eval::value(self.record(node, type_))
+    }
+
+    fn eval_call_result<'node>(
+        &mut self,
+        node: &Node<'node>,
+        call: &CallNode<'node>,
+        environment: &mut Environment,
+    ) -> Eval {
+        let mut result = self.eval_call(node, call, environment);
+        let type_ =
+            self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
+        if result.normal_type.is_some() {
+            result.normal_type = Some(type_.clone());
+        }
+        result.type_ = self.record(node, type_);
+        result
     }
 
     fn eval_begin<'node>(
@@ -7900,7 +8018,23 @@ impl<'src> Analyzer<'src> {
                 resolved_owner.as_deref(),
             );
             self.record_method_dependency(&key, environment);
-            if let Some(signature) = random_formatter_signature {
+            if name == "Array" {
+                // Ruby's Kernel#Array is a coercion operation, not a normal
+                // generic identity function. Its Sorbet RBI signature is
+                // necessarily broad enough to describe Enumerable inputs,
+                // but using that signature directly infers `Array[String |
+                // Array[String]]` for a union input. The runtime result is an
+                // array of the input's elements, so use the structural model
+                // here before generic signature inference.
+                self.eval_global_call(
+                    node,
+                    &name,
+                    &arguments.argument_nodes,
+                    argument_types,
+                    block.as_ref(),
+                    environment,
+                )
+            } else if let Some(signature) = random_formatter_signature {
                 self.invoke_signature(
                     node,
                     &name,
@@ -9405,7 +9539,14 @@ impl<'src> Analyzer<'src> {
     }
 
     fn resolve_method_key(&self, key: &MethodKey) -> Option<MethodKey> {
-        self.resolve_method_key_inner(key, &mut BTreeSet::new())
+        if let Some(resolved) = self.method_resolution_cache.borrow().get(key) {
+            return resolved.clone();
+        }
+        let resolved = self.resolve_method_key_inner(key, &mut BTreeSet::new());
+        self.method_resolution_cache
+            .borrow_mut()
+            .insert(key.clone(), resolved.clone());
+        resolved
     }
 
     fn resolve_method_key_inner(
@@ -10305,6 +10446,28 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    fn dynamic_splat_element_type(type_: &Type) -> Option<Type> {
+        match type_ {
+            // A dynamically splatted array contributes its element type.
+            Type::Array(element) => Some(element.as_ref().clone()),
+            // `*nil` contributes no arguments. For a union, retain the
+            // element contributed by every possible runtime shape.
+            Type::Nil => Some(Type::Never),
+            Type::Union(members) => {
+                let mut element = Type::Never;
+                for member in members {
+                    element = element.join(&Self::dynamic_splat_element_type(member)?);
+                }
+                Some(element)
+            }
+            // A non-array object is passed as one argument by Ruby's splat
+            // coercion. It is therefore safe to check it against the method's
+            // rest parameter instead of rejecting every non-static splat.
+            Type::Any | Type::Anything => None,
+            other => Some(other.clone()),
+        }
+    }
+
     fn array_coercion_element_type(&self, type_: &Type) -> Type {
         match type_ {
             Type::Array(element) => element.as_ref().clone(),
@@ -10737,7 +10900,7 @@ impl<'src> Analyzer<'src> {
                 _ => self.eval_common_method(name),
             },
             Type::Named(class, _) if name_matches(class, "ENV") => match name {
-                "[]" | "fetch" => Type::union([Type::Nil, Type::String]),
+                "[]" | "fetch" | "[]=" => Type::union([Type::Nil, Type::String]),
                 _ => self.eval_common_method(name),
             },
             callable @ (Type::Proc(_, _) | Type::BoundProc { .. })
@@ -12289,9 +12452,9 @@ impl<'src> Analyzer<'src> {
                 });
             if let Some(expected) = expected_rest {
                 for splat_type in &arguments.dynamic_positional_splat_types {
-                    if let Type::Array(element) = splat_type {
-                        if !self.is_assignable(element, &expected) {
-                            self.check_assignable(node, element, &expected);
+                    if let Some(element) = Self::dynamic_splat_element_type(splat_type) {
+                        if !self.is_assignable(&element, &expected) {
+                            self.check_assignable(node, &element, &expected);
                         }
                     } else {
                         dynamic_splat_shape_error = true;
@@ -12794,7 +12957,11 @@ impl<'src> Analyzer<'src> {
     }
 
     fn resolve_name(&self, name: &str, owner: Option<&str>) -> String {
+        let absolute = name.starts_with("::");
         let name = name.trim_start_matches("::");
+        if absolute {
+            return name.to_owned();
+        }
         let mut scope = owner;
         while let Some(current) = scope {
             let candidate = format!("{current}::{name}");
@@ -12824,37 +12991,49 @@ impl<'src> Analyzer<'src> {
     }
 
     fn rebuild_nominal_name_indexes(&mut self) {
+        self.class_name_set.clear();
+        self.constant_name_set.clear();
         self.class_name_suffixes.clear();
         self.constant_name_suffixes.clear();
         let class_names = self.classes.keys().cloned().collect::<Vec<_>>();
         for name in class_names {
+            self.class_name_set.insert(name.clone());
             Self::add_name_suffixes(&mut self.class_name_suffixes, &name);
         }
         let constant_names = self.constants.keys().cloned().collect::<Vec<_>>();
         for name in constant_names {
+            self.constant_name_set.insert(name.clone());
             Self::add_name_suffixes(&mut self.constant_name_suffixes, &name);
         }
     }
 
     fn resolve_global_name(&self, name: &str) -> String {
-        if self.classes.contains_key(name) {
+        if self.class_name_set.contains(name) || self.constant_name_set.contains(name) {
             return name.to_owned();
         }
-        let Some(matches) = self.class_name_suffixes.get(name) else {
-            return name.to_owned();
-        };
-        if matches.len() == 1 {
-            matches[0].clone()
+        if let Some(resolved) = self.global_name_cache.borrow().get(name) {
+            return resolved.clone();
+        }
+        let resolved = if let Some(matches) = self.class_name_suffixes.get(name) {
+            if matches.len() == 1 {
+                matches[0].clone()
+            } else {
+                name.to_owned()
+            }
         } else {
             name.to_owned()
-        }
+        };
+        self.global_name_cache
+            .borrow_mut()
+            .insert(name.to_owned(), resolved.clone());
+        resolved
     }
 
     fn each_nominal_name_candidate<F>(&self, name: &str, mut visit: F) -> bool
     where
         F: FnMut(&str) -> bool,
     {
-        if self.classes.contains_key(name) || self.constants.contains_key(name) {
+        if self.class_name_set.contains(name) || self.constant_name_set.contains(name) {
             return visit(name);
         }
 
@@ -12896,9 +13075,9 @@ impl<'src> Analyzer<'src> {
         let actual = self.resolve_global_name(actual);
         let expected = self.resolve_global_name(expected);
         actual == expected
-            || (self.classes.contains_key(&actual)
+            || (self.class_name_set.contains(&actual)
                 && Self::qualified_name_ends_with(&expected, &actual))
-            || (self.classes.contains_key(&expected)
+            || (self.class_name_set.contains(&expected)
                 && Self::qualified_name_ends_with(&actual, &expected))
     }
 
@@ -13272,19 +13451,7 @@ impl<'src> Analyzer<'src> {
         if self.defer_inline_assertions {
             return actual;
         }
-        let (start, end) = prism::span(node);
-        let start_line = self.line_map.line_number(start);
-        let end_line = self.line_map.line_number(end.saturating_sub(1));
-        let assertion = [start_line, end_line]
-            .into_iter()
-            .filter_map(|line| self.annotations.assertions.get(&line))
-            .find(|assertion| {
-                assertion.offset >= end
-                    && self.source[end..assertion.offset]
-                        .iter()
-                        .all(|byte| byte.is_ascii_whitespace() || *byte == b',')
-            })
-            .cloned();
+        let assertion = self.inline_assertion_for_node(node);
         let Some(assertion) = assertion else {
             return actual;
         };
@@ -13295,6 +13462,7 @@ impl<'src> Analyzer<'src> {
                 expected
             }
             AssertionKind::Cast => expected,
+            AssertionKind::SelfAs => actual,
             AssertionKind::Must => {
                 if actual.is_nil() {
                     self.error(node, "Expected a non-nil value");
@@ -13320,19 +13488,7 @@ impl<'src> Analyzer<'src> {
         if self.defer_inline_assertions {
             return actual;
         }
-        let (start, end) = prism::span(node);
-        let start_line = self.line_map.line_number(start);
-        let end_line = self.line_map.line_number(end.saturating_sub(1));
-        let assertion = [start_line, end_line]
-            .into_iter()
-            .filter_map(|line| self.annotations.assertions.get(&line))
-            .find(|assertion| {
-                assertion.offset >= end
-                    && self.source[end..assertion.offset]
-                        .iter()
-                        .all(|byte| byte.is_ascii_whitespace() || *byte == b',')
-            })
-            .cloned();
+        let assertion = self.inline_assertion_for_node(node);
         let Some(assertion) = assertion else {
             return actual;
         };
@@ -13344,6 +13500,7 @@ impl<'src> Analyzer<'src> {
                 expected
             }
             AssertionKind::Cast => expected,
+            AssertionKind::SelfAs => actual,
             AssertionKind::Must => {
                 if actual.is_nil() {
                     self.error(node, "Expected a non-nil value");
@@ -13358,6 +13515,60 @@ impl<'src> Analyzer<'src> {
                 Type::Never
             }
         }
+    }
+
+    fn inline_assertion_for_node<'node>(
+        &self,
+        node: &Node<'node>,
+    ) -> Option<crate::signature::InlineAssertion> {
+        if !self.has_inline_assertions {
+            return None;
+        }
+        let (start, end) = prism::span(node);
+        let start_line = self.line_map.line_number(start);
+        let end_line = self.line_map.line_number(end.saturating_sub(1));
+        if let Some(assertion) = [start_line, end_line]
+            .into_iter()
+            .filter_map(|line| self.annotations.assertions.get(&line))
+            .find(|assertion| {
+                assertion.offset >= end
+                    && self.source[end..assertion.offset]
+                        .iter()
+                        .all(|byte| byte.is_ascii_whitespace() || *byte == b',')
+            })
+            .cloned()
+        {
+            return Some(assertion);
+        }
+
+        // Spoom emits `#: self as Type` on the line before the expression it
+        // narrows. Permit blank lines between that comment and the expression
+        // while keeping ordinary comments from reaching arbitrarily far.
+        for line in (0..start_line).rev() {
+            let Some(line_start) = self.line_map.line_start(line) else {
+                break;
+            };
+            let line_end = self
+                .line_map
+                .line_start(line + 1)
+                .map_or(self.source.len(), |next| next.saturating_sub(1));
+            let trimmed = trim_ascii_whitespace(
+                self.source
+                    .get(line_start..line_end.min(self.source.len()))
+                    .unwrap_or_default(),
+            );
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Some(assertion) = self.annotations.assertions.get(&line) else {
+                break;
+            };
+            if assertion.kind == AssertionKind::SelfAs && trimmed.starts_with(b"#") {
+                return Some(assertion.clone());
+            }
+            break;
+        }
+        None
     }
 
     fn resolve_shadowed_builtin_types(&self, type_: &Type, owner: Option<&str>) -> Type {

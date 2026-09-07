@@ -64,6 +64,11 @@ impl LineMap {
             Err(next_line) => next_line.saturating_sub(1),
         }
     }
+
+    #[must_use]
+    pub fn line_start(&self, line: usize) -> Option<usize> {
+        self.starts.get(line).copied()
+    }
 }
 
 #[cfg(test)]
@@ -74,6 +79,9 @@ mod tests {
     fn line_map_matches_prefix_scans() {
         let source = b"one\ntwo\nthree";
         let map = LineMap::new(source);
+        assert_eq!(map.line_start(0), Some(0));
+        assert_eq!(map.line_start(1), Some(4));
+        assert_eq!(map.line_start(3), None);
         for offset in 0..=source.len() + 2 {
             assert_eq!(map.line_number(offset), line_number(source, offset));
         }

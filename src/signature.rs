@@ -111,6 +111,10 @@ impl MethodSig {
 pub enum AssertionKind {
     Let,
     Cast,
+    /// Narrow the receiver while evaluating the expression that follows the
+    /// comment.  Spoom emits this form for Sorbet's `T.cast(self, ...)`
+    /// assertions used to access methods supplied by a host class.
+    SelfAs,
     Must,
     Unsafe,
     Absurd,
@@ -234,31 +238,37 @@ pub fn collect(source: &str) -> AnnotationTable {
         }
 
         if let Some(hash) = rbs_comment_start(line) {
-            if !line[..hash].trim().is_empty() {
-                let comment = strip_comment_tail(&line[hash + 2..]);
-                if !comment.is_empty() {
-                    let (kind, type_text) = if let Some(rest) = comment.strip_prefix("as ") {
-                        if rest.trim() == "!nil" {
-                            (AssertionKind::Must, "untyped".to_owned())
-                        } else if rest.trim() == "untyped" {
-                            (AssertionKind::Unsafe, rest.trim().to_owned())
-                        } else {
-                            (AssertionKind::Cast, rest.trim().to_owned())
-                        }
-                    } else if comment == "absurd" {
-                        (AssertionKind::Absurd, "bot".to_owned())
+            let comment = strip_comment_tail(&line[hash + 2..]);
+            // `self as` is emitted by Spoom as a standalone comment before
+            // the expression being narrowed. Other inline assertions remain
+            // trailing comments so they cannot accidentally attach to the
+            // next statement.
+            if (!line[..hash].trim().is_empty() || comment.starts_with("self as "))
+                && !comment.is_empty()
+            {
+                let (kind, type_text) = if let Some(rest) = comment.strip_prefix("self as ") {
+                    (AssertionKind::SelfAs, rest.trim().to_owned())
+                } else if let Some(rest) = comment.strip_prefix("as ") {
+                    if rest.trim() == "!nil" {
+                        (AssertionKind::Must, "untyped".to_owned())
+                    } else if rest.trim() == "untyped" {
+                        (AssertionKind::Unsafe, rest.trim().to_owned())
                     } else {
-                        (AssertionKind::Let, comment.to_owned())
-                    };
-                    table.assertions.insert(
-                        line_number,
-                        InlineAssertion {
-                            kind,
-                            type_: parse_type(&type_text),
-                            offset: line_offset + hash,
-                        },
-                    );
-                }
+                        (AssertionKind::Cast, rest.trim().to_owned())
+                    }
+                } else if comment == "absurd" {
+                    (AssertionKind::Absurd, "bot".to_owned())
+                } else {
+                    (AssertionKind::Let, comment.to_owned())
+                };
+                table.assertions.insert(
+                    line_number,
+                    InlineAssertion {
+                        kind,
+                        type_: parse_type(&type_text),
+                        offset: line_offset + hash,
+                    },
+                );
             }
         }
     }

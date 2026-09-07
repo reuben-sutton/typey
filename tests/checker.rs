@@ -92,6 +92,19 @@ fn tracks_constant_mixins_and_binds_dsl_blocks_to_instances() {
 }
 
 #[test]
+fn handles_packwerk_false_positive_patterns() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs read");
+    files.push(WorkspaceFile::new(
+        "tests/fixtures/packwerk_false_positives.rb",
+        std::fs::read_to_string("tests/fixtures/packwerk_false_positives.rb")
+            .expect("fixture exists"),
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn dispatches_structural_collections_through_vendored_rbis() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs read");
@@ -5262,6 +5275,16 @@ fn accepts_sorbet_rbs_assertion_spacing_and_comment_tails() {
         typey::signature::AssertionKind::Cast
     );
     assert_eq!(annotations.assertions[&1].type_, Type::String);
+}
+
+#[test]
+fn parses_self_as_assertions() {
+    let annotations = typey::signature::collect("#: self as Example\nname\n");
+    assert_eq!(
+        annotations.assertions[&0].kind,
+        typey::signature::AssertionKind::SelfAs
+    );
+    assert_eq!(annotations.assertions[&0].type_, Type::named("Example"));
 }
 
 #[test]
