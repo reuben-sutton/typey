@@ -10,4 +10,4 @@ class Parser::AST::Node < AST::Node
 end
 
 node = T.cast(T.unsafe(nil), Parser::AST::Node)
-T.reveal_type(node.type)
+T.reveal_type(node.type) # note: Revealed type: `Symbol`

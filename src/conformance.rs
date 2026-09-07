@@ -102,6 +102,10 @@ pub fn check_fixture(path: &Path, config: CheckerConfig) -> io::Result<FixtureRe
         check_with_rbi_ranges(&source, config, &[(0, source.len())])
     } else if let Ok(paths) = builtin_rbi_paths() {
         let mut files = load_workspace_paths(&paths)?;
+        let sibling_rbi = path.with_extension("rbi");
+        if sibling_rbi.is_file() {
+            files.extend(load_workspace_paths(&[sibling_rbi])?);
+        }
         files.push(WorkspaceFile::new(path.to_owned(), source.clone()));
         let workspace = check_workspace(&files, config);
         CheckResult {

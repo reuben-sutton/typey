@@ -6,6 +6,6 @@ class Person < T::Struct
 end
 
 person = Person.new(name: "Ada", age: nil)
-T.reveal_type(person.name)
-T.reveal_type(person.age)
+T.reveal_type(person.name) # note: Revealed type: `String`
+T.reveal_type(person.age) # note: Revealed type: `T.nilable(Integer)`
 person.name = 1 # error: Expected `String`, but found `Integer`

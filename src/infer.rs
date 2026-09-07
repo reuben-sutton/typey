@@ -503,6 +503,7 @@ pub struct Environment {
     /// call. Keep their provenance so control-flow predicates do not treat a
     /// sample argument as exhaustive.
     inferred_locals: BTreeSet<String>,
+    provisional_locals: BTreeSet<String>,
     open_array_locals: BTreeSet<String>,
     predicate_aliases: BTreeMap<String, PredicateAlias>,
     known_truthiness: BTreeMap<String, bool>,
@@ -515,6 +516,7 @@ impl Default for Environment {
         Self {
             locals: BTreeMap::new(),
             inferred_locals: BTreeSet::new(),
+            provisional_locals: BTreeSet::new(),
             open_array_locals: BTreeSet::new(),
             predicate_aliases: BTreeMap::new(),
             known_truthiness: BTreeMap::new(),
@@ -539,6 +541,7 @@ impl Environment {
         let name = name.into();
         self.open_array_locals.remove(&name);
         self.inferred_locals.remove(&name);
+        self.provisional_locals.remove(&name);
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.remove(&name);
         self.known_truthiness.remove(&name);
@@ -547,12 +550,25 @@ impl Environment {
     fn mark_inferred(&mut self, name: impl Into<String>) {
         let name = name.into();
         if self.locals.contains_key(&name) {
+            self.provisional_locals.remove(&name);
             self.inferred_locals.insert(name);
+        }
+    }
+
+    fn mark_provisional(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        if self.locals.contains_key(&name) {
+            self.inferred_locals.remove(&name);
+            self.provisional_locals.insert(name);
         }
     }
 
     fn is_inferred(&self, name: &str) -> bool {
         self.inferred_locals.contains(name)
+    }
+
+    fn is_provisional(&self, name: &str) -> bool {
+        self.provisional_locals.contains(name)
     }
 
     fn bind_predicate_alias(
@@ -564,6 +580,7 @@ impl Environment {
         let name = name.into();
         self.open_array_locals.remove(&name);
         self.inferred_locals.remove(&name);
+        self.provisional_locals.remove(&name);
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.insert(name.clone(), alias);
         self.known_truthiness.remove(&name);
@@ -592,6 +609,11 @@ impl Environment {
             inferred_locals: self
                 .inferred_locals
                 .union(&other.inferred_locals)
+                .cloned()
+                .collect(),
+            provisional_locals: self
+                .provisional_locals
+                .union(&other.provisional_locals)
                 .cloned()
                 .collect(),
             open_array_locals: self
@@ -2201,6 +2223,7 @@ pub(crate) fn check_with_policies(
         accessors: BTreeMap::new(),
         type_aliases: BTreeMap::new(),
         ivars: BTreeMap::new(),
+        provisional_ivars: BTreeSet::new(),
         constants: BTreeMap::new(),
         constant_name_set: HashSet::new(),
         class_name_suffixes: BTreeMap::new(),
@@ -2228,6 +2251,7 @@ pub(crate) fn check_with_policies(
         debug_nodes: 0,
         defer_inline_assertions: false,
         preserve_literal_tuples: false,
+        literal_tuple_depth: 0,
         expected_return_type: None,
         substitution_context: None,
         checking_initializer: false,
@@ -2270,6 +2294,7 @@ struct Analyzer<'src> {
     accessors: BTreeMap<MethodKey, AccessorKind>,
     type_aliases: BTreeMap<String, Type>,
     ivars: BTreeMap<IvarKey, Type>,
+    provisional_ivars: BTreeSet<IvarKey>,
     constants: BTreeMap<String, Type>,
     constant_name_set: HashSet<String>,
     constant_name_suffixes: BTreeMap<String, Vec<String>>,
@@ -2296,6 +2321,7 @@ struct Analyzer<'src> {
     debug_nodes: usize,
     defer_inline_assertions: bool,
     preserve_literal_tuples: bool,
+    literal_tuple_depth: usize,
     expected_return_type: Option<Type>,
     substitution_context: Option<MethodKey>,
     checking_initializer: bool,
@@ -4700,7 +4726,12 @@ impl<'src> Analyzer<'src> {
             let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
             let type_ =
                 self.preserve_typed_empty_array_ivar(environment, &name, &value_node, type_);
-            self.observe_ivar(environment, name.clone(), &type_);
+            let provisional = value_node
+                .as_local_variable_read_node()
+                .is_some_and(|local| {
+                    environment.is_provisional(&prism::constant_name(local.name()))
+                });
+            self.observe_ivar(environment, name.clone(), &type_, provisional);
             environment.bind(ivar_refinement_key(&name), type_.clone());
             return Eval::value(self.record(node, type_));
         }
@@ -4715,7 +4746,7 @@ impl<'src> Analyzer<'src> {
             let normal_type = normal_type
                 .map(|type_| self.apply_inline_assertion_in_environment(node, type_, environment));
             if let Some(type_) = normal_type.as_ref() {
-                self.observe_ivar(environment, name.clone(), type_);
+                self.observe_ivar(environment, name.clone(), type_, false);
                 environment.bind(ivar_refinement_key(&name), type_.clone());
             }
             let mut result = Eval::from_parts(normal_type, abrupt, flow);
@@ -4731,7 +4762,7 @@ impl<'src> Analyzer<'src> {
             let normal_type = normal_type
                 .map(|type_| self.apply_inline_assertion_in_environment(node, type_, environment));
             if let Some(type_) = normal_type.as_ref() {
-                self.observe_ivar(environment, name.clone(), type_);
+                self.observe_ivar(environment, name.clone(), type_, false);
                 environment.bind(ivar_refinement_key(&name), type_.clone());
             }
             let mut result = Eval::from_parts(normal_type, abrupt, flow);
@@ -4752,7 +4783,7 @@ impl<'src> Analyzer<'src> {
             } else {
                 declared.clone()
             };
-            self.observe_ivar(environment, name.clone(), &declared);
+            self.observe_ivar(environment, name.clone(), &declared, false);
             environment.bind(ivar_refinement_key(&name), type_.clone());
             return Eval::value(self.record(node, type_));
         }
@@ -5035,6 +5066,8 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, type_));
         }
         if let Some(array) = node.as_array_node() {
+            let tuple_depth = self.literal_tuple_depth;
+            self.literal_tuple_depth += 1;
             let mut element_types = Vec::new();
             let mut fixed_length = true;
             let mut element = Type::Never;
@@ -5049,15 +5082,26 @@ impl<'src> Analyzer<'src> {
                 element_types.push(child_type.clone());
                 element = element.join(&child_type);
             }
+            self.literal_tuple_depth = tuple_depth;
             let element = if element.is_never() {
-                Type::Any
+                // An empty nested array inside a multi-assignment tuple is
+                // a bottom-valued container, not an independently untyped
+                // array.  Keeping `Never` here lets a concrete sibling
+                // branch refine it during tuple joins without losing the
+                // tuple's known component types.
+                if self.preserve_literal_tuples && tuple_depth > 0 {
+                    Type::Never
+                } else {
+                    Type::Any
+                }
             } else {
                 element
             };
             let inferred = if fixed_length
-                && (self.preserve_literal_tuples
+                && (self.preserve_literal_tuples && tuple_depth == 0
                     || self.expected_return_type.as_ref().is_some_and(|expected| {
-                        matches!(expected, Type::Tuple(elements) if elements.len() == element_types.len())
+                        tuple_depth == 0
+                            && matches!(expected, Type::Tuple(elements) if elements.len() == element_types.len())
                     }))
             {
                 Type::Tuple(element_types)
@@ -6267,7 +6311,12 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) {
         if let Some(write) = target.as_local_variable_write_node() {
-            environment.bind(prism::constant_name(write.name()), type_);
+            let name = prism::constant_name(write.name());
+            let open_array = matches!(&type_, Type::Array(element) if element.is_never());
+            environment.bind(name.clone(), type_);
+            if open_array {
+                environment.open_array_locals.insert(name);
+            }
             return;
         }
         if let Some(target) = target.as_local_variable_target_node() {
@@ -6447,6 +6496,8 @@ impl<'src> Analyzer<'src> {
                                 .is_some_and(Option::is_some)
                             {
                                 method_environment.mark_inferred(name.clone());
+                            } else {
+                                method_environment.mark_provisional(name.clone());
                             }
                             positional_index += 1;
                         }
@@ -6454,6 +6505,8 @@ impl<'src> Analyzer<'src> {
                         | signature::ParameterKind::OptionalKeyword => {
                             if state.keywords.get(name).is_some_and(Option::is_some) {
                                 method_environment.mark_inferred(name.clone());
+                            } else {
+                                method_environment.mark_provisional(name.clone());
                             }
                         }
                         signature::ParameterKind::RestKeyword | signature::ParameterKind::Block => {
@@ -8461,6 +8514,20 @@ impl<'src> Analyzer<'src> {
                 // also valid at top level. Inside a real method Ruby always
                 // supplies its name as a Symbol.
                 Type::Symbol
+            } else if name == "private_class_method"
+                && arguments
+                    .argument_nodes
+                    .iter()
+                    .any(|argument| argument.as_def_node().is_some())
+            {
+                // `private_class_method def self.foo ... end` is Ruby's
+                // declaration form.  The core RBI also exposes
+                // `private_class_method` as a callable taking method names,
+                // but applying that signature to a DefNode makes the
+                // declaration itself look like an invalid runtime argument.
+                // MethodRegistrar has already recorded the definition and
+                // visibility override, so the declaration evaluates to nil.
+                Type::Nil
             } else if let Some(signature) = self
                 .observe_call(&key, &arguments, block.is_some())
                 .map(|signature| self.widen_overridable_noreturn(&key, signature))
@@ -8738,8 +8805,15 @@ impl<'src> Analyzer<'src> {
                 if let Some(type_) = tsort_type {
                     type_
                 } else if matches!(&dispatch_receiver_type, Type::Array(_) | Type::Tuple(_))
-                    && matches!(name.as_str(), "each_with_object" | "filter")
+                    && self
+                        .resolve_method_key(&key)
+                        .and_then(|resolved| self.methods.get(&resolved))
+                        .is_some_and(|state| !state.explicit)
                 {
+                    // The core Array RBI declares many methods without a
+                    // return contract. Prefer the structural Array model for
+                    // those methods instead of interpreting the absent body
+                    // as `T.noreturn`.
                     let type_ =
                         self.eval_method_call(&dispatch_receiver_type, &name, &site, environment);
                     if type_.contains_any() {
@@ -8920,7 +8994,13 @@ impl<'src> Analyzer<'src> {
                             environment,
                         )
                         .and_then(|key| self.resolve_method_key(&key))
-                        .is_some();
+                        .is_some_and(|resolved| {
+                            // `Class#new` is the generic Ruby constructor and
+                            // must not prevent us from observing the target
+                            // class's `initialize` method. Only a `new`
+                            // declared on the class itself is an override.
+                            resolved.owner.as_deref() == Some(owner.as_str())
+                        });
                     if !has_explicit_new {
                         self.infer_initializer_call(
                             node,
@@ -10180,12 +10260,12 @@ impl<'src> Analyzer<'src> {
                 Type::Symbol => "Symbol",
                 Type::Object => "Object",
                 Type::Array(_) => "Array",
+                Type::Tuple(_) => "Array",
                 Type::Hash(_, _) => "Hash",
                 Type::Any
                 | Type::Anything
                 | Type::Never
                 | Type::Named(_, _)
-                | Type::Tuple(_)
                 | Type::Proc(_, _)
                 | Type::Intersection(_)
                 | Type::Union(_)
@@ -10266,14 +10346,32 @@ impl<'src> Analyzer<'src> {
             .insert(method.clone());
     }
 
-    fn observe_ivar(&mut self, environment: &Environment, name: String, actual: &Type) {
+    fn observe_ivar(
+        &mut self,
+        environment: &Environment,
+        name: String,
+        actual: &Type,
+        provisional: bool,
+    ) {
         let Some(key) = self.ivar_key(environment, &name) else {
             return;
         };
-        let next = self
-            .ivars
-            .get(&key)
-            .map_or_else(|| actual.clone(), |current| current.join(actual));
+        let next = match self.ivars.get(&key) {
+            Some(current)
+                if !actual.is_any()
+                    && self.provisional_ivars.contains(&key)
+                    && current.is_any() =>
+            {
+                actual.clone()
+            }
+            Some(current) => current.join(actual),
+            None => actual.clone(),
+        };
+        if provisional && actual.is_any() {
+            self.provisional_ivars.insert(key.clone());
+        } else {
+            self.provisional_ivars.remove(&key);
+        }
         if self.ivars.get(&key) != Some(&next) {
             self.ivars.insert(key.clone(), next);
             self.changed_shared.insert(SharedKey::Ivar(key));
@@ -10829,6 +10927,7 @@ impl<'src> Analyzer<'src> {
             // typos.
             "sig"
             | "private_class_method"
+            | "has_attached_class!"
             | "type_member"
             | "type_template"
             | "mixes_in_class_methods"
@@ -13057,7 +13156,7 @@ impl<'src> Analyzer<'src> {
                     return Type::Array(Box::new(self.flat_map_element_type(block_return_type)));
                 }
             }
-            if name == "sort" {
+            if matches!(name, "sort" | "sort_by") {
                 if let Some(Type::Hash(key, value)) = receiver_type {
                     return Type::Array(Box::new(Type::Tuple(vec![
                         key.as_ref().clone(),
