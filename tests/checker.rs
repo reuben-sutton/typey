@@ -332,12 +332,9 @@ fn resolves_module_singleton_index_methods() {
         "{:?}",
         result.diagnostics
     );
-    assert!(result
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic
-            .message
-            .contains("Revealed type: `T.nilable(String)`")));
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `T.nilable(String)`")));
     assert_eq!(
         result
             .diagnostics
@@ -347,6 +344,37 @@ fn resolves_module_singleton_index_methods() {
         1,
         "{:?}",
         result.diagnostics
+    );
+}
+
+#[test]
+fn models_class_attribute_generated_accessors() {
+    let result = check_fixture("tests/fixtures/class_attribute.rb");
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type:"))
+            .count(),
+        5,
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `T.untyped`"))
+            .count()
+            >= 3
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `T::Boolean`"))
+            .count()
+            >= 2
     );
 }
 

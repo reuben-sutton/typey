@@ -1561,6 +1561,133 @@ impl MethodRegistrar<'_> {
             .entry(key)
             .or_insert_with(|| MethodState::explicit_overloads(std::slice::from_ref(&signature)));
     }
+
+    fn register_class_attribute_methods(&mut self, arguments: &ruby_prism::ArgumentsNode<'_>) {
+        let Some(owner) = self
+            .singleton_stack
+            .last()
+            .cloned()
+            .or_else(|| self.class_stack.last().cloned())
+        else {
+            return;
+        };
+
+        let mut attributes = Vec::new();
+        let mut instance_accessor = None;
+        let mut instance_reader = None;
+        let mut instance_writer = None;
+        let mut instance_predicate = None;
+
+        for argument in &arguments.arguments() {
+            if let Some(symbol) = argument.as_symbol_node() {
+                attributes.push(String::from_utf8_lossy(symbol.unescaped()).into_owned());
+                continue;
+            }
+            if let Some(string) = argument.as_string_node() {
+                attributes.push(String::from_utf8_lossy(string.unescaped()).into_owned());
+                continue;
+            }
+            let Some(keywords) = argument.as_keyword_hash_node() else {
+                continue;
+            };
+            for element in &keywords.elements() {
+                let Some(association) = element.as_assoc_node() else {
+                    continue;
+                };
+                let Some(key) = association.key().as_symbol_node() else {
+                    continue;
+                };
+                let name = String::from_utf8_lossy(key.unescaped());
+                let value = association.value();
+                let Some(value) = value
+                    .as_true_node()
+                    .map(|_| true)
+                    .or_else(|| value.as_false_node().map(|_| false))
+                else {
+                    continue;
+                };
+                match name.as_ref() {
+                    "instance_accessor" => instance_accessor = Some(value),
+                    "instance_reader" => instance_reader = Some(value),
+                    "instance_writer" => instance_writer = Some(value),
+                    "instance_predicate" => instance_predicate = Some(value),
+                    _ => {}
+                }
+            }
+        }
+
+        let instance_accessor = instance_accessor.unwrap_or(true);
+        let instance_reader = instance_reader.unwrap_or(instance_accessor);
+        let instance_writer = instance_writer.unwrap_or(instance_accessor);
+        let instance_predicate = instance_predicate.unwrap_or(true);
+
+        for attribute in attributes {
+            self.register_generated_accessor(
+                MethodKey {
+                    owner: Some(owner.clone()),
+                    name: attribute.clone(),
+                    singleton: true,
+                },
+                AccessorKind::Reader,
+            );
+            self.register_generated_accessor(
+                MethodKey {
+                    owner: Some(owner.clone()),
+                    name: format!("{attribute}="),
+                    singleton: true,
+                },
+                AccessorKind::Writer,
+            );
+
+            if instance_reader {
+                self.register_generated_accessor(
+                    MethodKey {
+                        owner: Some(owner.clone()),
+                        name: attribute.clone(),
+                        singleton: false,
+                    },
+                    AccessorKind::Reader,
+                );
+            }
+            if instance_writer {
+                self.register_generated_accessor(
+                    MethodKey {
+                        owner: Some(owner.clone()),
+                        name: format!("{attribute}="),
+                        singleton: false,
+                    },
+                    AccessorKind::Writer,
+                );
+            }
+            if instance_predicate {
+                self.register_generated_predicate(MethodKey {
+                    owner: Some(owner.clone()),
+                    name: format!("{attribute}?"),
+                    singleton: true,
+                });
+                if instance_reader {
+                    self.register_generated_predicate(MethodKey {
+                        owner: Some(owner.clone()),
+                        name: format!("{attribute}?"),
+                        singleton: false,
+                    });
+                }
+            }
+        }
+    }
+
+    fn register_generated_accessor(&mut self, key: MethodKey, kind: AccessorKind) {
+        self.accessors.entry(key.clone()).or_insert(kind);
+        self.methods
+            .entry(key)
+            .or_insert_with(|| MethodState::inferred_accessor(kind));
+    }
+
+    fn register_generated_predicate(&mut self, key: MethodKey) {
+        let mut state = MethodState::inferred(None);
+        state.return_type = Some(Type::bool());
+        self.methods.entry(key).or_insert(state);
+    }
 }
 
 impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
@@ -1772,6 +1899,11 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                     .map(|argument| self.method_name(&argument))
                     .collect::<Vec<_>>()
             });
+            if name == "class_attribute" {
+                if let Some(nodes) = node.arguments() {
+                    self.register_class_attribute_methods(&nodes);
+                }
+            }
             if name == "has_attached_class!" && arguments.is_none() {
                 if let Some(owner) = self
                     .singleton_stack
