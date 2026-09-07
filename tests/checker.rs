@@ -310,6 +310,15 @@ fn tracks_constant_mixins_and_binds_dsl_blocks_to_instances() {
 }
 
 #[test]
+fn models_extend_self_as_module_singleton_methods() {
+    let result = check_fixture("tests/fixtures/extend_self.rb");
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
 fn handles_packwerk_false_positive_patterns() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs read");

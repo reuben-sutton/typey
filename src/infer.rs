@@ -383,6 +383,7 @@ struct GenericMember {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ClassInfo {
     is_module: bool,
+    extend_self: bool,
     attached_class_member: Option<usize>,
     superclass: Option<String>,
     includes: Vec<String>,
@@ -1848,6 +1849,9 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                     match name.as_str() {
                         "include" => info.includes.push(module.clone()),
                         "prepend" => info.prepends.push(module.clone()),
+                        "extend" if module == "self" && info.is_module => {
+                            info.extend_self = true;
+                        }
                         "extend" => info.extends.push(module.clone()),
                         "mixes_in_class_methods" => info.class_methods.push(module.clone()),
                         _ => {}
@@ -10468,6 +10472,13 @@ impl<'src> Analyzer<'src> {
         });
         if let Some(info) = info {
             if singleton {
+                if info.extend_self {
+                    candidates.push(MethodKey {
+                        owner: Some(owner.to_owned()),
+                        name: name.to_owned(),
+                        singleton: false,
+                    });
+                }
                 for module in info.extends.iter().rev() {
                     self.append_method_candidates(module, name, false, visited, candidates);
                 }
