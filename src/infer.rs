@@ -6363,6 +6363,15 @@ impl<'src> Analyzer<'src> {
             let target_node = target.as_node();
             let type_ =
                 self.apply_inline_assertion_in_environment(&target_node, type_, environment);
+            // Empty arrays in a tuple-style multi-assignment are open
+            // containers. Their element type is bottom only until the first
+            // write; retaining `Never` here would make a later append reject
+            // every concrete value.
+            let type_ = if matches!(&type_, Type::Array(element) if element.is_never()) {
+                Type::Array(Box::new(Type::Any))
+            } else {
+                type_
+            };
             self.observe_ivar(environment, name.clone(), &type_, false);
             environment.bind(ivar_refinement_key(&name), type_);
             return;
@@ -10712,6 +10721,19 @@ impl<'src> Analyzer<'src> {
                 pending.extend(info.extends.iter().cloned());
                 if let Some(superclass) = &info.superclass {
                     pending.push(superclass.clone());
+                }
+            }
+            // Methods defined in an included module execute with the
+            // including class's instance variables. When the initializer is
+            // declared on that class, the module-owned ivar key above would
+            // otherwise look uninitialized even though the class provides the
+            // field at runtime.
+            for (candidate_name, info) in &self.classes {
+                if info.includes.contains(&owner_name)
+                    || info.prepends.contains(&owner_name)
+                    || info.extends.contains(&owner_name)
+                {
+                    pending.push(candidate_name.clone());
                 }
             }
         }

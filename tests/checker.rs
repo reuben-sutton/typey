@@ -754,6 +754,12 @@ fn binds_instance_variables_in_multiple_assignment() {
 }
 
 #[test]
+fn keeps_empty_instance_variable_arrays_open_after_multiple_assignment() {
+    let result = check_fixture("tests/fixtures/multi_assignment_open_ivars.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn inherits_typed_ivars_from_superclasses() {
     let result = check_fixture("tests/fixtures/inherited_typed_ivar.rb");
     assert!(
@@ -765,6 +771,21 @@ fn inherits_typed_ivars_from_superclasses() {
         "{:?}",
         result.diagnostics
     );
+}
+
+#[test]
+fn resolves_instance_variables_from_including_classes() {
+    let result = check_fixture("tests/fixtures/included_module_reads_host_ivar.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
+fn infers_instance_variables_from_uninvoked_initializers() {
+    check_fixture("tests/fixtures/ivar_initializer_without_call.rb");
 }
 
 #[test]
