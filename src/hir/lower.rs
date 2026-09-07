@@ -147,8 +147,7 @@ impl<'src> Lowerer<'src> {
                 return *local;
             }
         }
-        let local = LocalId(self.next_local);
-        self.next_local = self.next_local.saturating_add(1);
+        let local = self.allocate_local(name);
         if let Some(scope) = self.scopes.last_mut() {
             scope.locals.insert(name.to_owned(), local);
         }
@@ -156,11 +155,17 @@ impl<'src> Lowerer<'src> {
     }
 
     fn new_local(&mut self, name: &str) -> LocalId {
-        let local = LocalId(self.next_local);
-        self.next_local = self.next_local.saturating_add(1);
+        let local = self.allocate_local(name);
         if let Some(scope) = self.scopes.last_mut() {
             scope.locals.insert(name.to_owned(), local);
         }
+        local
+    }
+
+    fn allocate_local(&mut self, name: &str) -> LocalId {
+        let local = LocalId(self.next_local);
+        self.next_local = self.next_local.saturating_add(1);
+        self.program.locals.push(Name::new(name));
         local
     }
 

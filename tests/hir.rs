@@ -208,6 +208,17 @@ values[index] ||= local
         &source[attribute_span.start as usize..attribute_span.end as usize],
         "object.attr"
     );
+    let local = assignments
+        .iter()
+        .find_map(|(target, _, _)| match target {
+            AssignTarget::Local(local) => Some(*local),
+            _ => None,
+        })
+        .expect("local target");
+    assert_eq!(
+        program.local_name(local).map(|name| name.as_str()),
+        Some("local")
+    );
 }
 
 #[test]

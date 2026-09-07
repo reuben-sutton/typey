@@ -412,6 +412,10 @@ pub struct Program {
     pub bodies: Vec<Body>,
     pub closures: Vec<Closure>,
     pub declarations: Vec<Declaration>,
+    /// Names for [`LocalId`] values allocated while lowering this program.
+    /// Local IDs remain the semantic references used by HIR; the table is
+    /// only the owned spelling needed by later phases.
+    pub locals: Vec<Name>,
 }
 
 impl Program {
@@ -433,5 +437,10 @@ impl Program {
     #[must_use]
     pub fn declaration(&self, id: DeclId) -> Option<&Declaration> {
         self.declarations.get(id.0 as usize)
+    }
+
+    #[must_use]
+    pub fn local_name(&self, id: LocalId) -> Option<&Name> {
+        self.locals.get(id.0 as usize)
     }
 }
