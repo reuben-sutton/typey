@@ -174,6 +174,11 @@ fn keeps_optional_default_side_effects_conditional() {
 }
 
 #[test]
+fn permits_appending_to_an_untyped_empty_array_before_inference() {
+    check_fixture("tests/fixtures/open_array_append.rb");
+}
+
+#[test]
 fn models_sorbet_abstract_helper_declarations() {
     let result = check_fixture("tests/fixtures/sorbet_abstract_helper.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

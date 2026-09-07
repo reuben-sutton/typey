@@ -6368,7 +6368,12 @@ impl<'src> Analyzer<'src> {
             return;
         }
         if let Some(target) = target.as_local_variable_target_node() {
-            environment.bind(prism::constant_name(target.name()), type_);
+            let name = prism::constant_name(target.name());
+            let open_array = matches!(&type_, Type::Array(element) if element.is_never());
+            environment.bind(name.clone(), type_);
+            if open_array {
+                environment.open_array_locals.insert(name);
+            }
             return;
         }
         if let Some(required) = target.as_required_parameter_node() {
@@ -8836,6 +8841,15 @@ impl<'src> Analyzer<'src> {
                     .is_some_and(|local| {
                         environment.known_nonempty_array(&prism::constant_name(local.name()))
                     });
+            let open_array_append = matches!(name.as_str(), "push" | "<<" | "prepend")
+                && receiver_node
+                    .as_ref()
+                    .and_then(Node::as_local_variable_read_node)
+                    .is_some_and(|local| {
+                        environment
+                            .open_array_locals
+                            .contains(&prism::constant_name(local.name()))
+                    });
             let dispatch_receiver_type = if call.is_safe_navigation() {
                 receiver_type.without(&Type::Nil)
             } else {
@@ -8929,7 +8943,9 @@ impl<'src> Analyzer<'src> {
                         ),
                     );
                 }
-                if let Some(type_) = tsort_type {
+                if open_array_append {
+                    self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
+                } else if let Some(type_) = tsort_type {
                     type_
                 } else if matches!(&dispatch_receiver_type, Type::Tuple(_))
                     && matches!(name.as_str(), "first" | "last")
