@@ -7120,11 +7120,15 @@ impl<'src> Analyzer<'src> {
                     (left, right)
                 {
                     if left_name == right_name {
-                        let current = environment.get(&left_name);
-                        environment.bind(
-                            left_name,
-                            self.meet_predicate_type(&current, &left_type.join(&right_type)),
-                        );
+                        let expected = left_type.join(&right_type);
+                        if left_name == "<self>" {
+                            let current = environment.self_type.clone();
+                            environment.self_type = self.meet_predicate_type(&current, &expected);
+                        } else {
+                            let current = environment.get(&left_name);
+                            environment
+                                .bind(left_name, self.meet_predicate_type(&current, &expected));
+                        }
                     }
                 }
             } else {
@@ -7327,6 +7331,16 @@ impl<'src> Analyzer<'src> {
                     };
                     environment.bind(ivar_refinement_key(&instance_variable_name), narrowed);
                 }
+            } else if matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?")
+                && !arguments.is_empty()
+            {
+                let current = environment.self_type.clone();
+                let expected = self.predicate_expected_type(&arguments[0], environment);
+                environment.self_type = if truthy {
+                    self.meet_predicate_type(&current, &expected)
+                } else {
+                    current.without(&expected)
+                };
             }
         }
     }
@@ -7341,15 +7355,14 @@ impl<'src> Analyzer<'src> {
         if !matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?") {
             return None;
         }
-        let receiver = call.receiver()?;
-        let local = receiver.as_local_variable_read_node()?;
         let argument = call
             .arguments()
             .and_then(|arguments| arguments.arguments().into_iter().next())?;
-        Some((
-            prism::constant_name(local.name()),
-            self.predicate_expected_type(&argument, environment),
-        ))
+        let local = match call.receiver() {
+            None => "<self>".to_owned(),
+            Some(receiver) => prism::constant_name(receiver.as_local_variable_read_node()?.name()),
+        };
+        Some((local, self.predicate_expected_type(&argument, environment)))
     }
 
     fn meet_predicate_type(&self, current: &Type, expected: &Type) -> Type {
@@ -8112,6 +8125,42 @@ impl<'src> Analyzer<'src> {
                 },
             );
             Type::Proc(parameters, Box::new(return_type))
+        } else if receiver_node.is_none()
+            && matches!(
+                &environment.self_type,
+                Type::Union(_) | Type::Intersection(_)
+            )
+            && self
+                .resolve_method_key(&self.implicit_method_key(&name, environment))
+                .is_none()
+        {
+            // A predicate can refine implicit `self` to a union.  Dispatch
+            // calls made without an explicit receiver through each member,
+            // just like `value.children` on a union, instead of trying to
+            // synthesize one method key for the whole union.
+            let site = CallSite {
+                argument_nodes: &arguments.argument_nodes,
+                argument_types,
+                block: block.as_ref(),
+            };
+            let receiver_type = environment.self_type.clone();
+            let (type_, fallback_origin) = self.eval_polymorphic_receiver_call(
+                node,
+                None,
+                &receiver_type,
+                &name,
+                &arguments,
+                block.as_ref(),
+                &site,
+                environment,
+            );
+            if type_.contains_any() {
+                untyped_origin = Some(fallback_origin);
+            }
+            if type_.is_any() {
+                self.report_missing_method_if_needed(node, &receiver_type, &name, false);
+            }
+            type_
         } else if receiver_node.is_none() {
             if name == "each"
                 && Self::named_type_name(&environment.self_type)
@@ -10506,6 +10555,7 @@ impl<'src> Analyzer<'src> {
     ) -> Type {
         match name {
             "puts" | "print" | "p" | "pp" | "warn" => Type::Nil,
+            "is_a?" | "kind_of?" | "instance_of?" => Type::bool(),
             "require" | "require_relative" | "load" => Type::bool(),
             "raise" | "fail" | "abort" | "exit" | "exit!" => Type::Never,
             "Integer" => Type::Integer,

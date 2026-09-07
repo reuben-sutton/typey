@@ -120,6 +120,12 @@ fn resolves_qualified_gem_rbi_superclasses_from_the_root() {
 }
 
 #[test]
+fn narrows_implicit_self_through_union_type_predicates() {
+    let result = check_fixture("tests/fixtures/self_union_predicate.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn reports_missing_methods_in_typed_true_files() {
     check_fixture("tests/fixtures/typed_true_missing_api.rb");
 }
