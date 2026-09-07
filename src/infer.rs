@@ -8988,6 +8988,8 @@ impl<'src> Analyzer<'src> {
         } else if receiver_node.is_none() {
             if name == "extend" {
                 self.observe_extend_hook(node, &arguments.argument_nodes, environment);
+            } else if name == "include" {
+                self.observe_include_hook(node, &arguments.argument_nodes, environment);
             }
             if name == "each"
                 && Self::named_type_name(&environment.self_type)
@@ -9302,6 +9304,21 @@ impl<'src> Analyzer<'src> {
                 &name,
             );
             let mut result = if class_mixin {
+                if name == "include" {
+                    self.observe_include_hook_for_base(
+                        node,
+                        &arguments.argument_nodes,
+                        &dispatch_receiver_type,
+                        environment,
+                    );
+                } else if name == "extend" {
+                    self.observe_extend_hook_for_base(
+                        node,
+                        &arguments.argument_nodes,
+                        &dispatch_receiver_type,
+                        environment,
+                    );
+                }
                 Type::Nil
             } else if yaml_dump {
                 Type::String
@@ -10310,6 +10327,7 @@ impl<'src> Analyzer<'src> {
                     .then(|| receiver_type.and_then(Self::class_object_instance_type))
                     .flatten()
             })
+            .or_else(|| self.rails_initializer_block_receiver(&key, receiver_type))
             .or_else(|| self.active_support_test_block_receiver(&key, receiver_type));
         let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
             if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
@@ -10422,6 +10440,22 @@ impl<'src> Analyzer<'src> {
             self.changed_methods.insert(key);
         }
         Some(block_type)
+    }
+
+    /// Rails initializers are stored as callbacks and later executed with
+    /// `Rails::Initializable::Initializer#run`, which uses `instance_exec` on
+    /// the engine or railtie instance. The generated Rails RBI does not encode
+    /// that receiver binding, so recover it from the defining extension
+    /// module when checking an initializer declaration block.
+    fn rails_initializer_block_receiver(
+        &self,
+        key: &MethodKey,
+        receiver_type: Option<&Type>,
+    ) -> Option<Type> {
+        let owner = key.owner.as_deref()?;
+        (owner == "Rails::Initializable::ClassMethods" && key.name == "initializer")
+            .then(|| receiver_type.and_then(Self::class_object_instance_type))
+            .flatten()
     }
 
     /// Active Support's test DSL is implemented by defining instance methods,
@@ -11811,6 +11845,20 @@ impl<'src> Analyzer<'src> {
         let Some(base_type) = Self::class_object_owner(&environment.self_type) else {
             return;
         };
+        let base_type = Self::class_object_type(&base_type);
+        self.observe_extend_hook_for_base(node, argument_nodes, &base_type, environment);
+    }
+
+    fn observe_extend_hook_for_base<'node>(
+        &mut self,
+        node: &Node<'node>,
+        argument_nodes: &[Node<'node>],
+        base_type: &Type,
+        environment: &mut Environment,
+    ) {
+        let Some(base_type) = Self::class_object_owner(base_type) else {
+            return;
+        };
         let Some(argument) = argument_nodes.first() else {
             return;
         };
@@ -11820,6 +11868,11 @@ impl<'src> Analyzer<'src> {
         else {
             return;
         };
+        let info = self.classes.entry(base_type.clone()).or_default();
+        if !info.extends.contains(&module_name) {
+            info.extends.push(module_name.clone());
+            self.method_resolution_cache.borrow_mut().clear();
+        }
         let hook = MethodKey {
             owner: Some(module_name.clone()),
             name: "extended".to_owned(),
@@ -11840,6 +11893,70 @@ impl<'src> Analyzer<'src> {
         let _ = self.invoke_signature(
             node,
             "extended",
+            &signature,
+            &hook_arguments,
+            Some(&receiver_type),
+            None,
+        );
+    }
+
+    fn observe_include_hook<'node>(
+        &mut self,
+        node: &Node<'node>,
+        argument_nodes: &[Node<'node>],
+        environment: &mut Environment,
+    ) {
+        let Some(base_type) = Self::class_object_owner(&environment.self_type) else {
+            return;
+        };
+        let base_type = Self::class_object_type(&base_type);
+        self.observe_include_hook_for_base(node, argument_nodes, &base_type, environment);
+    }
+
+    fn observe_include_hook_for_base<'node>(
+        &mut self,
+        node: &Node<'node>,
+        argument_nodes: &[Node<'node>],
+        base_type: &Type,
+        environment: &mut Environment,
+    ) {
+        let Some(base_type) = Self::class_object_owner(base_type) else {
+            return;
+        };
+        let Some(argument) = argument_nodes.first() else {
+            return;
+        };
+        let Some(module_name) = self
+            .constant_reference_name(argument)
+            .map(|name| self.resolve_name(&name, self.lexical_owner(environment).as_deref()))
+        else {
+            return;
+        };
+        let info = self.classes.entry(base_type.clone()).or_default();
+        if !info.includes.contains(&module_name) {
+            info.includes.push(module_name.clone());
+            self.method_resolution_cache.borrow_mut().clear();
+        }
+        let hook = MethodKey {
+            owner: Some(module_name.clone()),
+            name: "included".to_owned(),
+            singleton: true,
+        };
+        let mut hook_arguments = CallArguments::default();
+        hook_arguments
+            .argument_types
+            .push(Self::class_object_type(&base_type));
+        hook_arguments
+            .positional_types
+            .push(Self::class_object_type(&base_type));
+        let Some(signature) = self.observe_call(&hook, &hook_arguments, false) else {
+            return;
+        };
+        self.record_method_dependency(&hook, environment);
+        let receiver_type = Self::class_object_type(&module_name);
+        let _ = self.invoke_signature(
+            node,
+            "included",
             &signature,
             &hook_arguments,
             Some(&receiver_type),
@@ -11895,9 +12012,6 @@ impl<'src> Analyzer<'src> {
             | "type_template"
             | "mixes_in_class_methods"
             | "each"
-            | "include"
-            | "prepend"
-            | "extend"
             | "alias_method"
             | "attr_reader"
             | "attr_writer"
@@ -11910,6 +12024,16 @@ impl<'src> Analyzer<'src> {
             | "private_constant"
             | "public_constant"
             | "refine" => Type::Nil,
+            "include" | "prepend" => {
+                if name == "include" {
+                    self.observe_include_hook(node, argument_nodes, environment);
+                }
+                Type::Nil
+            }
+            "extend" => {
+                self.observe_extend_hook(node, argument_nodes, environment);
+                Type::Nil
+            }
             "id" | "object_id" | "hash" => Type::Integer,
             // Module's dynamic method-definition APIs are available through
             // an implicit receiver while evaluating a module method that is
