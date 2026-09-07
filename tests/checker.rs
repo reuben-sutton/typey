@@ -134,7 +134,7 @@ fn narrows_proc_arity_in_zero_arity_branch() {
 }
 
 #[test]
-fn treats_a_default_parameter_as_initialized_inside_the_method() {
+fn keeps_unannotated_optional_parameters_untyped() {
     check_fixture("tests/fixtures/default_parameter_flow.rb");
 }
 
