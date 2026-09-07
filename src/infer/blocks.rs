@@ -44,7 +44,10 @@ impl<'src> Analyzer<'src> {
         };
         let captured = outer.clone();
         let mut bound_outer = outer.clone();
-        bound_outer.self_type = receiver.clone();
+        bound_outer.self_type = match receiver {
+            Type::AttachedClassOf(owner) => Type::named(owner.clone()),
+            _ => receiver.clone(),
+        };
         let class_object_owner = Self::class_object_owner(receiver);
         bound_outer.method_key = Some(MethodKey {
             owner: class_object_owner

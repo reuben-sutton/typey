@@ -36,8 +36,9 @@ impl FixtureReport {
 /// Parse Sorbet-style diagnostic expectations from a source buffer.
 #[must_use]
 pub fn expectations(source: &str) -> Vec<InlineExpectation> {
+    let lines = source.lines().collect::<Vec<_>>();
     let mut result = Vec::new();
-    for (index, line) in source.lines().enumerate() {
+    for (index, line) in lines.iter().enumerate() {
         let Some((prefix, comment)) = line.split_once('#') else {
             continue;
         };
@@ -57,9 +58,20 @@ pub fn expectations(source: &str) -> Vec<InlineExpectation> {
                     } else {
                         severity
                     };
+                    let line = if comment.trim_start().starts_with('^') {
+                        (0..index)
+                            .rev()
+                            .find(|previous| {
+                                let source_line = lines[*previous].trim();
+                                !source_line.is_empty() && !source_line.starts_with('#')
+                            })
+                            .map_or(index + 1, |previous| previous + 1)
+                    } else {
+                        index + 1
+                    };
                     result.push(InlineExpectation {
                         severity,
-                        line: index + 1,
+                        line,
                         message: message.to_owned(),
                     });
                 }

@@ -1028,13 +1028,21 @@ impl<'src> Analyzer<'src> {
         } = type_
         {
             let bound_receiver = if matches!(receiver.as_ref(), Type::Named(name, args) if name == "instance" && args.is_empty())
-                && receiver_type
-                    .and_then(Self::class_object_instance_type)
-                    .is_some()
+                && receiver_type.is_some()
             {
-                receiver_type
-                    .and_then(Self::class_object_instance_type)
-                    .unwrap_or_else(|| (**receiver).clone())
+                let receiver_type = receiver_type.expect("receiver type is present");
+                let preserves_class_object_self = self
+                    .substitution_context
+                    .as_ref()
+                    .is_some_and(|context| context.singleton);
+                if Self::class_object_instance_type(receiver_type).is_some()
+                    && !preserves_class_object_self
+                {
+                    Self::class_object_instance_type(receiver_type)
+                        .expect("class object instance type is present")
+                } else {
+                    receiver_type.clone()
+                }
             } else {
                 self.substitute_signature_type(receiver, receiver_type, bindings, type_parameters)
             };

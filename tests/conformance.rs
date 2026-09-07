@@ -4,27 +4,22 @@ use typey::conformance::{check_fixture, expectations, fixture_paths};
 use typey::diagnostic::Severity;
 use typey::CheckerConfig;
 
-#[test]
-fn all_checked_in_fixtures_match_inline_expectations() {
-    let paths = fixture_paths(Path::new("tests/fixtures")).expect("fixture directory exists");
-    assert!(
-        !paths.is_empty(),
-        "the conformance suite must contain fixtures"
-    );
-
-    let mut failures = Vec::new();
-    for path in &paths {
-        let report = check_fixture(path, CheckerConfig::default()).expect("fixture is readable");
-        if !report.passed() {
-            failures.push(format!("{}: {:?}", path.display(), report.failures));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "conformance failures:\n{}",
-        failures.join("\n")
-    );
+fn assert_fixture_matches_expectations(path: &str) {
+    let path = Path::new(path);
+    let report = check_fixture(path, CheckerConfig::default()).expect("fixture is readable");
+    assert!(report.passed(), "{}: {:?}", path.display(), report.failures);
 }
+
+macro_rules! conformance_fixture {
+    ($name:ident, $path:literal) => {
+        #[test]
+        fn $name() {
+            assert_fixture_matches_expectations($path);
+        }
+    };
+}
+
+include!(concat!(env!("OUT_DIR"), "/conformance_fixtures.rs"));
 
 #[test]
 fn parses_inline_expectations_with_reveal_compatibility() {
@@ -50,7 +45,7 @@ fn parses_inline_expectations_with_reveal_compatibility() {
     assert_eq!(parsed[3].line, 4);
     assert_eq!(parsed[3].message, "a note");
     assert_eq!(parsed[4].severity, Severity::Error);
-    assert_eq!(parsed[4].line, 5);
+    assert_eq!(parsed[4].line, 4);
     assert_eq!(parsed[4].message, "caret-style expectation");
 }
 

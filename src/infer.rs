@@ -6959,6 +6959,7 @@ impl<'src> Analyzer<'src> {
         };
         let mut bindings = self.infer_type_parameter_bindings(signature, arguments, None);
         bindings.extend(self.infer_generic_member_bindings(signature, arguments, receiver_type));
+        let previous_substitution_context = self.substitution_context.replace(key.clone());
         let block_signature = signature.block.as_ref().map(|block| {
             self.substitute_signature_type(
                 block,
@@ -6967,6 +6968,7 @@ impl<'src> Analyzer<'src> {
                 &signature.type_parameters,
             )
         });
+        self.substitution_context = previous_substitution_context;
         let expected = block_signature
             .as_ref()
             .and_then(optional_proc_type)
@@ -7009,6 +7011,7 @@ impl<'src> Analyzer<'src> {
             .get(&key)
             .is_some_and(|state| state.binds_block_to_receiver);
         let bound_receiver = class_new_receiver
+            .or_else(|| self.active_support_test_block_receiver(&key, receiver_type))
             .or_else(|| {
                 block_signature
                     .as_ref()
@@ -7023,8 +7026,7 @@ impl<'src> Analyzer<'src> {
             .or_else(|| self.rails_initializer_block_receiver(&key, receiver_type))
             .or_else(|| self.rails_application_configure_block_receiver(&key, receiver_type))
             .or_else(|| self.rails_route_draw_block_receiver(&key, receiver_type))
-            .or_else(|| self.active_support_ci_block_receiver(&key, receiver_type))
-            .or_else(|| self.active_support_test_block_receiver(&key, receiver_type));
+            .or_else(|| self.active_support_ci_block_receiver(&key, receiver_type));
         let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
             if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
             {
@@ -7099,14 +7101,17 @@ impl<'src> Analyzer<'src> {
             .get(&key)
             .is_some_and(|state| state.explicit)
             .then(|| {
-                signature.block.as_ref().map(|block| {
+                let previous_substitution_context = self.substitution_context.replace(key.clone());
+                let result = signature.block.as_ref().map(|block| {
                     self.substitute_signature_type(
                         block,
                         receiver_type,
                         &checked_bindings,
                         &signature.type_parameters,
                     )
-                })
+                });
+                self.substitution_context = previous_substitution_context;
+                result
             })
             .flatten();
         if let Some(actual_block_signature) = passed_block_signature {
@@ -7265,6 +7270,7 @@ impl<'src> Analyzer<'src> {
         let owner = key.owner.as_deref()?;
         let binds_to_instance = (owner == "ActiveSupport::Testing::Declarative"
             && key.name == "test")
+            || (owner == "Minitest::Test" && key.name == "test")
             || (owner == "ActiveSupport::Testing::SetupAndTeardown::ClassMethods"
                 && matches!(key.name.as_str(), "setup" | "teardown"));
         binds_to_instance
@@ -8621,7 +8627,13 @@ impl<'src> Analyzer<'src> {
                     let message =
                         "`T.attached_class` may only be used in singleton methods on classes or instance methods on `has_attached_class!` modules";
                     let annotation = argument_nodes.get(1).unwrap_or(node);
+                    // Sorbet reports this invalid intrinsic once while
+                    // resolving the T.let annotation and once while
+                    // checking the intrinsic itself.
                     self.error(annotation, message);
+                    if Self::class_object_instance_type(&environment.self_type).is_none() {
+                        self.error(node, message);
+                    }
                     expected = Type::Any;
                 }
                 if name == "let" || name == "assert_type!" {

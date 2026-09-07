@@ -18,7 +18,7 @@ module M2
 
   def foo
     values = T::Array[T.attached_class].new
-    T.reveal_type(values) # note: Revealed type: `T::Array[T.attached_class]`
+    T.reveal_type(values) # note: Revealed type: `T::Array[T.attached_class (of M2)]`
   end
 end
 
