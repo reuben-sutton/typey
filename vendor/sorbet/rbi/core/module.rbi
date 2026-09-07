@@ -221,8 +221,8 @@ class Module < Object
   # ```
   sig do
     params(
-        new_name: Symbol,
-        old_name: Symbol,
+        new_name: T.any(Symbol, String),
+        old_name: T.any(Symbol, String),
     )
     .returns(Symbol)
   end

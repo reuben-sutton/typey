@@ -313,6 +313,19 @@ fn handles_packwerk_false_positive_patterns() {
 }
 
 #[test]
+fn accepts_string_names_for_alias_method() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs read");
+    files.push(WorkspaceFile::new(
+        "tests/fixtures/alias_method_string_names.rb",
+        std::fs::read_to_string("tests/fixtures/alias_method_string_names.rb")
+            .expect("fixture exists"),
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+}
+
+#[test]
 fn dispatches_structural_collections_through_vendored_rbis() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs read");
