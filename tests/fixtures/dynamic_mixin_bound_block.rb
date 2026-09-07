@@ -7,7 +7,7 @@ module TestAssertions
 end
 
 module TestDsl
-  sig { params(name: String, "&": T.proc.bind(T.self_type).void).returns(NilClass) }
+  sig { params(name: String, block: T.proc.bind(T.self_type).void).returns(NilClass) }
   def test(name, &block)
     nil
   end

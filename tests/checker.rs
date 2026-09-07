@@ -82,6 +82,11 @@ fn reports_malformed_sorbet_proc_signatures() {
 }
 
 #[test]
+fn reports_mismatched_sorbet_block_parameter_names() {
+    check_fixture("tests/fixtures/malformed_block_parameter_signature.rb");
+}
+
+#[test]
 fn models_sorbet_struct_props_as_typed_accessors() {
     let result = check_fixture("tests/fixtures/t_struct_props.rb");
     let reveals = result

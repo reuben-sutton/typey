@@ -155,8 +155,9 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     let mut keywords = result.keywords.clone();
     let mut block = result.block.clone();
     for (name, type_) in signature.param_names.iter().zip(&signature.params) {
-        let is_block_parameter =
-            shape.has_block && (shape.block_name.as_deref() == Some(name.as_str()) || name == "&");
+        let is_block_parameter = shape.has_block
+            && (shape.block_name.as_deref() == Some(name.as_str())
+                || (shape.block_name.is_none() && name == "&"));
         if is_block_parameter {
             if optional_proc_type(type_).is_some() {
                 // Preserve nilability here. It distinguishes Ruby's
@@ -3788,6 +3789,44 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    fn validate_sorbet_parameter_names(
+        &mut self,
+        offset: usize,
+        ruby_parameters: &ParameterShape,
+        signature: &MethodSig,
+    ) {
+        for name in &signature.param_names {
+            let matches_definition = ruby_parameters
+                .parameter_kinds
+                .iter()
+                .any(|(defined, _)| defined == name)
+                || (name == "&"
+                    && ruby_parameters.has_block
+                    && ruby_parameters.block_name.is_none());
+            if !matches_definition {
+                self.diagnostics.push(Diagnostic::error(
+                    self.source,
+                    format!("Unknown parameter name `{name}`"),
+                    offset,
+                    offset,
+                ));
+            }
+        }
+
+        if let Some(block_name) = ruby_parameters.block_name.as_deref() {
+            if signature.param_names.iter().any(|name| name == "&")
+                && !signature.param_names.iter().any(|name| name == block_name)
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    self.source,
+                    format!("Malformed `sig`. Type not specified for parameter `{block_name}`"),
+                    offset,
+                    offset,
+                ));
+            }
+        }
+    }
+
     fn register_methods<'node>(&mut self, root: &Node<'node>) {
         self.methods.clear();
         self.type_aliases = self.annotations.type_aliases.clone();
@@ -3847,6 +3886,7 @@ impl<'src> Analyzer<'src> {
             let Some(key) = self.definitions.get(offset).cloned() else {
                 continue;
             };
+            let raw_signatures = signatures.clone();
             let signatures = signatures
                 .iter()
                 .map(|signature| {
@@ -3875,6 +3915,13 @@ impl<'src> Analyzer<'src> {
                                 ruby_parameter_kinds,
                                 signature,
                             );
+                        }
+                    }
+                }
+                if let Some(shape) = self.parameter_shapes.get(offset).cloned() {
+                    for signature in &raw_signatures {
+                        if !signature.param_names.is_empty() {
+                            self.validate_sorbet_parameter_names(*offset, &shape, signature);
                         }
                     }
                 }
