@@ -2651,6 +2651,31 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    /// Return the instance types represented by a class-object union. A
+    /// callback such as `included(base)` can observe several different class
+    /// objects across a workspace, so its inferred parameter is commonly
+    /// `Class[A] | Class[B]`. Mixin operations still apply independently to
+    /// every member of that union.
+    fn class_object_instance_types(type_: &Type) -> Option<Vec<Type>> {
+        if let Some(instance) = Self::class_object_instance_type(type_) {
+            return match instance {
+                // Type joining represents `Class[A] | Class[B]` as
+                // `Class[A | B]`. Preserve the individual possible classes
+                // so a forwarded `base.extend(...)` can update both.
+                Type::Union(members) => (!members.is_empty()).then_some(members),
+                instance => Some(vec![instance]),
+            };
+        }
+        let Type::Union(members) = type_ else {
+            return None;
+        };
+        let mut instances = Vec::with_capacity(members.len());
+        for member in members {
+            instances.push(Self::class_object_instance_type(member)?);
+        }
+        (!instances.is_empty()).then_some(instances)
+    }
+
     fn named_type_name(type_: &Type) -> Option<String> {
         match type_ {
             Type::Named(name, _) => Some(name.clone()),
@@ -9297,7 +9322,7 @@ impl<'src> Analyzer<'src> {
                         .is_some_and(|name| name.trim_start_matches("::") == "YAML")
                 });
             let class_mixin = matches!(name.as_str(), "include" | "prepend" | "extend")
-                && Self::class_object_instance_type(&dispatch_receiver_type).is_some();
+                && Self::class_object_instance_types(&dispatch_receiver_type).is_some();
             let random_formatter_signature = self.random_formatter_signature(
                 receiver_node.as_ref(),
                 &dispatch_receiver_type,
@@ -11856,7 +11881,7 @@ impl<'src> Analyzer<'src> {
         base_type: &Type,
         environment: &mut Environment,
     ) {
-        let Some(base_type) = Self::class_object_owner(base_type) else {
+        let Some(base_types) = Self::class_object_instance_types(base_type) else {
             return;
         };
         let Some(argument) = argument_nodes.first() else {
@@ -11868,36 +11893,41 @@ impl<'src> Analyzer<'src> {
         else {
             return;
         };
-        let info = self.classes.entry(base_type.clone()).or_default();
-        if !info.extends.contains(&module_name) {
-            info.extends.push(module_name.clone());
-            self.method_resolution_cache.borrow_mut().clear();
+        for base_type in base_types {
+            let Some(base_type) = Self::named_type_name(&base_type) else {
+                continue;
+            };
+            let info = self.classes.entry(base_type.clone()).or_default();
+            if !info.extends.contains(&module_name) {
+                info.extends.push(module_name.clone());
+                self.method_resolution_cache.borrow_mut().clear();
+            }
+            let hook = MethodKey {
+                owner: Some(module_name.clone()),
+                name: "extended".to_owned(),
+                singleton: true,
+            };
+            let mut hook_arguments = CallArguments::default();
+            hook_arguments
+                .argument_types
+                .push(Self::class_object_type(&base_type));
+            hook_arguments
+                .positional_types
+                .push(Self::class_object_type(&base_type));
+            let Some(signature) = self.observe_call(&hook, &hook_arguments, false) else {
+                continue;
+            };
+            self.record_method_dependency(&hook, environment);
+            let receiver_type = Self::class_object_type(&module_name);
+            let _ = self.invoke_signature(
+                node,
+                "extended",
+                &signature,
+                &hook_arguments,
+                Some(&receiver_type),
+                None,
+            );
         }
-        let hook = MethodKey {
-            owner: Some(module_name.clone()),
-            name: "extended".to_owned(),
-            singleton: true,
-        };
-        let mut hook_arguments = CallArguments::default();
-        hook_arguments
-            .argument_types
-            .push(Self::class_object_type(&base_type));
-        hook_arguments
-            .positional_types
-            .push(Self::class_object_type(&base_type));
-        let Some(signature) = self.observe_call(&hook, &hook_arguments, false) else {
-            return;
-        };
-        self.record_method_dependency(&hook, environment);
-        let receiver_type = Self::class_object_type(&module_name);
-        let _ = self.invoke_signature(
-            node,
-            "extended",
-            &signature,
-            &hook_arguments,
-            Some(&receiver_type),
-            None,
-        );
     }
 
     fn observe_include_hook<'node>(
@@ -11920,7 +11950,7 @@ impl<'src> Analyzer<'src> {
         base_type: &Type,
         environment: &mut Environment,
     ) {
-        let Some(base_type) = Self::class_object_owner(base_type) else {
+        let Some(base_types) = Self::class_object_instance_types(base_type) else {
             return;
         };
         let Some(argument) = argument_nodes.first() else {
@@ -11932,36 +11962,41 @@ impl<'src> Analyzer<'src> {
         else {
             return;
         };
-        let info = self.classes.entry(base_type.clone()).or_default();
-        if !info.includes.contains(&module_name) {
-            info.includes.push(module_name.clone());
-            self.method_resolution_cache.borrow_mut().clear();
+        for base_type in base_types {
+            let Some(base_type) = Self::named_type_name(&base_type) else {
+                continue;
+            };
+            let info = self.classes.entry(base_type.clone()).or_default();
+            if !info.includes.contains(&module_name) {
+                info.includes.push(module_name.clone());
+                self.method_resolution_cache.borrow_mut().clear();
+            }
+            let hook = MethodKey {
+                owner: Some(module_name.clone()),
+                name: "included".to_owned(),
+                singleton: true,
+            };
+            let mut hook_arguments = CallArguments::default();
+            hook_arguments
+                .argument_types
+                .push(Self::class_object_type(&base_type));
+            hook_arguments
+                .positional_types
+                .push(Self::class_object_type(&base_type));
+            let Some(signature) = self.observe_call(&hook, &hook_arguments, false) else {
+                continue;
+            };
+            self.record_method_dependency(&hook, environment);
+            let receiver_type = Self::class_object_type(&module_name);
+            let _ = self.invoke_signature(
+                node,
+                "included",
+                &signature,
+                &hook_arguments,
+                Some(&receiver_type),
+                None,
+            );
         }
-        let hook = MethodKey {
-            owner: Some(module_name.clone()),
-            name: "included".to_owned(),
-            singleton: true,
-        };
-        let mut hook_arguments = CallArguments::default();
-        hook_arguments
-            .argument_types
-            .push(Self::class_object_type(&base_type));
-        hook_arguments
-            .positional_types
-            .push(Self::class_object_type(&base_type));
-        let Some(signature) = self.observe_call(&hook, &hook_arguments, false) else {
-            return;
-        };
-        self.record_method_dependency(&hook, environment);
-        let receiver_type = Self::class_object_type(&module_name);
-        let _ = self.invoke_signature(
-            node,
-            "included",
-            &signature,
-            &hook_arguments,
-            Some(&receiver_type),
-            None,
-        );
     }
 
     fn eval_global_call<'node>(

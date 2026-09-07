@@ -325,6 +325,11 @@ fn binds_rails_initializer_blocks_to_engine_instances() {
 }
 
 #[test]
+fn binds_rails_initializer_hooks_for_union_of_engine_bases() {
+    check_fixture("tests/fixtures/rails_initializer_bound_union.rb");
+}
+
+#[test]
 fn models_extend_self_as_module_singleton_methods() {
     let result = check_fixture("tests/fixtures/extend_self.rb");
     assert!(result
