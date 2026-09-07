@@ -14860,13 +14860,30 @@ impl<'src> Analyzer<'src> {
             }
         }
 
+        let concern_class_methods = self
+            .classes
+            .iter()
+            .filter_map(|(owner, info)| {
+                let is_concern = info
+                    .extends
+                    .iter()
+                    .any(|extension| extension == "ActiveSupport::Concern");
+                let class_methods = format!("{owner}::ClassMethods");
+                (is_concern && self.classes.contains_key(&class_methods))
+                    .then_some((owner.clone(), class_methods))
+            })
+            .collect::<BTreeMap<_, _>>();
         let mixins = self
             .classes
             .iter()
-            .map(|(owner, info)| (owner.clone(), info.includes.clone()))
+            .map(|(owner, info)| {
+                let mut includes = info.includes.clone();
+                includes.extend(info.prepends.clone());
+                (owner.clone(), includes)
+            })
             .collect::<Vec<_>>();
         for (owner, includes) in mixins {
-            let class_methods = includes
+            let explicit_class_methods = includes
                 .iter()
                 .flat_map(|included| {
                     self.classes
@@ -14875,8 +14892,15 @@ impl<'src> Analyzer<'src> {
                         .flat_map(|info| info.class_methods.iter().cloned())
                 })
                 .collect::<Vec<_>>();
+            let concern_mixin_methods = includes
+                .iter()
+                .filter_map(|included| concern_class_methods.get(included).cloned())
+                .collect::<Vec<_>>();
             if let Some(info) = self.classes.get_mut(&owner) {
-                for class_method in class_methods {
+                for class_method in explicit_class_methods
+                    .into_iter()
+                    .chain(concern_mixin_methods)
+                {
                     if !info.extends.contains(&class_method) {
                         info.extends.push(class_method);
                     }
