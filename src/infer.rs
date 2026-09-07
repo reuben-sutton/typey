@@ -10473,11 +10473,20 @@ impl<'src> Analyzer<'src> {
         if let Some(info) = info {
             if singleton {
                 if info.extend_self {
+                    for module in info.prepends.iter().rev() {
+                        self.append_method_candidates(module, name, false, visited, candidates);
+                    }
                     candidates.push(MethodKey {
                         owner: Some(owner.to_owned()),
                         name: name.to_owned(),
                         singleton: false,
                     });
+                    for ancestor in info.requires_ancestors.iter().rev() {
+                        self.append_method_candidates(ancestor, name, false, visited, candidates);
+                    }
+                    for module in info.includes.iter().rev() {
+                        self.append_method_candidates(module, name, false, visited, candidates);
+                    }
                 }
                 for module in info.extends.iter().rev() {
                     self.append_method_candidates(module, name, false, visited, candidates);
