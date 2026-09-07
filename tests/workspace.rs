@@ -208,6 +208,10 @@ fn debug_cli_excludes_sorbet_signature_dsl_from_send_metrics() {
         stderr.contains("application lib send sites without a recorded type: 0/1"),
         "signature DSL was counted as an application send:\n{stderr}"
     );
+    assert!(
+        stderr.contains("sorbet input send sites: 1 source spans, 1 typed, 0 untyped, 0 untracked"),
+        "vendored RBIs or signature DSL distorted send metrics:\n{stderr}"
+    );
 }
 
 #[test]

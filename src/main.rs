@@ -171,6 +171,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "[typey] strict inferred types containing T.untyped: {total} ({direct} direct) across {} files",
                     untyped_by_path.len()
                 );
+                let mut application_syntactic_send_spans = BTreeSet::new();
+                for file in &files {
+                    if !is_application_source(&file.path) {
+                        continue;
+                    }
+                    for (start, end) in syntactic_send_spans(&file.source) {
+                        application_syntactic_send_spans.insert((file.path.clone(), start, end));
+                    }
+                }
                 let mut application_recorded_send_spans = BTreeSet::new();
                 let mut application_untyped_send_spans = BTreeSet::new();
                 let mut application_untyped_by_origin = BTreeMap::<UntypedOrigin, usize>::new();
@@ -188,6 +197,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     let span = (inferred.path.clone(), inferred.start, inferred.end);
+                    if !application_syntactic_send_spans.contains(&span) {
+                        continue;
+                    }
                     application_recorded_send_spans.insert(span.clone());
                     if inferred.type_.contains_any() {
                         if application_untyped_send_spans.insert(span) {}
@@ -238,15 +250,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
                 for (label, count) in application_fallback_calls.into_iter().take(30) {
                     eprintln!("[typey]   fallback call `{label}`: {count} unique spans");
-                }
-                let mut application_syntactic_send_spans = BTreeSet::new();
-                for file in &files {
-                    if !is_application_source(&file.path) {
-                        continue;
-                    }
-                    for (start, end) in syntactic_send_spans(&file.source) {
-                        application_syntactic_send_spans.insert((file.path.clone(), start, end));
-                    }
                 }
                 let application_untracked_send_spans = application_syntactic_send_spans
                     .difference(&application_recorded_send_spans)
@@ -349,10 +352,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|inferred| is_sorbet_input_source(&inferred.path) && inferred.is_send)
                     .map(|inferred| (inferred.path.clone(), inferred.start, inferred.end))
                     .collect::<BTreeSet<_>>();
+                let sorbet_input_untyped_send_spans = result
+                    .types
+                    .iter()
+                    .filter(|inferred| {
+                        is_sorbet_input_source(&inferred.path)
+                            && inferred.is_send
+                            && inferred.type_.contains_any()
+                    })
+                    .map(|inferred| (inferred.path.clone(), inferred.start, inferred.end))
+                    .filter(|span| sorbet_input_syntactic_send_spans.contains(span))
+                    .collect::<BTreeSet<_>>();
+                let sorbet_input_recorded_runtime_send_spans = sorbet_input_recorded_send_spans
+                    .intersection(&sorbet_input_syntactic_send_spans)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let sorbet_input_untracked_send_spans = sorbet_input_syntactic_send_spans
+                    .difference(&sorbet_input_recorded_runtime_send_spans)
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let sorbet_input_typed_send_spans = sorbet_input_recorded_runtime_send_spans
+                    .difference(&sorbet_input_untyped_send_spans)
+                    .count();
                 eprintln!(
-                    "[typey] sorbet input send sites: {} source spans, {} recorded spans",
+                    "[typey] sorbet input send sites: {} source spans, {} typed, {} untyped, {} untracked",
                     sorbet_input_syntactic_send_spans.len(),
-                    sorbet_input_recorded_send_spans.len()
+                    sorbet_input_typed_send_spans,
+                    sorbet_input_untyped_send_spans.len(),
+                    sorbet_input_untracked_send_spans.len()
                 );
                 let explicit_untyped = strict_paths
                     .iter()
@@ -461,13 +488,25 @@ fn is_sorbet_input_source(path: &Path) -> bool {
     ) {
         return false;
     }
+    let mut saw_vendor = false;
+    let mut saw_vendor_sorbet = false;
     let mut saw_sorbet = false;
-    path.components().any(|component| {
+    for component in path.components() {
         let name = component.as_os_str();
+        if name == std::ffi::OsStr::new("vendor") {
+            saw_vendor = true;
+        } else if saw_vendor && name == std::ffi::OsStr::new("sorbet") {
+            saw_vendor_sorbet = true;
+        } else if saw_vendor_sorbet && name == std::ffi::OsStr::new("rbi") {
+            return false;
+        }
         let is_sorbet_rbi = saw_sorbet && name == std::ffi::OsStr::new("rbi");
         saw_sorbet = name == std::ffi::OsStr::new("sorbet");
-        is_sorbet_rbi || name == std::ffi::OsStr::new("lib")
-    })
+        if is_sorbet_rbi || name == std::ffi::OsStr::new("lib") {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Default)]
