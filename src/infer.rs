@@ -6787,8 +6787,10 @@ impl<'src> Analyzer<'src> {
                 self.expected_return_type = signature
                     .and_then(|signature| signature.params.get(index))
                     .cloned();
-                self.eval_node(&optional.value(), environment);
+                let mut default_environment = environment.clone();
+                self.eval_node(&optional.value(), &mut default_environment);
                 self.expected_return_type = previous_expected_return;
+                *environment = environment.join(&default_environment);
                 index += 1;
             }
         }

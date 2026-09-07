@@ -169,6 +169,11 @@ fn narrows_array_first_after_proving_the_array_is_nonempty() {
 }
 
 #[test]
+fn keeps_optional_default_side_effects_conditional() {
+    check_fixture("tests/fixtures/optional_default_side_effect.rb");
+}
+
+#[test]
 fn models_sorbet_abstract_helper_declarations() {
     let result = check_fixture("tests/fixtures/sorbet_abstract_helper.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
