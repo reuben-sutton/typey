@@ -2,7 +2,10 @@ use std::path::Path;
 use std::process::Command;
 
 use typey::workspace::is_ruby_source;
-use typey::{check_workspace, discover_ruby_files, load_workspace, CheckerConfig, WorkspaceFile};
+use typey::{
+    check_workspace, discover_ruby_files, discover_ruby_files_with_ignores, load_workspace,
+    CheckerConfig, WorkspaceFile,
+};
 
 const FIXTURE_ROOT: &str = "tests/workspace_repo";
 const IGNORE_FIXTURE_ROOT: &str = "tests/workspace_ignore_repo";
@@ -44,6 +47,17 @@ fn discovers_files_using_sorbet_ignore_options() {
     let paths = discover_ruby_files(Path::new(IGNORE_FIXTURE_ROOT)).expect("workspace exists");
     assert_eq!(paths.len(), 1);
     assert!(paths[0].ends_with("tests/workspace_ignore_repo/app/kept.rb"));
+}
+
+#[test]
+fn discovers_files_using_command_line_sorbet_ignore_options() {
+    let paths = discover_ruby_files_with_ignores(
+        Path::new("tests/workspace_cli_ignore_repo"),
+        &["vendor/bundle".to_owned()],
+    )
+    .expect("workspace exists");
+    assert_eq!(paths.len(), 1);
+    assert!(paths[0].ends_with("tests/workspace_cli_ignore_repo/app/kept.rb"));
 }
 
 #[test]

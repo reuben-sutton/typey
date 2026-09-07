@@ -97,10 +97,22 @@ pub fn is_ruby_source(path: &Path) -> bool {
 /// checkouts used by this project for conformance work.
 pub fn discover_ruby_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     let ignores = sorbet_ignore_patterns(root)?;
-    discover_ruby_files_with_ignores(root, &ignores)
+    discover_ruby_files_with_patterns(root, &ignores)
 }
 
-fn discover_ruby_files_with_ignores(root: &Path, ignores: &[String]) -> io::Result<Vec<PathBuf>> {
+/// Discover Ruby files while adding Sorbet-compatible ignore patterns from
+/// the command line (for example, `vendor/bundle`). Patterns from the
+/// repository's `sorbet/config` are still applied as well.
+pub fn discover_ruby_files_with_ignores(
+    root: &Path,
+    additional_ignores: &[String],
+) -> io::Result<Vec<PathBuf>> {
+    let mut ignores = sorbet_ignore_patterns(root)?;
+    ignores.extend(additional_ignores.iter().cloned());
+    discover_ruby_files_with_patterns(root, &ignores)
+}
+
+fn discover_ruby_files_with_patterns(root: &Path, ignores: &[String]) -> io::Result<Vec<PathBuf>> {
     let metadata = fs::metadata(root)?;
     let mut paths = Vec::new();
     if metadata.is_file() {
@@ -128,7 +140,7 @@ pub fn load_workspace(root: &Path) -> io::Result<Vec<WorkspaceFile>> {
 /// precedence when the same API is declared in both places.
 pub fn builtin_rbi_paths() -> io::Result<Vec<PathBuf>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor/sorbet/rbi");
-    discover_ruby_files_with_ignores(&root, &[])
+    discover_ruby_files_with_patterns(&root, &[])
 }
 
 /// Read a repository together with Typey's vendored Sorbet RBI baseline.

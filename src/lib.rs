@@ -16,7 +16,7 @@ pub mod workspace;
 pub use infer::{check, CheckResult, CheckerConfig, InferredType, Strictness, UntypedOrigin};
 pub use types::{Type, TypeLattice};
 pub use workspace::{
-    builtin_rbi_paths, check_workspace, discover_ruby_files, load_workspace, load_workspace_paths,
-    load_workspace_with_builtins, WorkspaceCheckResult, WorkspaceDiagnostic, WorkspaceFile,
-    WorkspaceInferredType,
+    builtin_rbi_paths, check_workspace, discover_ruby_files, discover_ruby_files_with_ignores,
+    load_workspace, load_workspace_paths, load_workspace_with_builtins, WorkspaceCheckResult,
+    WorkspaceDiagnostic, WorkspaceFile, WorkspaceInferredType,
 };

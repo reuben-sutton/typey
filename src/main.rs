@@ -8,24 +8,45 @@ use std::time::Instant;
 use ruby_prism::{Node, Visit};
 
 use typey::directives::{typed_mode, TypedMode};
-use typey::workspace::{builtin_rbi_paths, discover_ruby_files, load_workspace_paths};
+use typey::workspace::{builtin_rbi_paths, discover_ruby_files_with_ignores, load_workspace_paths};
 use typey::{check, check_workspace, load_workspace, CheckerConfig, UntypedOrigin};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut path = None;
     let mut debug = false;
+    let mut ignores = Vec::new();
+    let mut expecting_ignore = false;
     for argument in env::args().skip(1) {
+        if expecting_ignore {
+            if argument.starts_with('-') {
+                return Err("--ignore requires a pattern".into());
+            }
+            ignores.push(argument);
+            expecting_ignore = false;
+            continue;
+        }
         match argument.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "usage: typey [OPTIONS] [PATH]\n\nPATH may be a Ruby/RBI file or a repository directory.\n\nOptions:\n    -d, --debug    print analysis progress to stderr"
+                    "usage: typey [OPTIONS] [PATH]\n\nPATH may be a Ruby/RBI file or a repository directory.\n\nOptions:\n    -d, --debug             print analysis progress to stderr\n        --ignore PATTERN    ignore matching repository paths\n        --ignore=PATTERN     ignore matching repository paths"
                 );
                 return Ok(());
             }
             "-d" | "--debug" => debug = true,
+            "--ignore" => expecting_ignore = true,
+            _ if argument.starts_with("--ignore=") => {
+                let pattern = argument.trim_start_matches("--ignore=");
+                if pattern.is_empty() {
+                    return Err("--ignore requires a pattern".into());
+                }
+                ignores.push(pattern.to_owned());
+            }
             _ if path.is_none() => path = Some(argument),
             _ => return Err(format!("unknown argument: {argument}").into()),
         }
+    }
+    if expecting_ignore {
+        return Err("--ignore requires a pattern".into());
     }
     let config = CheckerConfig {
         debug,
@@ -37,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if debug {
                 eprintln!("[typey] discovering .rb/.rbi files under {path}");
             }
-            let mut paths = discover_ruby_files(Path::new(&path))?;
+            let mut paths = discover_ruby_files_with_ignores(Path::new(&path), &ignores)?;
             paths.extend(builtin_rbi_paths()?);
             paths.sort();
             paths.dedup();
