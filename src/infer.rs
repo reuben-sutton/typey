@@ -8568,7 +8568,16 @@ impl<'src> Analyzer<'src> {
         let runtime_proc_type_expression =
             self.static_type_value(node) && prism::text(self.source, node).contains("T.proc");
         let mut untyped_origin = None;
-        let mut callee_type = if runtime_proc_type_expression {
+        let mut callee_type = if let Some(type_) = self.eval_dynamic_instance_variable_call(
+            &name,
+            receiver_node.as_ref(),
+            &receiver_type,
+            &arguments.argument_nodes,
+            argument_types,
+            environment,
+        ) {
+            type_
+        } else if runtime_proc_type_expression {
             self.runtime_type_object_type(node)
         } else if receiver_node.as_ref().is_some_and(|receiver| {
             self.constant_reference_name(receiver)
@@ -8667,6 +8676,9 @@ impl<'src> Analyzer<'src> {
                 type_
             }
         } else if receiver_node.is_none() {
+            if name == "extend" {
+                self.observe_extend_hook(node, &arguments.argument_nodes, environment);
+            }
             if name == "each"
                 && Self::named_type_name(&environment.self_type)
                     .is_some_and(|owner| name_matches(&owner, "Enumerable"))
@@ -10591,6 +10603,53 @@ impl<'src> Analyzer<'src> {
         None
     }
 
+    fn dynamic_ivar_keys(
+        &self,
+        receiver_node: Option<&Node<'_>>,
+        receiver_type: &Type,
+        environment: &Environment,
+        name: &str,
+    ) -> Vec<IvarKey> {
+        if receiver_node.is_none()
+            || receiver_node.is_some_and(|node| node.as_self_node().is_some())
+        {
+            return self.ivar_key(environment, name).into_iter().collect();
+        }
+        if let Type::Union(members) = receiver_type {
+            return members
+                .iter()
+                .flat_map(|member| self.dynamic_ivar_keys(receiver_node, member, environment, name))
+                .collect();
+        }
+        if let Some(instance) = Self::class_object_instance_type(receiver_type) {
+            let instances = match instance {
+                Type::Union(members) | Type::Intersection(members) => members,
+                instance => vec![instance],
+            };
+            return instances
+                .into_iter()
+                .filter_map(|instance| {
+                    Self::named_type_name(&instance).map(|owner| IvarKey {
+                        owner,
+                        // A class/module object is itself the object whose
+                        // instance variable is being changed. Keep this
+                        // distinct from variables on instances of that class.
+                        singleton: true,
+                        name: name.to_owned(),
+                    })
+                })
+                .collect();
+        }
+        Self::named_type_name(receiver_type)
+            .map(|owner| IvarKey {
+                owner,
+                singleton: false,
+                name: name.to_owned(),
+            })
+            .into_iter()
+            .collect()
+    }
+
     fn begin_method_evaluation(&mut self, method: &MethodKey) {
         let Some(shared_keys) = self.method_shared_reads.remove(method) else {
             return;
@@ -10658,6 +10717,68 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    fn dynamic_instance_variable_name(&self, node: &Node<'_>) -> Option<String> {
+        let name = node
+            .as_symbol_node()
+            .map(|symbol| String::from_utf8_lossy(symbol.unescaped()).into_owned())
+            .or_else(|| {
+                node.as_string_node()
+                    .map(|string| String::from_utf8_lossy(string.unescaped()).into_owned())
+            })?;
+        name.starts_with('@').then_some(name)
+    }
+
+    fn observe_dynamic_ivar(&mut self, key: IvarKey, actual: &Type) {
+        let next = self
+            .ivars
+            .get(&key)
+            .map_or_else(|| actual.clone(), |current| current.join(actual));
+        if self.ivars.get(&key) != Some(&next) {
+            self.ivars.insert(key.clone(), next);
+            self.changed_shared.insert(SharedKey::Ivar(key));
+        }
+    }
+
+    fn eval_dynamic_instance_variable_call(
+        &mut self,
+        name: &str,
+        receiver_node: Option<&Node<'_>>,
+        receiver_type: &Type,
+        argument_nodes: &[Node<'_>],
+        argument_types: &[Type],
+        environment: &Environment,
+    ) -> Option<Type> {
+        let ivar_name = argument_nodes
+            .first()
+            .and_then(|node| self.dynamic_instance_variable_name(node));
+        let keys = ivar_name
+            .as_deref()
+            .map(|name| self.dynamic_ivar_keys(receiver_node, receiver_type, environment, name))
+            .unwrap_or_default();
+        match name {
+            "instance_variable_set" => {
+                let actual = argument_types.get(1).cloned().unwrap_or(Type::Any);
+                for key in keys {
+                    self.observe_dynamic_ivar(key, &actual);
+                }
+                Some(actual)
+            }
+            "instance_variable_get" => {
+                if keys.is_empty() {
+                    return Some(Type::Any);
+                }
+                let type_ = keys
+                    .iter()
+                    .filter_map(|key| self.ivars.get(key))
+                    .fold(Type::Never, |current, type_| current.join(type_));
+                Some(if type_.is_never() { Type::Nil } else { type_ })
+            }
+            "instance_variable_defined?" => Some(Type::bool()),
+            "instance_variables" => Some(Type::Array(Box::new(Type::Symbol))),
+            _ => None,
+        }
+    }
+
     fn preserve_typed_empty_array_ivar<'node>(
         &self,
         environment: &Environment,
@@ -10716,6 +10837,25 @@ impl<'src> Analyzer<'src> {
                 return type_;
             }
             if let Some(info) = self.classes.get(&owner_name) {
+                // A module extended into a class runs its instance methods
+                // with the class object as `self`.  Dynamic APIs such as
+                // `instance_variable_set` therefore record the field under
+                // the class object's singleton key, while the method's
+                // source owner still gives us the ordinary instance key.
+                // Check that paired key only across an `extend` edge; doing
+                // this for every superclass/include would conflate class and
+                // instance state.
+                if info.extends.contains(&key.owner) {
+                    let extended_candidate = IvarKey {
+                        owner: owner_name.clone(),
+                        singleton: !key.singleton,
+                        name: key.name.clone(),
+                    };
+                    if let Some(type_) = self.ivars.get(&extended_candidate).cloned() {
+                        self.record_shared_read(SharedKey::Ivar(extended_candidate), environment);
+                        return type_;
+                    }
+                }
                 pending.extend(info.includes.iter().cloned());
                 pending.extend(info.prepends.iter().cloned());
                 pending.extend(info.extends.iter().cloned());
@@ -11175,6 +11315,51 @@ impl<'src> Analyzer<'src> {
                 Type::Any
             }
         }
+    }
+
+    fn observe_extend_hook<'node>(
+        &mut self,
+        node: &Node<'node>,
+        argument_nodes: &[Node<'node>],
+        environment: &mut Environment,
+    ) {
+        let Some(base_type) = Self::class_object_owner(&environment.self_type) else {
+            return;
+        };
+        let Some(argument) = argument_nodes.first() else {
+            return;
+        };
+        let Some(module_name) = self
+            .constant_reference_name(argument)
+            .map(|name| self.resolve_name(&name, self.lexical_owner(environment).as_deref()))
+        else {
+            return;
+        };
+        let hook = MethodKey {
+            owner: Some(module_name.clone()),
+            name: "extended".to_owned(),
+            singleton: true,
+        };
+        let mut hook_arguments = CallArguments::default();
+        hook_arguments
+            .argument_types
+            .push(Self::class_object_type(&base_type));
+        hook_arguments
+            .positional_types
+            .push(Self::class_object_type(&base_type));
+        let Some(signature) = self.observe_call(&hook, &hook_arguments, false) else {
+            return;
+        };
+        self.record_method_dependency(&hook, environment);
+        let receiver_type = Self::class_object_type(&module_name);
+        let _ = self.invoke_signature(
+            node,
+            "extended",
+            &signature,
+            &hook_arguments,
+            Some(&receiver_type),
+            None,
+        );
     }
 
     fn eval_global_call<'node>(

@@ -784,6 +784,22 @@ fn resolves_instance_variables_from_including_classes() {
 }
 
 #[test]
+fn tracks_instance_variables_initialized_through_extend_hooks() {
+    let result = check_fixture("tests/fixtures/dynamic_instance_variable_set.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type:"))
+            .count(),
+        3,
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn infers_instance_variables_from_uninvoked_initializers() {
     check_fixture("tests/fixtures/ivar_initializer_without_call.rb");
 }
