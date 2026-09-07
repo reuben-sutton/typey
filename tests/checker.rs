@@ -326,6 +326,39 @@ fn accepts_string_names_for_alias_method() {
 }
 
 #[test]
+fn resolves_fileutils_module_functions_from_vendored_rbi() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs read");
+    files.push(WorkspaceFile::new(
+        "tests/fixtures/fileutils_module_functions.rb",
+        std::fs::read_to_string("tests/fixtures/fileutils_module_functions.rb")
+            .expect("fixture exists"),
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .diagnostic
+                .message
+                .contains("Revealed type: `NilClass`")
+        }),
+        "{:#?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+        }),
+        "{:#?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn dispatches_structural_collections_through_vendored_rbis() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs read");

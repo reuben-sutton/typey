@@ -412,7 +412,7 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
             .rev()
             .filter(|(_, end)| *end <= *definition)
         {
-            if !only_trivia(&source.as_bytes()[*end..cursor]) {
+            if !only_trivia_or_method_modifier(&source.as_bytes()[*end..cursor]) {
                 break;
             }
             if let Some(signature) = parse_sorbet_signature(&source[*start..*end]) {
@@ -502,6 +502,45 @@ fn only_trivia(source: &[u8]) -> bool {
         }
     }
     true
+}
+
+/// Return whether `source` contains only trivia and inline Ruby declaration
+/// modifiers before a method definition. Sorbet's RBIs commonly spell
+/// declarations as `sig ...; module_function def name ...`; the modifier is
+/// part of the declaration, not an intervening statement that should detach
+/// the signature from the definition.
+fn only_trivia_or_method_modifier(mut source: &[u8]) -> bool {
+    loop {
+        if only_trivia(source) {
+            return true;
+        }
+
+        let mut index = 0;
+        while index < source.len() {
+            if source[index].is_ascii_whitespace() {
+                index += 1;
+            } else if source[index] == b'#' {
+                while index < source.len() && source[index] != b'\n' {
+                    index += 1;
+                }
+            } else {
+                break;
+            }
+        }
+        let rest = &source[index..];
+        let modifier = ["module_function", "private", "protected", "public"]
+            .iter()
+            .find(|modifier| {
+                rest.starts_with(modifier.as_bytes())
+                    && rest
+                        .get(modifier.len())
+                        .is_none_or(|byte| byte.is_ascii_whitespace())
+            });
+        let Some(modifier) = modifier else {
+            return false;
+        };
+        source = &rest[modifier.len()..];
+    }
 }
 
 #[must_use]
