@@ -3911,7 +3911,7 @@ impl<'src> Analyzer<'src> {
         let rbi_definition_keys = self
             .definitions
             .iter()
-            .filter(|(offset, _)| self.is_project_rbi_offset(**offset))
+            .filter(|(offset, _)| self.is_rbi_offset(**offset))
             .map(|(_, key)| key.clone())
             .collect::<BTreeSet<_>>();
         for key in rbi_definition_keys {
@@ -6650,14 +6650,10 @@ impl<'src> Analyzer<'src> {
             .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
     }
 
-    fn is_project_rbi_offset(&self, offset: usize) -> bool {
+    fn is_rbi_offset(&self, offset: usize) -> bool {
         self.rbi_ranges
             .iter()
             .any(|(range_start, range_end)| offset >= *range_start && offset < *range_end)
-            && !self
-                .builtin_rbi_ranges
-                .iter()
-                .any(|(range_start, range_end)| offset >= *range_start && offset < *range_end)
     }
 
     fn eval_super<'node>(

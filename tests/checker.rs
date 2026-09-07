@@ -184,6 +184,18 @@ fn does_not_treat_observed_argument_types_as_exhaustive_validation() {
 }
 
 #[test]
+fn keeps_code_after_a_nonempty_array_guard_reachable() {
+    let result = check_fixture("tests/fixtures/nonempty_array_return_guard.rb");
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Revealed type: `T::Array[String]`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn models_sorbet_abstract_helper_declarations() {
     let result = check_fixture("tests/fixtures/sorbet_abstract_helper.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
@@ -2517,6 +2529,25 @@ fn prefers_builtin_rbi_signatures_over_untyped_gem_declarations() {
                 .diagnostic
                 .message
                 .contains("Revealed type: `Float`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn treats_unannotated_builtin_rbi_methods_as_untyped() {
+    let source = std::fs::read_to_string("tests/fixtures/builtin_untyped_rbi.rb").unwrap();
+    let mut files = load_workspace_paths(&builtin_rbi_paths().unwrap()).unwrap();
+    files.push(WorkspaceFile::new("builtin_untyped_rbi.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .diagnostic
+                .message
+                .contains("Revealed type: `T.untyped`")
         }),
         "{:?}",
         result.diagnostics
