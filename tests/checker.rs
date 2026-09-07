@@ -6512,6 +6512,11 @@ fn models_struct_new_as_a_generated_class() {
 }
 
 #[test]
+fn models_dynamic_struct_subclasses() {
+    check_fixture("tests/fixtures/struct_subclass.rb");
+}
+
+#[test]
 fn infers_array_coercions_from_scalar_types() {
     let result = check(
         r#"

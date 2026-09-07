@@ -386,6 +386,7 @@ struct ClassInfo {
     extend_self: bool,
     attached_class_member: Option<usize>,
     superclass: Option<String>,
+    struct_fields: Option<Vec<String>>,
     includes: Vec<String>,
     prepends: Vec<String>,
     extends: Vec<String>,
@@ -1805,9 +1806,16 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     fn visit_class_node(&mut self, node: &ClassNode<'pr>) {
         self.report_interface_on_class(&node.as_node());
         let name = self.scope_name(&node.constant_path());
-        let superclass = node
+        let struct_fields = node
             .superclass()
-            .map(|superclass| self.scope_reference(&superclass));
+            .and_then(|superclass| self.struct_superclass_fields(&superclass));
+        let superclass = node.superclass().map(|superclass| {
+            if struct_fields.is_some() {
+                "Struct".to_owned()
+            } else {
+                self.scope_reference(&superclass)
+            }
+        });
         let info = self.classes.entry(name.clone()).or_default();
         if let Some(parameters) = self
             .class_type_parameters
@@ -1823,6 +1831,9 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         }
         if info.superclass.is_none() {
             info.superclass = superclass;
+        }
+        if struct_fields.is_some() {
+            info.struct_fields = struct_fields;
         }
         self.class_stack.push(name);
         self.visibility_stack.push(Visibility::Public);
@@ -2342,6 +2353,34 @@ impl MethodRegistrar<'_> {
 
     fn scope_reference<'node>(&self, node: &Node<'node>) -> String {
         self.scope_reference_text(&prism::text(self.source, node))
+    }
+
+    fn struct_superclass_fields<'node>(&self, node: &Node<'node>) -> Option<Vec<String>> {
+        let call = node.as_call_node()?;
+        if prism::constant_name(call.name()) != "new" {
+            return None;
+        }
+        let receiver = call.receiver()?;
+        let receiver_text = prism::text(self.source, &receiver);
+        let receiver_name = receiver_text.trim().trim_start_matches("::");
+        if receiver_name != "Struct" {
+            return None;
+        }
+        Some(
+            call.arguments()
+                .map(|arguments| {
+                    arguments
+                        .arguments()
+                        .into_iter()
+                        .filter_map(|argument| {
+                            argument.as_symbol_node().map(|symbol| {
+                                String::from_utf8_lossy(symbol.unescaped()).into_owned()
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        )
     }
 
     fn scope_reference_text(&self, text: &str) -> String {
@@ -4104,6 +4143,60 @@ impl<'src> Analyzer<'src> {
         };
         registrar.visit(root);
         self.normalize_class_graph();
+
+        // `class Result < Struct.new(:status, :message)` creates a concrete
+        // struct subclass with a generated initializer. Keep the generated
+        // constructor and fields in the workspace graph just as for
+        // `Result = Struct.new(...)`.
+        let struct_subclasses = self
+            .classes
+            .iter()
+            .filter_map(|(owner, info)| {
+                info.struct_fields
+                    .as_ref()
+                    .map(|fields| (owner.clone(), fields.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (owner, fields) in struct_subclasses {
+            self.struct_fields.insert(owner.clone(), fields.clone());
+            for field in &fields {
+                let reader = MethodKey {
+                    owner: Some(owner.clone()),
+                    name: field.clone(),
+                    singleton: false,
+                };
+                self.accessors
+                    .entry(reader.clone())
+                    .or_insert(AccessorKind::Reader);
+                self.methods
+                    .entry(reader)
+                    .or_insert_with(|| MethodState::inferred_accessor(AccessorKind::Reader));
+
+                let writer = MethodKey {
+                    owner: Some(owner.clone()),
+                    name: format!("{field}="),
+                    singleton: false,
+                };
+                self.accessors
+                    .entry(writer.clone())
+                    .or_insert(AccessorKind::Writer);
+                self.methods
+                    .entry(writer)
+                    .or_insert_with(|| MethodState::inferred_accessor(AccessorKind::Writer));
+            }
+            let key = MethodKey {
+                owner: Some(owner),
+                name: "initialize".to_owned(),
+                singleton: false,
+            };
+            self.methods.entry(key).or_insert_with(|| {
+                let mut state = MethodState::inferred(None);
+                state.params = vec![Some(Type::Any); fields.len()];
+                state.required_params = fields.len();
+                state.return_type = Some(Type::Nil);
+                state
+            });
+        }
 
         // Attribute annotations are registered while walking the AST, before
         // the analyzer has its final class table. Resolve their relative
@@ -12132,7 +12225,10 @@ impl<'src> Analyzer<'src> {
         let name = key.name.strip_suffix('=').unwrap_or(&key.name);
         match kind {
             AccessorKind::Reader => self
-                .inferred_accessor_ivar_type(owner, name, key.singleton, environment)
+                .struct_field_type(owner, name, environment)
+                .or_else(|| {
+                    self.inferred_accessor_ivar_type(owner, name, key.singleton, environment)
+                })
                 .unwrap_or(Type::Any),
             AccessorKind::Writer => {
                 let type_ = argument_types.first().cloned().unwrap_or(Type::Any);
