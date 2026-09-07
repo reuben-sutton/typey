@@ -21,9 +21,12 @@ facts, signatures, RBIs, tests, and extensions.
    make a later expression safer.
 5. [Signatures and RBIs](05-signatures-and-rbis.md) explains the contracts
    supplied by Sorbet syntax, RBS comments, and library declarations.
-6. [Testing and debugging](06-testing-and-debugging.md) explains how to
+6. [Clean-room RBI, signature, and inference design](08-clean-room-rbi-signature-and-inference-design.md)
+   specifies the declaration, annotation, registration, and fixpoint contracts
+   for an independent implementation.
+7. [Testing and debugging](06-testing-and-debugging.md) explains how to
    reproduce, classify, and verify behavior.
-7. [Extending Typey](07-extending-typey.md) is a practical guide for adding
+8. [Extending Typey](07-extending-typey.md) is a practical guide for adding
    precision without adding application-specific exceptions.
 
 ## The mental model
