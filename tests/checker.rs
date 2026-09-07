@@ -126,6 +126,20 @@ fn narrows_implicit_self_through_union_type_predicates() {
 }
 
 #[test]
+fn narrows_instance_variables_through_class_case_predicates() {
+    let result = check_fixture("tests/fixtures/instance_variable_class_predicate.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "missing String reveal: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn excludes_unreachable_optional_block_fallbacks_from_return_types() {
     let result = check_fixture("tests/fixtures/required_block_flow.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

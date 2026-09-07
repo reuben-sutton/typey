@@ -7324,6 +7324,18 @@ impl<'src> Analyzer<'src> {
                         environment.bind(local_name, self.meet_predicate_type(&current, &expected));
                         return;
                     }
+                    if let Some(instance_variable) = arguments[0].as_instance_variable_read_node() {
+                        let class_type = self.node_type(&receiver, environment);
+                        let expected = Self::class_object_value_type(&class_type)
+                            .unwrap_or_else(|| class_type.clone());
+                        let instance_variable_name = prism::constant_name(instance_variable.name());
+                        let current = self.ivar_type(environment, &instance_variable_name);
+                        environment.bind(
+                            ivar_refinement_key(&instance_variable_name),
+                            self.meet_predicate_type(&current, &expected),
+                        );
+                        return;
+                    }
                 }
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
@@ -7380,6 +7392,16 @@ impl<'src> Analyzer<'src> {
                 } else if let Some(instance_variable) = receiver.as_instance_variable_read_node() {
                     let instance_variable_name = prism::constant_name(instance_variable.name());
                     let current = self.ivar_type(environment, &instance_variable_name);
+                    if truthy && name == "===" && arguments.len() == 1 {
+                        let class_type = self.node_type(&receiver, environment);
+                        let expected = Self::class_object_value_type(&class_type)
+                            .unwrap_or_else(|| class_type.clone());
+                        environment.bind(
+                            ivar_refinement_key(&instance_variable_name),
+                            self.meet_predicate_type(&current, &expected),
+                        );
+                        return;
+                    }
                     if let Some(narrowed) = self.equality_predicate_narrowing(
                         &name,
                         &current,
