@@ -862,6 +862,10 @@ impl Eval {
         Self::abrupt(FlowKind::Next, type_)
     }
 
+    fn unreachable() -> Self {
+        Self::from_parts(None, OutcomeTypes::default(), Flow::empty())
+    }
+
     fn retried(type_: Type) -> Self {
         Self::abrupt(FlowKind::Retry, type_)
     }
@@ -4091,7 +4095,7 @@ impl<'src> Analyzer<'src> {
         let truthy = current.truthy_part();
         let mut right_environment = environment.clone();
         let right = if truthy.is_never() {
-            Eval::value(Type::Never)
+            Eval::unreachable()
         } else {
             self.eval_node(value_node, &mut right_environment)
         };
@@ -4125,7 +4129,7 @@ impl<'src> Analyzer<'src> {
         let falsy = current.falsy_part();
         let mut right_environment = environment.clone();
         let right = if falsy.is_never() {
-            Eval::value(Type::Never)
+            Eval::unreachable()
         } else {
             self.eval_node(value_node, &mut right_environment)
         };
@@ -6715,6 +6719,14 @@ impl<'src> Analyzer<'src> {
         } else {
             Eval::value(Type::Nil)
         };
+        let then_result = if then_reachable {
+            then_result
+        } else {
+            // Keep checking an unreachable branch for diagnostics, but do not
+            // let its return value or control flow affect the enclosing
+            // expression's inferred type.
+            Eval::unreachable()
+        };
 
         let mut else_environment = environment.clone();
         self.narrow_from_predicate(&predicate, &mut else_environment, false);
@@ -6731,6 +6743,11 @@ impl<'src> Analyzer<'src> {
             self.eval_alternative(&subsequent, &mut else_environment)
         } else {
             Eval::value(Type::Nil)
+        };
+        let else_result = if else_reachable {
+            else_result
+        } else {
+            Eval::unreachable()
         };
 
         *environment = self.join_flow_environments(
@@ -6778,6 +6795,11 @@ impl<'src> Analyzer<'src> {
         } else {
             Eval::value(Type::Nil)
         };
+        let then_result = if then_reachable {
+            then_result
+        } else {
+            Eval::value(Type::Never)
+        };
 
         let mut else_environment = environment.clone();
         self.narrow_from_predicate(&predicate, &mut else_environment, true);
@@ -6794,6 +6816,11 @@ impl<'src> Analyzer<'src> {
             }
         } else {
             Eval::value(Type::Nil)
+        };
+        let else_result = if else_reachable {
+            else_result
+        } else {
+            Eval::value(Type::Never)
         };
 
         *environment = self.join_flow_environments(
@@ -6896,6 +6923,15 @@ impl<'src> Analyzer<'src> {
                         );
                     }
                 }
+            } else if name == "block_given?" && call.receiver().is_none() {
+                let required = environment
+                    .method_key
+                    .as_ref()
+                    .and_then(|key| self.methods.get(key))
+                    .is_some_and(|state| state.explicit && state.block.is_some());
+                if required {
+                    return (true, false);
+                }
             } else if name == "nil?" {
                 if let Some(receiver) = call.receiver() {
                     if let Some(receiver_type) = self.recorded_node_type(&receiver) {
@@ -6986,6 +7022,12 @@ impl<'src> Analyzer<'src> {
             return call
                 .receiver()
                 .is_some_and(|receiver| self.predicate_is_precise(&receiver, environment));
+        }
+        if name == "block_given?" && call.receiver().is_none() {
+            // Sorbet uses a required callable block in the surrounding
+            // signature to typecheck the false arm as unreachable, but does
+            // not emit an unreachable-code diagnostic for this Ruby idiom.
+            return false;
         }
         if matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?")
             && call.receiver().is_some()
