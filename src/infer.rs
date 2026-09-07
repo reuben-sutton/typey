@@ -215,6 +215,27 @@ fn proc_parts(type_: &Type) -> Option<(&[Type], &Type)> {
     }
 }
 
+fn proc_arity_narrowing(type_: &Type, arity: usize) -> Option<Type> {
+    match type_ {
+        Type::Proc(_, result) => Some(Type::Proc(vec![Type::Any; arity], result.clone())),
+        Type::BoundProc {
+            receiver, result, ..
+        } => Some(Type::BoundProc {
+            receiver: receiver.clone(),
+            parameters: vec![Type::Any; arity],
+            result: result.clone(),
+        }),
+        Type::Union(members) => {
+            let narrowed = members
+                .iter()
+                .filter_map(|member| proc_arity_narrowing(member, arity))
+                .collect::<Vec<_>>();
+            (!narrowed.is_empty()).then(|| Type::union(narrowed))
+        }
+        _ => None,
+    }
+}
+
 fn proc_receiver(type_: &Type) -> Option<&Type> {
     match type_ {
         Type::BoundProc { receiver, .. } => Some(receiver),
@@ -7492,6 +7513,37 @@ impl<'src> Analyzer<'src> {
                             self.meet_predicate_type(&current, &expected),
                         );
                         return;
+                    }
+                }
+                if truthy && name == "==" && arguments.len() == 1 {
+                    if let Some(arity_call) = receiver.as_call_node() {
+                        if prism::constant_name(arity_call.name()) == "arity"
+                            && arity_call.arguments().is_none()
+                        {
+                            if let Some(block_local) = arity_call
+                                .receiver()
+                                .and_then(|receiver| receiver.as_local_variable_read_node())
+                            {
+                                if let Some(integer) = arguments[0].as_integer_node() {
+                                    let value: Result<i32, _> = integer.value().try_into();
+                                    if let Ok(value) = value {
+                                        if let Ok(arity) = usize::try_from(value) {
+                                            let block_name =
+                                                prism::constant_name(block_local.name());
+                                            if !environment.is_inferred(&block_name) {
+                                                let current = environment.get(&block_name);
+                                                if let Some(narrowed) =
+                                                    proc_arity_narrowing(&current, arity)
+                                                {
+                                                    environment.bind(block_name, narrowed);
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 if let Some(local) = receiver.as_local_variable_read_node() {

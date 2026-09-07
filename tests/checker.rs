@@ -129,6 +129,11 @@ fn does_not_treat_runtime_proc_type_objects_as_callables() {
 }
 
 #[test]
+fn narrows_proc_arity_in_zero_arity_branch() {
+    check_fixture("tests/fixtures/proc_arity_narrowing.rb");
+}
+
+#[test]
 fn models_sorbet_abstract_helper_declarations() {
     let result = check_fixture("tests/fixtures/sorbet_abstract_helper.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
