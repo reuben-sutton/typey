@@ -1,5 +1,4 @@
 use typey::hir::{lower, Argument, AssignOperator, AssignTarget, ExprKind, FileId, Receiver};
-use typey::{check, CheckerConfig};
 
 fn expressions(source: &str) -> typey::hir::Program {
     lower(FileId(7), source.as_bytes())
@@ -219,23 +218,4 @@ fn unsupported_syntax_is_explicit_and_source_mapped() {
         .expressions
         .iter()
         .any(|expression| matches!(expression.kind, ExprKind::Unsupported(_))));
-}
-
-#[test]
-fn ordinary_call_inference_matches_the_legacy_prism_path() {
-    let source = r#"# typed: true
-def render(value, **options)
-  return unless value
-  value&.to_s(prefix: "value", **options)
-end
-render(1, suffix: "!")
-"#;
-    let mut legacy_config = CheckerConfig::default();
-    legacy_config.use_hir_calls = false;
-    let legacy = check(source, legacy_config);
-    let mut hir_config = CheckerConfig::default();
-    hir_config.use_hir_calls = true;
-    let hir = check(source, hir_config);
-    assert_eq!(hir.diagnostics, legacy.diagnostics);
-    assert_eq!(hir.types, legacy.types);
 }

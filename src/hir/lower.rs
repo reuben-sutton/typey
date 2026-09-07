@@ -13,8 +13,8 @@ use super::{
     ParameterKind, Parameters, Program, Read, Receiver, RescueClause, ScopeId, Span, Unsupported,
 };
 use crate::prism;
-use ruby_prism::{ArgumentsNode, Node, ParametersNode};
-use std::collections::HashMap;
+use ruby_prism::{ArgumentsNode, CallNode, Node, ParametersNode, Visit};
+use std::collections::{HashMap, HashSet};
 
 /// Lower one parsed Ruby source buffer into an owned HIR program.
 #[must_use]
@@ -34,6 +34,7 @@ struct Lowerer<'src> {
     source: &'src [u8],
     program: Program,
     scopes: Vec<Scope>,
+    lowered_call_spans: HashSet<(usize, usize)>,
     next_local: u32,
     next_scope: u32,
 }
@@ -48,6 +49,7 @@ impl<'src> Lowerer<'src> {
                 ..Program::default()
             },
             scopes: Vec::new(),
+            lowered_call_spans: HashSet::new(),
             next_local: 0,
             next_scope: 0,
         }
@@ -56,6 +58,7 @@ impl<'src> Lowerer<'src> {
     fn lower_root(mut self, root: &Node<'_>) -> Program {
         self.push_scope();
         let root_expr = self.lower_node(root);
+        self.lower_nested_calls(root);
         let body = self.push_body(
             BodyOwner::TopLevel,
             Parameters::default(),
@@ -166,12 +169,23 @@ impl<'src> Lowerer<'src> {
     }
 
     fn unsupported(&mut self, node: &Node<'_>) -> ExprId {
-        self.push_expr(
+        let expression = self.push_expr(
             node,
             ExprKind::Unsupported(Unsupported {
                 kind: Name::new("prism-node"),
             }),
-        )
+        );
+        self.lower_nested_calls(node);
+        expression
+    }
+
+    /// Unsupported parents still contain executable calls. Keep those calls
+    /// available to the migration adapter instead of making their source span
+    /// fall back to Prism evaluation solely because the parent syntax has not
+    /// acquired a dedicated HIR variant yet.
+    fn lower_nested_calls(&mut self, node: &Node<'_>) {
+        let mut visitor = NestedCallLowerer { lowerer: self };
+        visitor.visit(node);
     }
 
     fn lower_node(&mut self, node: &Node<'_>) -> ExprId {
@@ -822,6 +836,8 @@ impl<'src> Lowerer<'src> {
     }
 
     fn lower_call(&mut self, node: &Node<'_>, call: &ruby_prism::CallNode<'_>) -> ExprId {
+        self.lowered_call_spans
+            .insert((self.span(node).start as usize, self.span(node).end as usize));
         let name = prism::constant_name(call.name());
         let raw_arguments = call.arguments().map_or_else(Vec::new, |arguments| {
             arguments.arguments().into_iter().collect()
@@ -1351,5 +1367,19 @@ impl<'src> Lowerer<'src> {
                 ensure,
             }),
         )
+    }
+}
+
+struct NestedCallLowerer<'lower, 'src> {
+    lowerer: &'lower mut Lowerer<'src>,
+}
+
+impl<'pr, 'lower, 'src> Visit<'pr> for NestedCallLowerer<'lower, 'src> {
+    fn visit_call_node(&mut self, node: &CallNode<'pr>) {
+        let span = node.location();
+        let key = (span.start_offset(), span.end_offset());
+        if self.lowerer.lowered_call_spans.insert(key) {
+            self.lowerer.lower_call(&node.as_node(), node);
+        }
     }
 }

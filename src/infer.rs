@@ -474,10 +474,6 @@ pub struct CheckerConfig {
     pub strictness: Strictness,
     /// Emit phase and progress information to stderr while checking.
     pub debug: bool,
-    /// Evaluate ordinary calls through the owned HIR call view. This remains
-    /// configurable during migration so fixtures can compare the old Prism
-    /// path with the HIR path.
-    pub use_hir_calls: bool,
 }
 
 impl Default for CheckerConfig {
@@ -485,7 +481,6 @@ impl Default for CheckerConfig {
         Self {
             strictness: Strictness::Ignore,
             debug: false,
-            use_hir_calls: true,
         }
     }
 }
@@ -1232,17 +1227,23 @@ pub(crate) fn check_with_policies(
     }
     let parsed = prism::parse(bytes);
     let root = parsed.node();
-    let hir_program = if config.use_hir_calls {
-        hir::lower(hir::FileId(0), bytes)
-    } else {
-        hir::Program::default()
-    };
+    let hir_program = hir::lower(hir::FileId(0), bytes);
     let mut hir_call_ids = HashMap::new();
+    let mut hir_assignment_ids = HashMap::new();
     for (index, expression) in hir_program.expressions.iter().enumerate() {
-        if matches!(&expression.kind, hir::ExprKind::Call(_)) {
-            hir_call_ids
-                .entry((expression.span.start as usize, expression.span.end as usize))
-                .or_insert(hir::ExprId(index as u32));
+        let span = (expression.span.start as usize, expression.span.end as usize);
+        match &expression.kind {
+            hir::ExprKind::Call(_) => {
+                hir_call_ids
+                    .entry(span)
+                    .or_insert(hir::ExprId(index as u32));
+            }
+            hir::ExprKind::Assign { .. } => {
+                hir_assignment_ids
+                    .entry(span)
+                    .or_insert(hir::ExprId(index as u32));
+            }
+            _ => {}
         }
     }
     let annotations = signature::collect_for_ast(source, &root);
@@ -1272,6 +1273,7 @@ pub(crate) fn check_with_policies(
         source: bytes,
         hir_program,
         hir_call_ids,
+        hir_assignment_ids,
         line_map: prism::LineMap::new(bytes),
         has_inline_assertions: !annotations.assertions.is_empty(),
         annotations,
@@ -1323,6 +1325,7 @@ struct Analyzer<'src> {
     source: &'src [u8],
     hir_program: hir::Program,
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
+    hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
     line_map: prism::LineMap,
     has_inline_assertions: bool,
     annotations: AnnotationTable,
@@ -1422,54 +1425,59 @@ fn prism_call_argument_inputs<'node>(
     arguments: Option<ArgumentsNode<'node>>,
 ) -> Vec<CallArgumentInput<'node>> {
     arguments.map_or_else(Vec::new, |arguments| {
-        arguments
-            .arguments()
-            .into_iter()
-            .map(|argument| {
-                if argument.as_forwarding_arguments_node().is_some() {
-                    return CallArgumentInput::Forwarded { node: argument };
-                }
-                if let Some(splat) = argument.as_splat_node() {
-                    return CallArgumentInput::Splat {
-                        node: argument,
-                        expression: splat.expression(),
-                    };
-                }
-                if let Some(keyword_hash) = argument.as_keyword_hash_node() {
-                    let entries = keyword_hash
-                        .elements()
-                        .into_iter()
-                        .map(|child| {
-                            if let Some(assoc) = child.as_assoc_node() {
-                                let key = assoc.key();
-                                let name = key.as_symbol_node().map(|symbol| {
-                                    String::from_utf8_lossy(symbol.unescaped()).into_owned()
-                                });
-                                KeywordArgumentInput::Pair {
-                                    key,
-                                    value: assoc.value(),
-                                    name,
-                                }
-                            } else if let Some(splat) = child.as_assoc_splat_node() {
-                                splat
-                                    .value()
-                                    .map_or(KeywordArgumentInput::Forwarded, |value| {
-                                        KeywordArgumentInput::Splat(Some(value))
-                                    })
-                            } else {
-                                KeywordArgumentInput::Forwarded
-                            }
-                        })
-                        .collect();
-                    return CallArgumentInput::KeywordHash {
-                        node: argument,
-                        entries,
-                    };
-                }
-                CallArgumentInput::Positional { node: argument }
-            })
-            .collect()
+        prism_argument_inputs_from_nodes(arguments.arguments().into_iter().collect())
     })
+}
+
+fn prism_argument_inputs_from_nodes<'node>(
+    arguments: Vec<Node<'node>>,
+) -> Vec<CallArgumentInput<'node>> {
+    arguments
+        .into_iter()
+        .map(|argument| {
+            if argument.as_forwarding_arguments_node().is_some() {
+                return CallArgumentInput::Forwarded { node: argument };
+            }
+            if let Some(splat) = argument.as_splat_node() {
+                return CallArgumentInput::Splat {
+                    node: argument,
+                    expression: splat.expression(),
+                };
+            }
+            if let Some(keyword_hash) = argument.as_keyword_hash_node() {
+                let entries = keyword_hash
+                    .elements()
+                    .into_iter()
+                    .map(|child| {
+                        if let Some(assoc) = child.as_assoc_node() {
+                            let key = assoc.key();
+                            let name = key.as_symbol_node().map(|symbol| {
+                                String::from_utf8_lossy(symbol.unescaped()).into_owned()
+                            });
+                            KeywordArgumentInput::Pair {
+                                key,
+                                value: assoc.value(),
+                                name,
+                            }
+                        } else if let Some(splat) = child.as_assoc_splat_node() {
+                            splat
+                                .value()
+                                .map_or(KeywordArgumentInput::Forwarded, |value| {
+                                    KeywordArgumentInput::Splat(Some(value))
+                                })
+                        } else {
+                            KeywordArgumentInput::Forwarded
+                        }
+                    })
+                    .collect();
+                return CallArgumentInput::KeywordHash {
+                    node: argument,
+                    entries,
+                };
+            }
+            CallArgumentInput::Positional { node: argument }
+        })
+        .collect()
 }
 
 fn hir_call_argument_inputs<'node>(
@@ -1564,6 +1572,27 @@ impl<'src> Analyzer<'src> {
             call: call.clone(),
             prism_call,
         })
+    }
+
+    fn hir_assignment_for_node(
+        &self,
+        node: &Node<'_>,
+    ) -> Option<(hir::AssignTarget, hir::ExprId, hir::AssignOperator)> {
+        let expression_id = self.hir_assignment_ids.get(&prism::span(node))?;
+        let hir::ExprKind::Assign {
+            target,
+            value,
+            operator,
+            ..
+        } = &self
+            .hir_program
+            .expressions
+            .get(expression_id.0 as usize)?
+            .kind
+        else {
+            return None;
+        };
+        Some((target.clone(), *value, operator.clone()))
     }
 
     fn is_send_node(node: &Node<'_>) -> bool {
@@ -2785,13 +2814,28 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, Type::Nil));
         }
         if let Some(call) = node.as_call_node() {
-            if self.config.use_hir_calls && self.hir_call_ids.contains_key(&prism::span(node)) {
-                let hir_call = self
-                    .hir_call_view(node, call)
-                    .expect("HIR call index must resolve to a call expression");
-                return self.eval_call_result(node, &hir_call, environment);
+            if let Some((target, _, operator)) = self.hir_assignment_for_node(node) {
+                if matches!(operator, hir::AssignOperator::Set)
+                    && matches!(
+                        target,
+                        hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. }
+                    )
+                {
+                    return self.eval_hir_set_assignment(node, &call, &target, environment);
+                }
             }
-            return self.eval_call_result(node, &call, environment);
+            let hir_call = self.hir_call_view(node, call).unwrap_or_else(|| {
+                let (start, end) = prism::span(node);
+                    panic!(
+                        "every ordinary call must have an owned HIR call shape: {}..{} `{}` (HIR expressions: {}, calls: {})",
+                        start,
+                        end,
+                        String::from_utf8_lossy(self.source.get(start..end).unwrap_or_default()),
+                        self.hir_program.expressions.len(),
+                        self.hir_call_ids.len()
+                    )
+            });
+            return self.eval_call_result(node, &hir_call, environment);
         }
         if let Some(multi) = node.as_multi_write_node() {
             let previous_expected_return = self.expected_return_type.take();
@@ -3834,6 +3878,122 @@ impl<'src> Analyzer<'src> {
         if result.normal_type.is_some() {
             result.normal_type = Some(type_.clone());
         }
+        result.type_ = self.record(node, type_);
+        result
+    }
+
+    fn eval_hir_set_assignment<'node>(
+        &mut self,
+        node: &Node<'node>,
+        call: &CallNode<'node>,
+        target: &hir::AssignTarget,
+        environment: &mut Environment,
+    ) -> Eval {
+        let receiver_node = call.receiver();
+        let receiver_result = if let Some(receiver) = receiver_node.as_ref() {
+            self.eval_node(receiver, environment)
+        } else {
+            Eval::value(environment.self_type.clone())
+        };
+        let receiver_type = receiver_result.normal_type.clone().unwrap_or(Type::Never);
+        let mut argument_nodes = call
+            .arguments()
+            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let Some(value_node) = argument_nodes.pop() else {
+            return Eval::value(self.record(node, Type::Any));
+        };
+
+        let (arguments, value_result, setter_name) = match target {
+            hir::AssignTarget::Attribute { name, .. } => {
+                let value_result = self.eval_node(&value_node, environment);
+                let arguments = CallArguments {
+                    argument_nodes: vec![value_node],
+                    argument_types: value_result
+                        .normal_type
+                        .as_ref()
+                        .into_iter()
+                        .cloned()
+                        .collect(),
+                    positional_indices: vec![0],
+                    positional_types: value_result
+                        .normal_type
+                        .as_ref()
+                        .into_iter()
+                        .cloned()
+                        .collect(),
+                    argument_indices: vec![0],
+                    ..CallArguments::default()
+                };
+                (arguments, value_result, format!("{}=", name.as_str()))
+            }
+            hir::AssignTarget::Index { .. } => {
+                let evaluated = self.evaluate_call_arguments(
+                    prism_argument_inputs_from_nodes(argument_nodes),
+                    environment,
+                );
+                let mut arguments = evaluated.arguments;
+                let value_result = self.eval_node(&value_node, environment);
+                if let Some(value_type) = value_result.normal_type.clone() {
+                    arguments.argument_nodes.push(value_node);
+                    arguments.argument_types.push(value_type.clone());
+                    arguments.positional_types.push(value_type);
+                    arguments
+                        .positional_indices
+                        .push(arguments.argument_nodes.len() - 1);
+                    arguments
+                        .argument_indices
+                        .push(arguments.argument_nodes.len() - 1);
+                }
+                (arguments, value_result, "[]=".to_owned())
+            }
+            _ => return Eval::value(self.record(node, Type::Any)),
+        };
+
+        if let Some(value_type) = value_result.normal_type.as_ref() {
+            let site = CallSite {
+                argument_nodes: &arguments.argument_nodes,
+                argument_types: &arguments.argument_types,
+                block: None,
+            };
+            if let Some(key) = self.receiver_method_key(
+                receiver_node.as_ref(),
+                &receiver_type,
+                &setter_name,
+                environment,
+            ) {
+                let _ = self.eval_resolved_receiver_call(
+                    node,
+                    &setter_name,
+                    &key,
+                    &receiver_type,
+                    &arguments,
+                    None,
+                    environment,
+                );
+            } else {
+                let _ = self.eval_method_call(&receiver_type, &setter_name, &site, environment);
+            }
+            self.refine_local_hash_write(
+                receiver_node.as_ref(),
+                &setter_name,
+                &arguments.argument_types,
+                &receiver_type,
+                environment,
+            );
+            let _ = value_type;
+        }
+        let normal_type = receiver_result
+            .normal_type
+            .is_some()
+            .then_some(value_result.normal_type.clone())
+            .flatten();
+        let mut result = Eval::from_parts(
+            normal_type,
+            receiver_result.abrupt.join(&value_result.abrupt),
+            receiver_result.flow.union(value_result.flow),
+        );
+        let type_ = self.apply_inline_assertion(node, result.type_.clone());
         result.type_ = self.record(node, type_);
         result
     }
