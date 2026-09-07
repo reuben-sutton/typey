@@ -10821,7 +10821,40 @@ impl<'src> Analyzer<'src> {
         if environment.contains(&refinement) {
             return environment.get(&refinement);
         }
-        let mut pending = vec![key.owner.clone()];
+        let owner_is_module = self
+            .classes
+            .get(&key.owner)
+            .is_some_and(|info| info.is_module);
+        let mut pending = if owner_is_module {
+            // A method declared in a module executes against the object that
+            // includes or extends it. Discover those hosts once, then walk
+            // each host's ordinary ancestor chain. Reversing the graph at
+            // every ancestor module can jump from a shared module such as
+            // Comparable into unrelated classes and leak their ivars.
+            let mut reverse_pending = vec![key.owner.clone()];
+            let mut reverse_visited = BTreeSet::new();
+            let mut hosts = BTreeSet::new();
+            while let Some(owner) = reverse_pending.pop() {
+                if !reverse_visited.insert(owner.clone()) {
+                    continue;
+                }
+                hosts.insert(owner.clone());
+                for (candidate, info) in &self.classes {
+                    if info.includes.contains(&owner)
+                        || info.prepends.contains(&owner)
+                        || info.extends.contains(&owner)
+                    {
+                        hosts.insert(candidate.clone());
+                        if info.is_module {
+                            reverse_pending.push(candidate.clone());
+                        }
+                    }
+                }
+            }
+            hosts.into_iter().collect()
+        } else {
+            vec![key.owner.clone()]
+        };
         let mut visited = BTreeSet::new();
         while let Some(owner_name) = pending.pop() {
             if !visited.insert(owner_name.clone()) {
@@ -10861,19 +10894,6 @@ impl<'src> Analyzer<'src> {
                 pending.extend(info.extends.iter().cloned());
                 if let Some(superclass) = &info.superclass {
                     pending.push(superclass.clone());
-                }
-            }
-            // Methods defined in an included module execute with the
-            // including class's instance variables. When the initializer is
-            // declared on that class, the module-owned ivar key above would
-            // otherwise look uninitialized even though the class provides the
-            // field at runtime.
-            for (candidate_name, info) in &self.classes {
-                if info.includes.contains(&owner_name)
-                    || info.prepends.contains(&owner_name)
-                    || info.extends.contains(&owner_name)
-                {
-                    pending.push(candidate_name.clone());
                 }
             }
         }

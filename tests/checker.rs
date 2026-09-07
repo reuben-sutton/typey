@@ -784,6 +784,16 @@ fn resolves_instance_variables_from_including_classes() {
 }
 
 #[test]
+fn does_not_leak_instance_variables_through_shared_ancestor_modules() {
+    let result = check_fixture("tests/fixtures/isolated_included_module_ivars.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
 fn tracks_instance_variables_initialized_through_extend_hooks() {
     let result = check_fixture("tests/fixtures/dynamic_instance_variable_set.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
