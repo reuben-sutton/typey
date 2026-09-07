@@ -1,4 +1,4 @@
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Severity};
 use crate::directives::{effective_typed_mode, is_typed_ignore, typed_mode, TypedMode};
 use crate::prism;
 use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
@@ -3609,6 +3609,15 @@ impl<'src> Analyzer<'src> {
 
         self.report_inference_gaps();
         let types = Self::deduplicate_types(std::mem::take(&mut self.types));
+        let mut seen_diagnostics = BTreeSet::new();
+        self.diagnostics.retain(|diagnostic| {
+            seen_diagnostics.insert((
+                matches!(diagnostic.severity, Severity::Note),
+                diagnostic.start,
+                diagnostic.end,
+                diagnostic.message.clone(),
+            ))
+        });
         self.diagnostics.sort_by(|left, right| {
             left.start
                 .cmp(&right.start)
