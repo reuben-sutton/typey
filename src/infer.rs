@@ -9286,6 +9286,8 @@ impl<'src> Analyzer<'src> {
             })
         {
             self.rails_application_instance_type().unwrap_or(Type::Any)
+        } else if name == "routes" && self.is_rails_application_instance(&receiver_type) {
+            Type::named("ActionDispatch::Routing::RouteSet")
         } else if receiver_node.is_none()
             && matches!(name.as_str(), "lambda" | "proc")
             && call.block().is_some()
@@ -10740,6 +10742,7 @@ impl<'src> Analyzer<'src> {
             })
             .or_else(|| self.rails_initializer_block_receiver(&key, receiver_type))
             .or_else(|| self.rails_application_configure_block_receiver(&key, receiver_type))
+            .or_else(|| self.rails_route_draw_block_receiver(&key, receiver_type))
             .or_else(|| self.active_support_test_block_receiver(&key, receiver_type));
         let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
             if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
@@ -10928,6 +10931,25 @@ impl<'src> Analyzer<'src> {
         self.classes
             .contains_key("Rails::Application")
             .then(|| Type::named("Rails::Application"))
+    }
+
+    fn rails_route_draw_block_receiver(
+        &self,
+        key: &MethodKey,
+        receiver_type: Option<&Type>,
+    ) -> Option<Type> {
+        (key.name == "draw")
+            .then(|| {
+                receiver_type.filter(|type_| match type_ {
+                    Type::Named(name, _) => self.nominal_subtype_names(
+                        nominal_name(name),
+                        "ActionDispatch::Routing::RouteSet",
+                    ),
+                    _ => false,
+                })
+            })
+            .flatten()
+            .map(|_| Type::named("ActionDispatch::Routing::Mapper"))
     }
 
     /// Active Support's test DSL is implemented by defining instance methods,

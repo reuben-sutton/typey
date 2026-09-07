@@ -335,6 +335,18 @@ fn infers_the_rails_application_for_configure_blocks() {
 }
 
 #[test]
+fn infers_the_rails_route_mapper_for_draw_blocks() {
+    let result = check_fixture("tests/fixtures/rails_routes_draw_inference.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `ActionDispatch::Routing::RouteSet`")));
+    assert!(!result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("route_only")));
+}
+
+#[test]
 fn binds_active_support_test_dsl_blocks_to_test_instances() {
     check_fixture("tests/fixtures/active_support_test_dsl_bound_block.rb");
 }
