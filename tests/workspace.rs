@@ -146,6 +146,26 @@ fn debug_cli_reports_progress_on_stderr() {
 }
 
 #[test]
+fn debug_cli_excludes_sorbet_signature_dsl_from_send_metrics() {
+    let output = Command::new(env!("CARGO_BIN_EXE_typey"))
+        .args(["--debug", "tests/workspace_metrics_repo"])
+        .output()
+        .expect("typey binary runs");
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstderr: {}\nstdout: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("application lib send sites without a recorded type: 0/1"),
+        "signature DSL was counted as an application send:\n{stderr}"
+    );
+}
+
+#[test]
 fn workspace_skips_typed_ignore_files_before_combining_source() {
     let files = vec![
         WorkspaceFile::new(

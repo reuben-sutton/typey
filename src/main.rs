@@ -485,6 +485,14 @@ impl SyntacticSendVisitor {
 
 impl<'pr> Visit<'pr> for SyntacticSendVisitor {
     fn visit_call_node(&mut self, node: &ruby_prism::CallNode<'pr>) {
+        // Sorbet signatures are Ruby calls syntactically, but they are
+        // declarations rather than runtime application sends. Do not visit
+        // their nested T.proc/T.any/type-expression calls either.
+        let is_sorbet_declaration = (node.receiver().is_none() && node.name().as_slice() == b"sig")
+            || (node.receiver().is_some() && node.name().as_slice() == b"type_alias");
+        if is_sorbet_declaration {
+            return;
+        }
         self.record(&node.as_node());
         ruby_prism::visit_call_node(self, node);
     }
