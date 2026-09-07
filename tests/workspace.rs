@@ -78,6 +78,23 @@ fn directory_cli_honors_equals_style_sorbet_ignore_after_path() {
 }
 
 #[test]
+fn directory_cli_honors_equals_style_sorbet_ignore_before_path() {
+    let output = Command::new(env!("CARGO_BIN_EXE_typey"))
+        .args(["--ignore=vendor/bundle", "tests/workspace_cli_ignore_repo"])
+        .output()
+        .expect("typey binary runs");
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstderr: {}\nstdout: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("vendor/bundle/ignored.rb"), "{stdout}");
+}
+
+#[test]
 fn project_rbis_override_vendored_builtin_rbis() {
     let files = vec![
         WorkspaceFile::new(
