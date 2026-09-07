@@ -59,13 +59,25 @@ pub fn expectations(source: &str) -> Vec<InlineExpectation> {
                         severity
                     };
                     let line = if comment.trim_start().starts_with('^') {
-                        (0..index)
-                            .rev()
-                            .find(|previous| {
-                                let source_line = lines[*previous].trim();
-                                !source_line.is_empty() && !source_line.starts_with('#')
-                            })
-                            .map_or(index + 1, |previous| previous + 1)
+                        let previous = (0..index).rev().find(|previous| {
+                            let source_line = lines[*previous].trim();
+                            !source_line.is_empty() && !source_line.starts_with('#')
+                        });
+                        let rbs_start = previous.map_or(0, |previous| previous + 1);
+                        let rbs_annotation_precedes = lines[rbs_start..index].iter().any(|line| {
+                            let line = line.trim();
+                            line.starts_with("#:") || line.starts_with("#|")
+                        });
+                        if rbs_annotation_precedes {
+                            (index + 1..lines.len())
+                                .find(|next| {
+                                    let source_line = lines[*next].trim();
+                                    !source_line.is_empty() && !source_line.starts_with('#')
+                                })
+                                .map_or(index + 1, |next| next + 1)
+                        } else {
+                            previous.map_or(index + 1, |previous| previous + 1)
+                        }
                     } else {
                         index + 1
                     };

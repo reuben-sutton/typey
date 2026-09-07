@@ -71,6 +71,18 @@ fn matches_expected_diagnostics_to_their_source_lines() {
 }
 
 #[test]
+fn maps_rbs_caret_expectations_to_the_following_definition() {
+    let parsed = expectations(
+        "#: (?Integer) -> void\n\
+         #    ^^^^^^^ error: kind mismatch\n\
+         def value(x); end\n",
+    );
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].line, 3);
+    assert_eq!(parsed[0].message, "kind mismatch");
+}
+
+#[test]
 fn checks_rbi_fixtures_and_single_file_discovery() {
     let rbi = Path::new("tests/workspace_repo/sorbet/rbi/greeting.rbi");
     let report = check_fixture(rbi, CheckerConfig::default()).expect("RBI is readable");
