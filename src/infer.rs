@@ -2784,14 +2784,14 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, Type::Nil));
         }
         if let Some(call) = node.as_call_node() {
-            if let Some((target, _, operator)) = self.hir_assignment_for_node(node) {
+            if let Some((target, value, operator)) = self.hir_assignment_for_node(node) {
                 if matches!(operator, hir::AssignOperator::Set)
                     && matches!(
                         target,
                         hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. }
                     )
                 {
-                    return self.eval_hir_set_assignment(node, &call, &target, environment);
+                    return self.eval_hir_set_assignment(node, call, &target, value, environment);
                 }
             }
             let hir_call = self.hir_call_view(node, call).unwrap_or_else(|| {
@@ -3855,117 +3855,52 @@ impl<'src> Analyzer<'src> {
     fn eval_hir_set_assignment<'node>(
         &mut self,
         node: &Node<'node>,
-        call: &CallNode<'node>,
+        call: CallNode<'node>,
         target: &hir::AssignTarget,
+        value: hir::ExprId,
         environment: &mut Environment,
     ) -> Eval {
-        let receiver_node = call.receiver();
-        let receiver_result = if let Some(receiver) = receiver_node.as_ref() {
-            self.eval_node(receiver, environment)
-        } else {
-            Eval::value(environment.self_type.clone())
-        };
-        let receiver_type = receiver_result.normal_type.clone().unwrap_or(Type::Never);
-        let mut argument_nodes = call
-            .arguments()
-            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
-            .unwrap_or_default();
-        let Some(value_node) = argument_nodes.pop() else {
-            return Eval::value(self.record(node, Type::Any));
-        };
-
-        let (arguments, value_result, setter_name) = match target {
-            hir::AssignTarget::Attribute { name, .. } => {
-                let value_result = self.eval_node(&value_node, environment);
-                let arguments = CallArguments {
-                    argument_nodes: vec![value_node],
-                    argument_types: value_result
-                        .normal_type
-                        .as_ref()
-                        .into_iter()
-                        .cloned()
-                        .collect(),
-                    positional_indices: vec![0],
-                    positional_types: value_result
-                        .normal_type
-                        .as_ref()
-                        .into_iter()
-                        .cloned()
-                        .collect(),
-                    argument_indices: vec![0],
-                    ..CallArguments::default()
-                };
-                (arguments, value_result, format!("{}=", name.as_str()))
-            }
-            hir::AssignTarget::Index { .. } => {
-                let evaluated = self.evaluate_call_arguments(
-                    prism_argument_inputs_from_nodes(argument_nodes),
-                    environment,
-                );
-                let mut arguments = evaluated.arguments;
-                let value_result = self.eval_node(&value_node, environment);
-                if let Some(value_type) = value_result.normal_type.clone() {
-                    arguments.argument_nodes.push(value_node);
-                    arguments.argument_types.push(value_type.clone());
-                    arguments.positional_types.push(value_type);
-                    arguments
-                        .positional_indices
-                        .push(arguments.argument_nodes.len() - 1);
-                    arguments
-                        .argument_indices
-                        .push(arguments.argument_nodes.len() - 1);
-                }
-                (arguments, value_result, "[]=".to_owned())
+        // Keep the assignment as an owned HIR assignment, but reuse the
+        // established setter protocol for its runtime send. The synthetic
+        // call is an evaluator adapter only: its receiver and argument shape
+        // come from the HIR target, while the source Prism node remains solely
+        // the child-expression bridge used by `HirCallView`.
+        let (name, receiver, arguments) = match target {
+            hir::AssignTarget::Attribute { receiver, name } => (
+                format!("{}=", name.as_str()),
+                hir::Receiver::Explicit(*receiver),
+                vec![hir::Argument::Positional(value)],
+            ),
+            hir::AssignTarget::Index {
+                receiver,
+                arguments,
+            } => {
+                let mut arguments = arguments.clone();
+                arguments.push(hir::Argument::Positional(value));
+                (
+                    "[]=".to_owned(),
+                    hir::Receiver::Explicit(*receiver),
+                    arguments,
+                )
             }
             _ => return Eval::value(self.record(node, Type::Any)),
         };
-
-        if let Some(value_type) = value_result.normal_type.as_ref() {
-            let site = CallSite {
-                argument_nodes: &arguments.argument_nodes,
-                argument_types: &arguments.argument_types,
+        let view = HirCallView {
+            call: hir::Call {
+                receiver,
+                name: hir::Name::new(name),
+                arguments,
                 block: None,
-            };
-            if let Some(key) = self.receiver_method_key(
-                receiver_node.as_ref(),
-                &receiver_type,
-                &setter_name,
-                environment,
-            ) {
-                let _ = self.eval_resolved_receiver_call(
-                    node,
-                    &setter_name,
-                    &key,
-                    &receiver_type,
-                    &arguments,
-                    None,
-                    environment,
-                );
-            } else {
-                let _ = self.eval_method_call(&receiver_type, &setter_name, &site, environment);
-            }
-            self.refine_local_hash_write(
-                receiver_node.as_ref(),
-                &setter_name,
-                &arguments.argument_types,
-                &receiver_type,
-                environment,
-            );
-            let _ = value_type;
-        }
-        let normal_type = receiver_result
-            .normal_type
-            .is_some()
-            .then_some(value_result.normal_type.clone())
-            .flatten();
-        let mut result = Eval::from_parts(
-            normal_type,
-            receiver_result.abrupt.join(&value_result.abrupt),
-            receiver_result.flow.union(value_result.flow),
-        );
-        let type_ = self.apply_inline_assertion(node, result.type_.clone());
-        result.type_ = self.record(node, type_);
-        result
+                safe_navigation: false,
+                span: hir::Span::new(
+                    hir::FileId(0),
+                    prism::span(node).0 as u32,
+                    prism::span(node).1 as u32,
+                ),
+            },
+            prism_call: call,
+        };
+        self.eval_call_result(node, &view, environment)
     }
 
     fn eval_begin<'node>(

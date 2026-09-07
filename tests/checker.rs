@@ -701,6 +701,14 @@ fn specializes_namespaced_generic_members_at_dispatch() {
 }
 
 #[test]
+fn preserves_outer_generic_members_in_nested_constructors() {
+    assert_no_errors(
+        &std::fs::read_to_string("tests/fixtures/nested_generic_constructor.rb")
+            .expect("fixture exists"),
+    );
+}
+
+#[test]
 fn applies_short_rbs_types_to_generated_accessors() {
     let result = check_fixture("tests/fixtures/short_attribute_type_annotations.rb");
     assert!(
