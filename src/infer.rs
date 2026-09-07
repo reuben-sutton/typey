@@ -1390,6 +1390,7 @@ struct MethodRegistrar<'a> {
     constants: &'a mut BTreeMap<String, Type>,
     class_stack: Vec<String>,
     singleton_stack: Vec<String>,
+    dynamic_definition_stack: Vec<(String, bool)>,
     visibility_stack: Vec<Visibility>,
     visibility_overrides: BTreeMap<MethodKey, Visibility>,
     method_depth: usize,
@@ -2251,13 +2252,29 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                 }
             }
         }
+        let dynamic_definition_target = self.dynamic_definition_target(node);
+        if let Some(target) = dynamic_definition_target.as_ref() {
+            self.dynamic_definition_stack.push(target.clone());
+        }
         ruby_prism::visit_call_node(self, node);
+        if dynamic_definition_target.is_some() {
+            self.dynamic_definition_stack.pop();
+        }
     }
 }
 
 impl MethodRegistrar<'_> {
     fn definition_key<'node>(&self, node: &DefNode<'node>) -> MethodKey {
         let name = prism::constant_name(node.name());
+        if let Some((owner, singleton)) = self.dynamic_definition_stack.last() {
+            if node.receiver().is_none() {
+                return MethodKey {
+                    owner: Some(owner.clone()),
+                    name,
+                    singleton: *singleton,
+                };
+            }
+        }
         if let Some(receiver) = node.receiver() {
             let owner = if receiver.as_self_node().is_some() {
                 self.class_stack.last().cloned()
@@ -2288,6 +2305,32 @@ impl MethodRegistrar<'_> {
         } else {
             MethodKey::top_level(name)
         }
+    }
+
+    fn dynamic_definition_target<'node>(&self, node: &CallNode<'node>) -> Option<(String, bool)> {
+        if self.method_depth != 0
+            || !node
+                .block()
+                .is_some_and(|block| block.as_block_node().is_some())
+            || !matches!(
+                prism::constant_name(node.name()).as_str(),
+                "class_eval" | "module_eval" | "class_exec" | "instance_eval"
+            )
+        {
+            return None;
+        }
+        let owner = node
+            .receiver()
+            .map(|receiver| self.scope_reference(&receiver))
+            .filter(|owner| owner != "self" && owner != "super")
+            .or_else(|| {
+                self.singleton_stack
+                    .last()
+                    .cloned()
+                    .or_else(|| self.class_stack.last().cloned())
+            })?;
+        let singleton = prism::constant_name(node.name()) == "instance_eval";
+        Some((owner, singleton))
     }
 
     fn current_owner(&self) -> Option<String> {
@@ -2849,20 +2892,48 @@ impl<'src> Analyzer<'src> {
         if let Some(type_) = self.instance_self_type_cache.borrow().get(owner) {
             return type_.clone();
         }
-        let hosts = self
-            .classes
-            .iter()
-            .filter_map(|(candidate, info)| {
-                info.includes
-                    .iter()
-                    .any(|included| included == owner || self.nominal_names_match(included, owner))
-                    .then(|| Type::named(candidate.clone()))
-            })
-            .collect::<Vec<_>>();
-        let type_ = if hosts.is_empty() {
-            Type::named(owner)
+        let type_ = if self.classes.get(owner).is_some_and(|info| info.is_module) {
+            let hosts = self
+                .classes
+                .iter()
+                .filter_map(|(candidate, info)| {
+                    info.includes
+                        .iter()
+                        .any(|included| {
+                            included == owner || self.nominal_names_match(included, owner)
+                        })
+                        .then(|| Type::named(candidate.clone()))
+                })
+                .collect::<Vec<_>>();
+            if hosts.is_empty() {
+                Type::named(owner)
+            } else {
+                Type::union(hosts)
+            }
         } else {
-            Type::union(hosts)
+            let mut descendants = Vec::new();
+            for (candidate, info) in &self.classes {
+                let mut superclass = info.superclass.clone();
+                let mut visited = BTreeSet::new();
+                while let Some(current) = superclass {
+                    if !visited.insert(current.clone()) {
+                        break;
+                    }
+                    if current == owner || self.nominal_names_match(&current, owner) {
+                        descendants.push(Type::named(candidate.clone()));
+                        break;
+                    }
+                    superclass = self
+                        .classes
+                        .get(&current)
+                        .and_then(|info| info.superclass.clone());
+                }
+            }
+            if descendants.is_empty() {
+                Type::named(owner)
+            } else {
+                Type::union(descendants)
+            }
         };
         self.instance_self_type_cache
             .borrow_mut()
@@ -4185,6 +4256,7 @@ impl<'src> Analyzer<'src> {
             constants: &mut self.constants,
             class_stack: Vec::new(),
             singleton_stack: Vec::new(),
+            dynamic_definition_stack: Vec::new(),
             visibility_stack: Vec::new(),
             visibility_overrides: BTreeMap::new(),
             method_depth: 0,
@@ -9088,6 +9160,11 @@ impl<'src> Analyzer<'src> {
             all_normal &= result.flow.contains(FlowKind::Normal);
         }
         let array_write_receiver_type = receiver_type.clone();
+        let dynamic_eval_receiver = if receiver_node.is_none() {
+            environment.self_type.clone()
+        } else {
+            receiver_type.clone()
+        };
         if matches!(name.as_str(), "push" | "<<" | "prepend") {
             if let Some(local) = receiver_node
                 .as_ref()
@@ -9197,6 +9274,10 @@ impl<'src> Analyzer<'src> {
                     UntypedOrigin::FallbackCall
                 });
             }
+            type_
+        } else if let Some(type_) =
+            self.eval_dynamic_eval_call(&name, &dynamic_eval_receiver, block.as_ref(), environment)
+        {
             type_
         } else if receiver_node.is_none()
             && matches!(name.as_str(), "lambda" | "proc")
@@ -9880,20 +9961,35 @@ impl<'src> Analyzer<'src> {
             );
             if !struct_constructor
                 && name == "new"
-                && (Self::class_object_owner(&receiver_type).is_some()
-                    || Self::named_type_name(&receiver_type).is_some())
                 && receiver_node.as_ref().is_some_and(|receiver| {
                     receiver.as_self_node().is_some()
                         || self.constant_reference_name(receiver).is_some()
+                        || receiver.as_local_variable_read_node().is_some()
                 })
             {
-                if let Some(owner) = Self::class_object_owner(&receiver_type)
-                    .or_else(|| Self::named_type_name(&receiver_type))
-                {
+                let owners = Self::class_object_instance_types(&receiver_type)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|instance| Self::named_type_name(&instance))
+                    .collect::<Vec<_>>();
+                let owners = if owners.is_empty()
+                    && !matches!(
+                        &receiver_type,
+                        Type::Named(name, _) if name_matches(name, "Class") || name_matches(name, "Module")
+                    ) {
+                    Self::named_type_name(&receiver_type)
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                } else {
+                    owners
+                };
+                let mut constructed = Type::Never;
+                for owner in owners {
+                    let candidate_receiver = Self::class_object_type(&owner);
                     let has_explicit_new = self
                         .receiver_method_key(
                             receiver_node.as_ref(),
-                            &receiver_type,
+                            &candidate_receiver,
                             &name,
                             environment,
                         )
@@ -9905,27 +10001,31 @@ impl<'src> Analyzer<'src> {
                             // declared on the class itself is an override.
                             resolved.owner.as_deref() == Some(owner.as_str())
                         });
-                    if !has_explicit_new {
-                        self.infer_initializer_call(
-                            node,
-                            &owner,
-                            &arguments,
-                            block.is_some(),
-                            environment,
-                        );
-                        self.observe_struct_constructor(&owner, &arguments);
-                        result = if self
-                            .substitution_context
-                            .as_ref()
-                            .filter(|context| context.singleton)
-                            .and_then(|context| context.owner.as_deref())
-                            .is_some_and(|context_owner| context_owner == owner)
-                        {
-                            Type::AttachedClassOf(owner)
-                        } else {
-                            self.instantiate_generic_class(Type::named(owner))
-                        };
+                    if has_explicit_new {
+                        continue;
                     }
+                    self.infer_initializer_call(
+                        node,
+                        &owner,
+                        &arguments,
+                        block.is_some(),
+                        environment,
+                    );
+                    self.observe_struct_constructor(&owner, &arguments);
+                    constructed = constructed.join(&if self
+                        .substitution_context
+                        .as_ref()
+                        .filter(|context| context.singleton)
+                        .and_then(|context| context.owner.as_deref())
+                        .is_some_and(|context_owner| context_owner == owner)
+                    {
+                        Type::AttachedClassOf(owner)
+                    } else {
+                        self.instantiate_generic_class(Type::named(owner))
+                    });
+                }
+                if !constructed.is_never() {
+                    result = constructed;
                 }
             }
             if call.is_safe_navigation() && !receiver_type.is_any() {
@@ -11732,11 +11832,35 @@ impl<'src> Analyzer<'src> {
         singleton: bool,
         environment: &Environment,
     ) -> Option<Type> {
-        let mut owner = Some(class.to_owned());
+        let mut pending = if self.classes.get(class).is_some_and(|info| info.is_module) {
+            let mut reverse_pending = vec![class.to_owned()];
+            let mut reverse_visited = BTreeSet::new();
+            let mut hosts = BTreeSet::new();
+            while let Some(owner) = reverse_pending.pop() {
+                if !reverse_visited.insert(owner.clone()) {
+                    continue;
+                }
+                hosts.insert(owner.clone());
+                for (candidate, info) in &self.classes {
+                    if info.includes.contains(&owner)
+                        || info.prepends.contains(&owner)
+                        || info.extends.contains(&owner)
+                    {
+                        hosts.insert(candidate.clone());
+                        if info.is_module {
+                            reverse_pending.push(candidate.clone());
+                        }
+                    }
+                }
+            }
+            hosts.into_iter().collect::<Vec<_>>()
+        } else {
+            vec![class.to_owned()]
+        };
         let mut visited = BTreeSet::new();
-        while let Some(current) = owner {
+        while let Some(current) = pending.pop() {
             if !visited.insert(current.clone()) {
-                break;
+                continue;
             }
             let key = IvarKey {
                 owner: current.clone(),
@@ -11747,10 +11871,20 @@ impl<'src> Analyzer<'src> {
                 self.record_shared_read(SharedKey::Ivar(key), environment);
                 return Some(type_);
             }
-            owner = self
-                .classes
-                .get(&current)
-                .and_then(|info| info.superclass.clone());
+            if let Some(info) = self.classes.get(&current) {
+                if info.extends.iter().any(|module| module == class) {
+                    let extended_key = IvarKey {
+                        owner: current.clone(),
+                        singleton: !singleton,
+                        name: format!("@{name}"),
+                    };
+                    if let Some(type_) = self.ivars.get(&extended_key).cloned() {
+                        self.record_shared_read(SharedKey::Ivar(extended_key), environment);
+                        return Some(type_);
+                    }
+                }
+                pending.extend(info.superclass.iter().cloned());
+            }
         }
         None
     }
@@ -12226,6 +12360,8 @@ impl<'src> Analyzer<'src> {
             if !info.extends.contains(&module_name) {
                 info.extends.push(module_name.clone());
                 self.method_resolution_cache.borrow_mut().clear();
+                self.instance_self_type_cache.borrow_mut().clear();
+                self.changed_methods.extend(self.methods.keys().cloned());
             }
             let hook = MethodKey {
                 owner: Some(module_name.clone()),
@@ -12295,6 +12431,8 @@ impl<'src> Analyzer<'src> {
             if !info.includes.contains(&module_name) {
                 info.includes.push(module_name.clone());
                 self.method_resolution_cache.borrow_mut().clear();
+                self.instance_self_type_cache.borrow_mut().clear();
+                self.changed_methods.extend(self.methods.keys().cloned());
             }
             let hook = MethodKey {
                 owner: Some(module_name.clone()),
@@ -12479,6 +12617,34 @@ impl<'src> Analyzer<'src> {
         let _ = self.eval_block_node(block, &[Type::Any], environment);
         environment.self_type = previous_self;
         environment.method_key = previous_method;
+    }
+
+    fn eval_dynamic_eval_call(
+        &mut self,
+        name: &str,
+        receiver: &Type,
+        block: Option<&Node<'_>>,
+        environment: &mut Environment,
+    ) -> Option<Type> {
+        if !matches!(
+            name,
+            "class_eval" | "module_eval" | "class_exec" | "instance_eval"
+        ) {
+            return None;
+        }
+        if !matches!(name, "instance_eval")
+            && !receiver.is_any()
+            && Self::class_object_instance_type(receiver).is_none()
+        {
+            return None;
+        }
+        let Some(block) = block else {
+            // String-eval has no statically available body. It is still a
+            // real Ruby API, so accept it without inventing a missing-method
+            // diagnostic and preserve gradual typing for its result.
+            return Some(Type::Any);
+        };
+        Some(self.eval_bound_block_node(block, &[Type::Any], receiver, environment))
     }
 
     fn dynamic_splat_element_type(type_: &Type) -> Option<Type> {

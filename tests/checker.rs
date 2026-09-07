@@ -315,6 +315,14 @@ fn infers_instance_binding_through_define_method() {
 }
 
 #[test]
+fn models_class_eval_methods_through_dynamic_includes() {
+    let result = check_fixture("tests/fixtures/dynamic_class_include_and_eval.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `T::Array[String]`")));
+}
+
+#[test]
 fn binds_active_support_test_dsl_blocks_to_test_instances() {
     check_fixture("tests/fixtures/active_support_test_dsl_bound_block.rb");
 }
