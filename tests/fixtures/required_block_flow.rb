@@ -7,6 +7,14 @@ module Kernel
     true
   end
 
+  def __method__
+    nil
+  end
+
+  def current_method_name
+    T.reveal_type(__method__) # note: Symbol
+  end
+
   sig do
     type_parameters(:X)
       .params(blk: T.proc.params(arg: T.untyped).returns(T.type_parameter(:X)))

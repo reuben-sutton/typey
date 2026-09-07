@@ -8279,6 +8279,16 @@ impl<'src> Analyzer<'src> {
                 // override) registers a loader and returns nil.  Prefer this
                 // concrete Ruby contract over an untyped external declaration.
                 Type::Nil
+            } else if matches!(name.as_str(), "__method__" | "__callee__")
+                && environment
+                    .method_key
+                    .as_ref()
+                    .is_some_and(|key| !key.name.starts_with('<'))
+            {
+                // The core RBI must be nilable because these keywords are
+                // also valid at top level. Inside a real method Ruby always
+                // supplies its name as a Symbol.
+                Type::Symbol
             } else if let Some(signature) = self
                 .observe_call(&key, &arguments, block.is_some())
                 .map(|signature| self.widen_overridable_noreturn(&key, signature))
