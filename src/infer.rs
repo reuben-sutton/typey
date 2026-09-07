@@ -5980,6 +5980,13 @@ impl<'src> Analyzer<'src> {
         }
         if self.is_assignable(expected, current) {
             expected.clone()
+        } else if self.is_assignable(current, expected) {
+            // The current type may be a more precise structural form of the
+            // predicate's nominal class. For example, a fixed tuple is an
+            // Array, but intersecting it with the bare `Array` nominal would
+            // discard its element positions and route `[]` through the
+            // unparameterized fallback model.
+            current.clone()
         } else if Self::definitely_disjoint_class_types(self, current, expected) {
             Type::Never
         } else {

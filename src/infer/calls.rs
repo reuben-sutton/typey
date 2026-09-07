@@ -795,6 +795,15 @@ impl<'src> Analyzer<'src> {
                     // RBI: preserve its positional component for methods
                     // such as `first` and `last`.
                     self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
+                } else if matches!(&dispatch_receiver_type, Type::Tuple(_))
+                    && name == "[]"
+                    && matches!(argument_types.first(), Some(Type::Integer))
+                {
+                    // An explicit generic Array#[] RBI must not erase the
+                    // positional information carried by a fixed tuple.
+                    // Dispatch the structural operation so an integer index
+                    // retains the union of the tuple's actual components.
+                    self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
                 } else if matches!(&dispatch_receiver_type, Type::Array(_) | Type::Tuple(_))
                     && self
                         .resolve_method_key(&key)
