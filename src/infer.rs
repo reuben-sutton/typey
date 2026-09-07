@@ -156,8 +156,7 @@ fn apply_parameter_shape(signature: &MethodSig, shape: &ParameterShape) -> Metho
     let mut block = result.block.clone();
     for (name, type_) in signature.param_names.iter().zip(&signature.params) {
         let is_block_parameter = shape.has_block
-            && (shape.block_name.as_deref() == Some(name.as_str())
-                || (shape.block_name.is_none() && name == "&"));
+            && (name == "&" || shape.block_name.as_deref() == Some(name.as_str()));
         if is_block_parameter {
             if optional_proc_type(type_).is_some() {
                 // Preserve nilability here. It distinguishes Ruby's

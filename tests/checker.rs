@@ -320,6 +320,11 @@ fn binds_active_support_test_dsl_blocks_to_test_instances() {
 }
 
 #[test]
+fn binds_minitest_test_dsl_blocks_to_test_instances() {
+    check_fixture("tests/fixtures/minitest_test_macro_bound_block.rb");
+}
+
+#[test]
 fn applies_active_support_concern_class_methods_to_including_classes() {
     check_fixture("tests/fixtures/active_support_concern_class_methods.rb");
 }
