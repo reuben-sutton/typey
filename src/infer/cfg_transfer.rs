@@ -136,10 +136,10 @@ fn expr_can_transfer(
             });
             block_supported
                 && match &call.receiver {
-                    hir::Receiver::Implicit | hir::Receiver::Explicit(_) | hir::Receiver::Super => {
-                        true
-                    }
-                    hir::Receiver::Yield => false,
+                    hir::Receiver::Implicit
+                    | hir::Receiver::Explicit(_)
+                    | hir::Receiver::Super
+                    | hir::Receiver::Yield => true,
                 }
                 && match &call.receiver {
                     hir::Receiver::Explicit(receiver) => {
@@ -554,8 +554,9 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             cfg::ReceiverOperand::Value(value) => {
                 values.get(value.0 as usize).cloned().flatten()?
             }
-            cfg::ReceiverOperand::Super => environment.self_type.clone(),
-            cfg::ReceiverOperand::Yield => return None,
+            cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => {
+                environment.self_type.clone()
+            }
         };
         let site = CallSite {
             argument_nodes: &call_arguments.argument_nodes,
@@ -563,7 +564,10 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             block: block_node.as_ref(),
         };
         let has_block = input.block.is_some();
-        let (type_, untyped_origin) = if matches!(input.receiver, cfg::ReceiverOperand::Super) {
+        let (type_, untyped_origin) = if matches!(input.receiver, cfg::ReceiverOperand::Yield) {
+            let type_ = analyzer.cfg_yield_result(node, &call_arguments, environment)?;
+            (type_, UntypedOrigin::Propagated)
+        } else if matches!(input.receiver, cfg::ReceiverOperand::Super) {
             let key = analyzer.super_method_key(environment.method_key.as_ref()?)?;
             analyzer.record_method_dependency(&key, environment);
             if let Some(signature) = analyzer

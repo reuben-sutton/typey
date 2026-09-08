@@ -58,6 +58,47 @@ impl OwnedCallInput {
 }
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn cfg_yield_result<'node>(
+        &mut self,
+        _node: &Node<'node>,
+        arguments: &CallArguments<'node>,
+        environment: &mut super::Environment,
+    ) -> Option<Type> {
+        let key = environment.method_key.clone()?;
+        let (expected, return_type) = {
+            let state = self.declarations.methods.get(&key)?;
+            let expected = state
+                .block
+                .as_ref()
+                .and_then(proc_parts)
+                .map(|(parameters, _)| parameters.to_vec());
+            let return_type = state.block_return_type.clone().unwrap_or(Type::Any);
+            (expected, return_type)
+        };
+        if let Some(expected) = expected.as_ref() {
+            for (index, actual) in arguments.argument_types.iter().enumerate() {
+                if let Some(expected) = expected.get(index) {
+                    if !self.is_assignable(actual, expected) {
+                        if let Some(argument) = arguments.argument_nodes.get(index) {
+                            self.error(
+                                argument,
+                                format!(
+                                    "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(state) = self.declarations.methods.get_mut(&key) {
+            if state.observe_yield_arguments(&arguments.argument_types) {
+                self.fixpoint.changed_methods.insert(key);
+            }
+        }
+        Some(return_type)
+    }
+
     pub(super) fn cfg_block_return_type<'node>(
         &mut self,
         input: &OwnedCallInput,

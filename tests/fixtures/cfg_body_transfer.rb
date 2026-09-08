@@ -113,9 +113,18 @@ class CfgForwardChild < CfgSuperBase
   end
 end
 
+class CfgYield
+  extend T::Sig
+  sig { params(block: T.proc.params(value: Integer).returns(String)).returns(String) }
+  def value(&block)
+    yield(1)
+  end
+end
+
 CfgBodyTransfer.new.value
 T.reveal_type(CfgBodyTransfer.new.safe_navigation("text")) # note: Revealed type: `T.nilable(String)`
 T.reveal_type(CfgBodyTransfer.new.inline_block) # note: Revealed type: `T::Array[String]`
 T.reveal_type(CfgBodyTransfer.new.passed_block) # note: Revealed type: `T::Array[String]`
 T.reveal_type(CfgSuperChild.new.render) # note: Revealed type: `String`
 T.reveal_type(CfgForwardChild.new.render(1)) # note: Revealed type: `String`
+T.reveal_type(CfgYield.new.value { |value| value.to_s }) # note: Revealed type: `String`
