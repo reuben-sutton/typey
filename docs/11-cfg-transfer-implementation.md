@@ -66,13 +66,17 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
   source operations that correspond to real expressions. Ivar, class-variable,
   global, and dynamic logical assignments remain recursive until the state
   model carries their assignment-specific non-nil postconditions.
+* `7b61018` extended ordinary call transfer to fixed keyword arguments. The
+  call host reconstructs keyword groups from owned names/value IDs and records
+  their source key/hash nodes; keyword splats, forwarding, and blocks remain
+  recursive.
 
 ## Next boundary
 
 The analyzer still uses its recursive evaluator for compound/dynamic operation
 semantics, rescue/ensure, and branch/body expression adapters. Complete-body
-transfer is deliberately narrow: it does not yet interpret keyword/splat/block
-calls, safe navigation, `super`, `yield`, closures, or abrupt terminators
+transfer is deliberately narrow: it does not yet interpret splat/block calls,
+safe navigation, `super`, `yield`, closures, or abrupt terminators
 inside a body. The next implementation boundaries are the remaining call
 shapes, non-local logical compound assignments, and dynamic compound writes,
 then complete branch bodies and rescue/ensure edges. Collection splats also need

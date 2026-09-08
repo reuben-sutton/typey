@@ -61,6 +61,8 @@ recursive evaluator remains the compatibility baseline.
 * `df09d11` added local logical-assignment branches to the complete-body
   worklist; non-local logical assignments remain explicit fallbacks until
   their postcondition facts are represented in transfer state.
+* `7b61018` extended complete-body calls to fixed keyword arguments while
+  retaining keyword splats, forwarding, and blocks as explicit fallbacks.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -81,9 +83,9 @@ writes, attribute setters, loop/rescue fixtures, safe navigation, branches,
 compound assignments, source identity, and a complete straight-line method
 body. The default checker remains at baseline performance because CFG
 construction is not yet enabled by default. In three matched local release
-runs, Spoom took 1.71–1.72s with `--cfg` and 1.70–1.72s on the legacy path;
+runs, Spoom took 1.71–1.73s with `--cfg` and 1.67–1.75s on the legacy path;
 both paths produced the same three classified diagnostics. The CFG body host
-transferred 517 methods and 60,190 calls, with 157 legacy body fallbacks. An
+transferred 603 methods and 59,187 calls, with 157 legacy body fallbacks. An
 initial slower result was traced to rebuilding the program-wide HIR expression
 index once per method; the body host now uses the index-free builder, and the
 remaining run-to-run difference is negligible.
