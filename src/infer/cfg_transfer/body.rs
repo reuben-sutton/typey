@@ -10,9 +10,7 @@ use super::patterns::{case_pattern_is_type_test, narrow_pattern_value, pattern_s
 use super::preflight;
 use crate::cfg;
 use crate::hir::{self, Read};
-use crate::prism;
 use crate::types::Type;
-use ruby_prism::Node;
 use std::collections::{HashMap, HashSet};
 
 pub(super) struct BodyTransfer<'analyzer, 'src> {
@@ -879,27 +877,6 @@ impl<'src> Analyzer<'src> {
             };
             environment.remove(&cfg_global_refinement_key(name.as_str()));
         }
-    }
-
-    /// Run the generic CFG transfer over a complete, straight-line method
-    /// body. Bodies with dispatch, branches, or exceptional control flow stay
-    /// on the recursive evaluator until their owned transfer exists; the
-    /// preflight is important because a failed transfer must not leave partial
-    /// diagnostics or recorded types behind.
-    pub(in crate::infer) fn eval_cfg_body<'node>(
-        &mut self,
-        body_node: &Node<'node>,
-        body_id: hir::BodyId,
-        environment: &mut Environment,
-        record_result: bool,
-    ) -> Option<Eval> {
-        let (start, end) = prism::span(body_node);
-        self.eval_cfg_body_owned(
-            SourceSite::new(start, end),
-            body_id,
-            environment,
-            record_result,
-        )
     }
 
     pub(in crate::infer) fn eval_cfg_body_owned(

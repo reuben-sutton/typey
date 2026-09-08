@@ -7,6 +7,25 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
+    /// Parser-facing entry point for the owned CFG transfer. The transfer
+    /// itself consumes only `SourceSite`, HIR, and CFG values; this adapter is
+    /// kept with the recursive evaluator's Prism compatibility boundary.
+    pub(in crate::infer) fn eval_cfg_body_from_prism<'node>(
+        &mut self,
+        body_node: &Node<'node>,
+        body_id: hir::BodyId,
+        environment: &mut Environment,
+        record_result: bool,
+    ) -> Option<Eval> {
+        let (start, end) = prism::span(body_node);
+        self.eval_cfg_body_owned(
+            SourceSite::new(start, end),
+            body_id,
+            environment,
+            record_result,
+        )
+    }
+
     pub(super) fn hir_call_for_node(&self, node: &Node<'_>) -> Option<&hir::Call> {
         let span = prism::span(node);
         if let Some(expression_id) = self.hir_call_ids.get(&span) {
