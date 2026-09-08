@@ -1327,6 +1327,7 @@ pub(crate) fn check_with_policies(
         cfg_transfer_calls: 0,
         cfg_transfer_assignments: 0,
         cfg_transfer_conditionals: 0,
+        cfg_transfer_loops: 0,
         cfg_transfer_values: 0,
         cfg_transfer_fallbacks: 0,
     };
@@ -1386,6 +1387,7 @@ struct Analyzer<'src> {
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
     cfg_transfer_conditionals: usize,
+    cfg_transfer_loops: usize,
     cfg_transfer_values: usize,
     cfg_transfer_fallbacks: usize,
 }
@@ -2024,10 +2026,11 @@ impl<'src> Analyzer<'src> {
         });
         if self.config.debug {
             eprintln!(
-                "[typey] CFG transfers: {} calls, {} assignments, {} conditionals, {} values, {} legacy fallbacks",
+                "[typey] CFG transfers: {} calls, {} assignments, {} conditionals, {} loops, {} values, {} legacy fallbacks",
                 self.cfg_transfer_calls,
                 self.cfg_transfer_assignments,
                 self.cfg_transfer_conditionals,
+                self.cfg_transfer_loops,
                 self.cfg_transfer_values,
                 self.cfg_transfer_fallbacks
             );
@@ -3664,6 +3667,15 @@ impl<'src> Analyzer<'src> {
         if let Some(while_node) = node.as_while_node() {
             let predicate = while_node.predicate();
             let statements = while_node.statements();
+            if self.config.enable_cfg {
+                return self.eval_cfg_loop(
+                    node,
+                    &predicate,
+                    statements.as_ref(),
+                    environment,
+                    true,
+                );
+            }
             let mut result = self.eval_loop(&predicate, statements.as_ref(), environment, true);
             let type_ =
                 self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
@@ -3673,6 +3685,15 @@ impl<'src> Analyzer<'src> {
         if let Some(until_node) = node.as_until_node() {
             let predicate = until_node.predicate();
             let statements = until_node.statements();
+            if self.config.enable_cfg {
+                return self.eval_cfg_loop(
+                    node,
+                    &predicate,
+                    statements.as_ref(),
+                    environment,
+                    false,
+                );
+            }
             let mut result = self.eval_loop(&predicate, statements.as_ref(), environment, false);
             let type_ =
                 self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);

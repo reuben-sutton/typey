@@ -1,5 +1,6 @@
 use super::{
-    ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, SharedKey,
+    ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, OutcomeTypes,
+    SharedKey,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
@@ -73,6 +74,16 @@ struct ConditionalTransfer<'analyzer, 'src, 'node, 'nodes> {
     report_unreachable: bool,
 }
 
+struct LoopTransfer<'analyzer, 'src, 'node, 'nodes> {
+    analyzer: &'analyzer mut Analyzer<'src>,
+    predicate: &'nodes Node<'node>,
+    statements: Option<&'nodes ruby_prism::StatementsNode<'node>>,
+    predicate_truthy: bool,
+    abrupt: OutcomeTypes,
+    break_type: Type,
+    terminal_flow: Flow,
+}
+
 fn conditional_graph() -> &'static cfg::Cfg {
     static GRAPH: OnceLock<cfg::Cfg> = OnceLock::new();
     GRAPH.get_or_init(|| cfg::Cfg {
@@ -106,6 +117,57 @@ fn conditional_graph() -> &'static cfg::Cfg {
                 operations: Vec::new(),
                 terminator: cfg::Terminator::Jump {
                     target: cfg::BlockId(3),
+                    arguments: Vec::new(),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(3),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Return(None),
+                unwind: None,
+            },
+        ],
+        conditionals: Vec::new(),
+        unsupported_spans: Vec::new(),
+        expression_values: Vec::new(),
+    })
+}
+
+fn loop_graph() -> &'static cfg::Cfg {
+    static GRAPH: OnceLock<cfg::Cfg> = OnceLock::new();
+    GRAPH.get_or_init(|| cfg::Cfg {
+        body: hir::BodyId(0),
+        entry: cfg::BlockId(0),
+        blocks: vec![
+            cfg::BasicBlock {
+                id: cfg::BlockId(0),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Jump {
+                    target: cfg::BlockId(1),
+                    arguments: Vec::new(),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(1),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Branch {
+                    condition: cfg::ValueId(0),
+                    truthy: cfg::BlockId(2),
+                    falsy: cfg::BlockId(3),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(2),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Jump {
+                    target: cfg::BlockId(1),
                     arguments: Vec::new(),
                 },
                 unwind: None,
@@ -240,6 +302,130 @@ impl<'analyzer, 'src, 'node, 'nodes> cfg::transfer::BlockTransfer
             result: Eval::combine(&current.result, &incoming.result),
             path_reachable: current.path_reachable || incoming.path_reachable,
         };
+        let changed = joined != *current;
+        (joined, changed)
+    }
+}
+
+impl<'analyzer, 'src, 'node, 'nodes> cfg::transfer::BlockTransfer
+    for LoopTransfer<'analyzer, 'src, 'node, 'nodes>
+{
+    type State = BlockState;
+    type Error = ();
+
+    fn transfer_block(
+        &mut self,
+        _cfg: &cfg::Cfg,
+        block: &cfg::BasicBlock,
+        state: &Self::State,
+    ) -> Result<Vec<cfg::transfer::TransferEdge<Self::State>>, Self::Error> {
+        let edge = |target, state| cfg::transfer::TransferEdge { target, state };
+        Ok(match block.id {
+            cfg::BlockId(0) => vec![edge(cfg::BlockId(1), state.clone())],
+            cfg::BlockId(1) => {
+                let mut condition_environment = state.environment.clone();
+                let condition_result = self
+                    .analyzer
+                    .eval_node(self.predicate, &mut condition_environment);
+                self.abrupt = self.abrupt.join(
+                    &condition_result
+                        .abrupt
+                        .without(FlowKind::Break)
+                        .without(FlowKind::Next),
+                );
+                self.terminal_flow = self.terminal_flow.union(
+                    condition_result
+                        .flow
+                        .without(FlowKind::Normal)
+                        .without(FlowKind::Break)
+                        .without(FlowKind::Next),
+                );
+                if !condition_result.flow.contains(FlowKind::Normal) {
+                    Vec::new()
+                } else {
+                    let mut body_environment = condition_environment.clone();
+                    self.analyzer.narrow_from_predicate(
+                        self.predicate,
+                        &mut body_environment,
+                        self.predicate_truthy,
+                    );
+                    vec![
+                        edge(
+                            cfg::BlockId(3),
+                            BlockState::with_values(
+                                condition_environment,
+                                Vec::new(),
+                                Flow::normal(),
+                            ),
+                        ),
+                        edge(
+                            cfg::BlockId(2),
+                            BlockState::with_values(body_environment, Vec::new(), Flow::normal()),
+                        ),
+                    ]
+                }
+            }
+            cfg::BlockId(2) => {
+                let mut body_environment = state.environment.clone();
+                let body_result = self.statements.map_or_else(
+                    || Eval::value(Type::Nil),
+                    |statements| {
+                        self.analyzer
+                            .eval_statements(statements, &mut body_environment)
+                    },
+                );
+                let body_terminal_flow = body_result
+                    .flow
+                    .without(FlowKind::Normal)
+                    .without(FlowKind::Break)
+                    .without(FlowKind::Next);
+                self.terminal_flow = self.terminal_flow.union(body_terminal_flow);
+                if !body_terminal_flow.is_empty() {
+                    self.abrupt = self.abrupt.join(
+                        &body_result
+                            .abrupt
+                            .without(FlowKind::Break)
+                            .without(FlowKind::Next),
+                    );
+                }
+                if body_result.flow.contains(FlowKind::Break) {
+                    self.break_type = self.break_type.join(&body_result.abrupt.break_type);
+                }
+                let mut edges = Vec::new();
+                if body_result.flow.contains(FlowKind::Break) {
+                    edges.push(edge(
+                        cfg::BlockId(3),
+                        BlockState::with_values(
+                            body_environment.clone(),
+                            Vec::new(),
+                            Flow::normal(),
+                        ),
+                    ));
+                }
+                if body_result.flow.contains(FlowKind::Normal)
+                    || body_result.flow.contains(FlowKind::Next)
+                {
+                    edges.push(edge(
+                        cfg::BlockId(1),
+                        BlockState::with_values(body_environment, Vec::new(), Flow::normal()),
+                    ));
+                }
+                edges
+            }
+            cfg::BlockId(3) => Vec::new(),
+            _ => Vec::new(),
+        })
+    }
+
+    fn join_state(
+        &mut self,
+        current: Option<&Self::State>,
+        incoming: Self::State,
+    ) -> (Self::State, bool) {
+        let Some(current) = current else {
+            return (incoming, true);
+        };
+        let joined = current.join(&incoming);
         let changed = joined != *current;
         (joined, changed)
     }
@@ -629,6 +815,58 @@ impl<'src> Analyzer<'src> {
             }
             hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. } => None,
         }
+    }
+
+    pub(super) fn eval_cfg_loop<'node>(
+        &mut self,
+        node: &Node<'node>,
+        predicate: &Node<'node>,
+        statements: Option<&ruby_prism::StatementsNode<'node>>,
+        environment: &mut Environment,
+        predicate_truthy: bool,
+    ) -> Eval {
+        self.cfg_transfer_loops = self.cfg_transfer_loops.saturating_add(1);
+        let entry = environment.clone();
+        let initial = BlockState::with_values(entry.clone(), Vec::new(), Flow::normal());
+        let mut transfer = LoopTransfer {
+            analyzer: self,
+            predicate,
+            statements,
+            predicate_truthy,
+            abrupt: OutcomeTypes::default(),
+            break_type: Type::Never,
+            terminal_flow: Flow::empty(),
+        };
+        let worklist = cfg::transfer::run(loop_graph(), &mut transfer, initial)
+            .expect("the synthetic loop CFG is valid");
+        let abrupt = transfer.abrupt.clone();
+        let break_type = transfer.break_type.clone();
+        let terminal_flow = transfer.terminal_flow;
+        drop(transfer);
+        let head_environment = worklist
+            .states
+            .get(cfg::BlockId(1).0 as usize)
+            .and_then(Option::as_ref)
+            .map(|state| state.environment.clone())
+            .unwrap_or_else(|| entry.clone());
+        let mut result_environment = entry.join(&head_environment);
+        if let Some(exit_environment) = worklist
+            .states
+            .get(cfg::BlockId(3).0 as usize)
+            .and_then(Option::as_ref)
+            .map(|state| state.environment.clone())
+        {
+            result_environment = result_environment.join(&exit_environment);
+        }
+        *environment = result_environment;
+        let mut result = Eval::from_parts(
+            Some(Type::union([Type::Nil, break_type])),
+            abrupt,
+            Flow::normal().union(terminal_flow),
+        );
+        let type_ = self.apply_inline_assertion(node, result.type_.clone());
+        result.type_ = self.record(node, type_);
+        result
     }
 
     pub(super) fn eval_if_dispatch<'node>(
