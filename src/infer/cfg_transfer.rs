@@ -1,5 +1,6 @@
-use super::{Analyzer, Environment, Eval, Flow, FlowKind, HirCallView};
+use super::{Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, SharedKey};
 use crate::cfg;
+use crate::hir::{ExprKind, Literal, Read};
 use crate::prism;
 use crate::types::Type;
 use ruby_prism::{IfNode, Node};
@@ -51,6 +52,116 @@ impl BlockState {
 }
 
 impl<'src> Analyzer<'src> {
+    /// Transfer value-producing HIR operations whose semantics do not depend
+    /// on a method dispatch. The Prism node is retained only for source
+    /// recording and inline assertions; the operation kind and read place
+    /// come from owned HIR.
+    pub(super) fn eval_cfg_value_dispatch<'node>(
+        &mut self,
+        node: &Node<'node>,
+        environment: &mut Environment,
+    ) -> Option<Eval> {
+        let kind = self.hir_value_kind_for_node(node)?;
+        match kind {
+            ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => {
+                self.cfg_transfer_values = self.cfg_transfer_values.saturating_add(1);
+                Some(self.transfer_cfg_value(node, kind, environment))
+            }
+            _ => None,
+        }
+    }
+
+    fn hir_value_kind_for_node(&self, node: &Node<'_>) -> Option<ExprKind> {
+        let span = prism::span(node);
+        let expression_id = self.hir_value_ids.get(&span)?;
+        let expression = self.hir_program.expression(*expression_id)?;
+        match &expression.kind {
+            ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => {
+                Some(expression.kind.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn transfer_cfg_value<'node>(
+        &mut self,
+        node: &Node<'node>,
+        kind: ExprKind,
+        environment: &mut Environment,
+    ) -> Eval {
+        let type_ = match kind {
+            ExprKind::Nil => Type::Nil,
+            ExprKind::Literal(literal) => Self::cfg_literal_type(&literal),
+            ExprKind::Read(read) => self.transfer_cfg_read(node, read, environment),
+            _ => unreachable!("non-value HIR operation reached CFG value transfer"),
+        };
+        Eval::value(self.record(node, type_))
+    }
+
+    fn cfg_literal_type(literal: &Literal) -> Type {
+        match literal {
+            Literal::Nil => Type::Nil,
+            Literal::True => Type::True,
+            Literal::False => Type::False,
+            Literal::Integer(_) => Type::Integer,
+            Literal::Float(_) => Type::Float,
+            Literal::Rational(_) => Type::named("Rational"),
+            Literal::Imaginary(_) => Type::named("Complex"),
+            Literal::String(_) | Literal::XString(_) => Type::String,
+            Literal::Symbol(_) => Type::Symbol,
+            Literal::RegularExpression(_) => Type::named("Regexp"),
+        }
+    }
+
+    fn transfer_cfg_read(
+        &mut self,
+        node: &Node<'_>,
+        read: Read,
+        environment: &mut Environment,
+    ) -> Type {
+        match read {
+            Read::Local(local) => {
+                let name = self
+                    .hir_program
+                    .local_name(local)
+                    .map_or_else(String::new, |name| name.as_str().to_owned());
+                self.apply_inline_assertion_in_environment(
+                    node,
+                    environment.get(&name),
+                    environment,
+                )
+            }
+            Read::InstanceVariable(name) => {
+                let actual = self.ivar_type(environment, name.as_str());
+                self.apply_inline_assertion_in_environment(node, actual, environment)
+            }
+            Read::ClassVariable(name) => {
+                let actual = self.class_var_type(environment, name.as_str());
+                self.apply_inline_assertion(node, actual)
+            }
+            Read::Global(name) => {
+                let name = name.as_str().to_owned();
+                self.record_shared_read(SharedKey::Global(name.clone()), environment);
+                self.apply_inline_assertion(
+                    node,
+                    self.globals.get(&name).cloned().unwrap_or(Type::Any),
+                )
+            }
+            Read::Constant(path) => {
+                let name = path.as_str().to_owned();
+                let actual = self.constant_type(environment, &name);
+                self.report_missing_constant_if_needed(node, environment, &name);
+                self.apply_inline_assertion(node, actual)
+            }
+            Read::SelfValue => self.apply_inline_assertion(node, environment.self_type.clone()),
+            Read::Numbered(number) => {
+                self.apply_inline_assertion(node, environment.get(&format!("_{number}")))
+            }
+            Read::It => self.apply_inline_assertion(node, environment.get("it")),
+            Read::BackReference(_) => self.apply_inline_assertion(node, Type::Any),
+        }
+    }
+
     pub(super) fn has_cfg_call_operation(&self, node: &Node<'_>) -> bool {
         self.cfg_index
             .as_ref()

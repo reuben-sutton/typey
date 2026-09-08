@@ -1240,6 +1240,7 @@ pub(crate) fn check_with_policies(
         .then(|| cfg::CfgIndex::from_program(&hir_program));
     let mut hir_call_ids = HashMap::new();
     let mut hir_assignment_ids = HashMap::new();
+    let mut hir_value_ids = HashMap::new();
     for (index, expression) in hir_program.expressions.iter().enumerate() {
         let span = (expression.span.start as usize, expression.span.end as usize);
         match &expression.kind {
@@ -1250,6 +1251,11 @@ pub(crate) fn check_with_policies(
             }
             hir::ExprKind::Assign { .. } => {
                 hir_assignment_ids
+                    .entry(span)
+                    .or_insert(hir::ExprId(index as u32));
+            }
+            hir::ExprKind::Nil | hir::ExprKind::Literal(_) | hir::ExprKind::Read(_) => {
+                hir_value_ids
                     .entry(span)
                     .or_insert(hir::ExprId(index as u32));
             }
@@ -1285,6 +1291,7 @@ pub(crate) fn check_with_policies(
         cfg_index,
         hir_call_ids,
         hir_assignment_ids,
+        hir_value_ids,
         line_map: prism::LineMap::new(bytes),
         has_inline_assertions: !annotations.assertions.is_empty(),
         annotations,
@@ -1320,6 +1327,7 @@ pub(crate) fn check_with_policies(
         cfg_transfer_calls: 0,
         cfg_transfer_assignments: 0,
         cfg_transfer_conditionals: 0,
+        cfg_transfer_values: 0,
         cfg_transfer_fallbacks: 0,
     };
     let result = analyzer.run(&root);
@@ -1342,6 +1350,7 @@ struct Analyzer<'src> {
     cfg_index: Option<cfg::CfgIndex>,
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
+    hir_value_ids: HashMap<(usize, usize), hir::ExprId>,
     line_map: prism::LineMap,
     has_inline_assertions: bool,
     annotations: AnnotationTable,
@@ -1377,6 +1386,7 @@ struct Analyzer<'src> {
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
     cfg_transfer_conditionals: usize,
+    cfg_transfer_values: usize,
     cfg_transfer_fallbacks: usize,
 }
 
@@ -2014,10 +2024,11 @@ impl<'src> Analyzer<'src> {
         });
         if self.config.debug {
             eprintln!(
-                "[typey] CFG transfers: {} calls, {} assignments, {} conditionals, {} legacy fallbacks",
+                "[typey] CFG transfers: {} calls, {} assignments, {} conditionals, {} values, {} legacy fallbacks",
                 self.cfg_transfer_calls,
                 self.cfg_transfer_assignments,
                 self.cfg_transfer_conditionals,
+                self.cfg_transfer_values,
                 self.cfg_transfer_fallbacks
             );
             eprintln!(
@@ -3029,6 +3040,11 @@ impl<'src> Analyzer<'src> {
                 self.substitution_context = previous_substitution_context;
             }
             return Eval::value(self.record(node, Type::Nil));
+        }
+        if self.config.enable_cfg {
+            if let Some(result) = self.eval_cfg_value_dispatch(node, environment) {
+                return result;
+            }
         }
         if let Some((target, value, operator)) = self.hir_assignment_for_node(node) {
             if self.config.enable_cfg && self.has_cfg_assignment_operation(node) {
