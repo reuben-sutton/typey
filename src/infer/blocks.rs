@@ -783,7 +783,11 @@ impl<'src> Analyzer<'src> {
             {
                 let expected_for_check =
                     Self::unresolved_block_type_as_anything(&expected_block_signature);
-                if !self.is_assignable(&actual_block_signature, &expected_for_check) {
+                if !Self::passed_block_is_assignable(
+                    self,
+                    &actual_block_signature,
+                    &expected_for_check,
+                ) {
                     self.error(
                         block,
                         format!(
@@ -1031,6 +1035,23 @@ impl<'src> Analyzer<'src> {
         arguments.argument_indices = (0..arguments.argument_types.len()).collect();
         arguments.positional_indices = (0..arguments.positional_types.len()).collect();
         arguments
+    }
+
+    fn passed_block_is_assignable(analyzer: &Analyzer<'_>, actual: &Type, expected: &Type) -> bool {
+        let Some((expected_parameters, expected_return)) = proc_parts(expected) else {
+            return analyzer.is_assignable(actual, expected);
+        };
+        let Some((_, actual_return)) = proc_parts(actual) else {
+            return false;
+        };
+        if expected_parameters.is_empty() {
+            // A block contract such as `T.proc.returns(String)` does not
+            // constrain the block's arity. This is also how an inferred
+            // method's unannotated `&block` is represented.
+            analyzer.is_assignable(actual_return, expected_return)
+        } else {
+            analyzer.is_assignable(actual, expected)
+        }
     }
 
     fn eval_symbol_passed_block_fallback(
