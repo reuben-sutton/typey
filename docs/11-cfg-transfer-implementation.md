@@ -13,12 +13,16 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
 * A successor is requeued only when the host reports a changed joined state.
 * Invalid entry and successor IDs are rejected explicitly.
 * Unit coverage exercises branch joins, unreachable blocks, and invalid edges.
+* `2d5ae3d` added the inference-side `BlockState`. It owns block value slots,
+  environment joins, and abrupt-flow joins; CFG conditional joins now use it
+  instead of reaching back to the monolithic evaluator's environment helper.
+  Tests cover normal/abrupt merges, two-normal joins, and missing values.
 
 ## Next boundary
 
-The analyzer still uses its recursive evaluator for operation semantics. The
-next implementation should introduce a transfer-owned `BlockState` and adapt
-the existing `Environment`/`Eval` lattice to `BlockTransfer`, first for
-constants, reads, writes, closures, and ordinary calls. The recursive path
-must remain available for differential checks until each operation and
-terminator has an equivalent transfer.
+The analyzer still uses its recursive evaluator for operation semantics and
+the state is not yet driven by the generic worklist for complete bodies. The
+next implementation should add `BodyContext` and a transfer host that adapts
+`BlockState` to `BlockTransfer`, first for constants, reads, writes, closures,
+and ordinary calls. The recursive path must remain available for differential
+checks until each operation and terminator has an equivalent transfer.

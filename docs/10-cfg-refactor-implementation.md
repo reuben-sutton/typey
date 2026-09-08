@@ -26,9 +26,9 @@ recursive evaluator remains the compatibility baseline.
 * The current work records owned conditional regions and transfers `if`
   branches and joins through those regions while retaining the existing flow
   lattice and source-node child evaluation.
-* The CFG performance pass moved operation indexing out of the analyzer. The
-  index now streams one body graph at a time and does not retain a Prism-node
-  index or per-body expression-value vectors during repository analysis.
+* `dfe6009` removed avoidable CFG-index work. Index-only lowering no longer
+  builds the full expression span map or clones call names, while full graph
+  construction retains expression identity for structural consumers.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -48,10 +48,11 @@ CFG-enabled checker regressions cover ordinary calls, local and instance
 writes, attribute setters, loop/rescue fixtures, safe navigation, branches,
 compound assignments, and source identity. The default checker remains at
 baseline performance because CFG construction is not yet enabled by default.
-On the local release benchmark, Spoom took about 1.88s on the legacy path and
-2.55s with `--cfg`; the CFG path produces the same three classified
-diagnostics. The remaining overhead is graph/index construction and the still
-bridged transfer path, not repository discovery.
+On the local release benchmark, Spoom took about 2.12s on the legacy path and
+1.85s with `--cfg` in the latest run; both paths produced the same three
+classified diagnostics. The measurements are close enough that the CFG index
+is no longer an unexplained repository-level regression. The remaining
+transfer boundary is semantic ownership, not an observed indexing hotspot.
 
 ## Remaining migration boundary
 
