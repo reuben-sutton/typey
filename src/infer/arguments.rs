@@ -1,6 +1,6 @@
 use super::{
-    Analyzer, CallArgumentEvaluation, CallArgumentInput, CallArguments, Environment, Eval, Flow,
-    FlowKind, KeywordArgument, KeywordArgumentInput, OutcomeTypes,
+    prism, Analyzer, CallArgumentEvaluation, CallArgumentInput, CallArguments, Environment, Eval,
+    Flow, FlowKind, KeywordArgument, KeywordArgumentInput, OutcomeTypes, SourceSite,
 };
 use crate::types::Type;
 use ruby_prism::Node;
@@ -56,9 +56,11 @@ impl<'src> Analyzer<'src> {
                                     String::from_utf8_lossy(symbol.unescaped()).into_owned()
                                 })
                             }) {
+                                let site = SourceSite::from_prism_span(prism::span(&value_node));
                                 keyword_arguments.push(KeywordArgument {
                                     name,
-                                    node: value_node,
+                                    node: Some(value_node),
+                                    site,
                                     type_: value_result.type_,
                                 });
                             } else {
@@ -101,6 +103,7 @@ impl<'src> Analyzer<'src> {
                         let type_ = self.record(&node, type_);
                         evaluated.argument_types.push(type_);
                         evaluated.argument_indices.push(argument_index);
+                        evaluated.keyword_hash_indices.push(argument_index);
                         evaluated.keyword_arguments.extend(keyword_arguments);
                         abrupt = abrupt.join(&child_abrupt);
                         abrupt_flow = abrupt_flow.union(child_flow.without(FlowKind::Normal));
@@ -151,6 +154,11 @@ impl<'src> Analyzer<'src> {
             }
         }
 
+        evaluated.argument_sites = evaluated
+            .argument_nodes
+            .iter()
+            .map(|node| SourceSite::from_prism_span(prism::span(node)))
+            .collect();
         CallArgumentEvaluation {
             arguments: evaluated,
             abrupt,

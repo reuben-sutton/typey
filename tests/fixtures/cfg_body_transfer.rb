@@ -70,6 +70,10 @@ class CfgBodyTransfer
     values.map(&processor)
   end
 
+  def symbol_block
+    [1, 2].map(&:to_s)
+  end
+
   def plain_begin
     begin
       value = 1
@@ -132,6 +136,7 @@ CfgBodyTransfer.new.value
 T.reveal_type(CfgBodyTransfer.new.safe_navigation("text")) # note: Revealed type: `T.nilable(String)`
 T.reveal_type(CfgBodyTransfer.new.inline_block) # note: Revealed type: `T::Array[String]`
 T.reveal_type(CfgBodyTransfer.new.passed_block) # note: Revealed type: `T::Array[String]`
+T.reveal_type(CfgBodyTransfer.new.symbol_block) # note: Revealed type: `T::Array[String]`
 T.reveal_type(CfgBodyTransfer.new.plain_begin) # note: Revealed type: `String`
 T.reveal_type(CfgSuperChild.new.render) # note: Revealed type: `String`
 T.reveal_type(CfgForwardChild.new.render(1)) # note: Revealed type: `String`

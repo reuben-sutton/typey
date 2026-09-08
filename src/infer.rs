@@ -38,8 +38,8 @@ mod type_system;
 
 use call_types::{
     hir_call_argument_inputs, prism_call_argument_inputs, CallArgumentEvaluation,
-    CallArgumentInput, CallArguments, CallNodeIndex, CallSite, HirCallView, IndexAccess,
-    KeywordArgument, KeywordArgumentInput, OwnedCallInput,
+    CallArgumentInput, CallArguments, CallSite, HirCallView, IndexAccess, KeywordArgument,
+    KeywordArgumentInput, OwnedCallInput,
 };
 use cfg_transfer::{CfgFallbackCounters, CfgFallbackKind};
 use declarations::{DeclarationState, MethodRegistrar};
@@ -3134,11 +3134,13 @@ impl<'src> Analyzer<'src> {
             let positional_types = types.clone();
             CallArguments {
                 argument_nodes: Vec::new(),
+                argument_sites: Vec::new(),
                 argument_types: types,
                 argument_indices: Vec::new(),
                 positional_indices: Vec::new(),
                 positional_types,
                 keyword_arguments: Vec::new(),
+                keyword_hash_indices: Vec::new(),
                 has_keyword_splat: false,
                 has_dynamic_positional_splat: false,
                 dynamic_positional_splat_types: Vec::new(),
@@ -4381,6 +4383,23 @@ impl<'src> Analyzer<'src> {
             return Type::Any;
         };
         let name = String::from_utf8_lossy(symbol.unescaped()).into_owned();
+        self.eval_symbol_passed_block_named(
+            Some(node),
+            SourceSite::from_prism_span(prism::span(node)),
+            &name,
+            expected,
+            environment,
+        )
+    }
+
+    fn eval_symbol_passed_block_named(
+        &mut self,
+        node: Option<&Node<'_>>,
+        site: SourceSite,
+        name: &str,
+        expected: &Type,
+        environment: &mut Environment,
+    ) -> Type {
         let Some((parameters, _)) = proc_parts(expected) else {
             return Type::Any;
         };
@@ -4421,8 +4440,9 @@ impl<'src> Analyzer<'src> {
         }
 
         if !signature.accepts_rest && positional.len() > signature.params.len() {
-            self.error(
+            self.error_at_or_node(
                 node,
+                site,
                 format!(
                     "Too many positional arguments provided for method `{method}`. Expected: `{}`, got: `{}`",
                     signature.params.len(),
@@ -4433,8 +4453,9 @@ impl<'src> Analyzer<'src> {
         for (index, actual) in positional.iter().enumerate() {
             if let Some(expected) = signature.positional_type(index, positional.len()) {
                 if !self.is_assignable(actual, expected) {
-                    self.error(
+                    self.error_at_or_node(
                         node,
+                        site,
                         format!(
                             "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
                         ),
@@ -4445,16 +4466,18 @@ impl<'src> Analyzer<'src> {
         for (name, parameter) in &signature.keywords {
             let Some(actual) = keywords.get(name) else {
                 if parameter.required {
-                    self.error(
+                    self.error_at_or_node(
                         node,
+                        site,
                         format!("Missing required keyword argument `{name}` for method `{method}`"),
                     );
                 }
                 continue;
             };
             if !self.is_assignable(actual, &parameter.type_) {
-                self.error(
+                self.error_at_or_node(
                     node,
+                    site,
                     format!(
                         "Expected `{}` but found `{actual}` for argument `{name}`",
                         parameter.type_
@@ -4476,6 +4499,14 @@ impl<'src> Analyzer<'src> {
             &BTreeMap::new(),
             &signature.type_parameters,
         )
+    }
+
+    fn error_at_or_node(&mut self, node: Option<&Node<'_>>, site: SourceSite, message: String) {
+        if let Some(node) = node {
+            self.error(node, message);
+        } else {
+            self.error_at(site, message);
+        }
     }
 
     fn select_overload(

@@ -11,50 +11,13 @@ use crate::hir;
 use crate::prism;
 use crate::signature::MethodSig;
 use crate::types::Type;
-use ruby_prism::{ArgumentsNode, CallNode, Node, Visit};
+use ruby_prism::{ArgumentsNode, CallNode, Node};
 use std::collections::HashMap;
 
 pub(super) struct CallSite<'a, 'node> {
     pub(super) argument_nodes: &'a [Node<'node>],
     pub(super) argument_types: &'a [Type],
     pub(super) block: Option<&'a Node<'node>>,
-}
-
-/// Compatibility lookup for the exact Prism call node used by legacy
-/// diagnostics and builtin hooks. CFG transfer otherwise consumes owned HIR
-/// and CFG operands; this index is deliberately kept in the call adapter.
-#[derive(Default)]
-pub(super) struct CallNodeIndex<'node> {
-    nodes: HashMap<(usize, usize), Vec<Node<'node>>>,
-}
-
-impl<'node> Visit<'node> for CallNodeIndex<'node> {
-    fn visit_branch_node_enter(&mut self, node: Node<'node>) {
-        let span = prism::span(&node);
-        self.nodes.entry(span).or_default().push(node);
-    }
-
-    fn visit_leaf_node_enter(&mut self, node: Node<'node>) {
-        let span = prism::span(&node);
-        self.nodes.entry(span).or_default().push(node);
-    }
-}
-
-impl<'node> CallNodeIndex<'node> {
-    pub(super) fn visit_body(&mut self, node: &Node<'node>) {
-        self.visit(node);
-    }
-
-    pub(super) fn contains_span(&self, span: (usize, usize)) -> bool {
-        self.nodes.contains_key(&span)
-    }
-
-    pub(super) fn call_node(&self, span: (usize, usize)) -> Option<&Node<'node>> {
-        self.nodes
-            .get(&span)?
-            .iter()
-            .find(|node| node.as_call_node().is_some() || node.as_super_node().is_some())
-    }
 }
 
 /// The owned semantic input consumed by CFG call transfer. Parser nodes are
@@ -74,6 +37,7 @@ pub(super) struct OwnedCallInput {
 #[derive(Clone, Debug)]
 struct OwnedKeywordArgument {
     name: String,
+    name_site: SourceSite,
     type_: Type,
     argument_index: usize,
     entry_index: usize,
@@ -83,13 +47,14 @@ struct OwnedKeywordArgument {
 /// `CallArguments` shape is materialized only after this has been computed,
 /// when parser nodes are needed for an exact diagnostic or builtin hook.
 #[derive(Clone, Debug, Default)]
-struct OwnedCallArguments {
+pub(super) struct OwnedCallArguments {
     argument_sites: Vec<SourceSite>,
     argument_types: Vec<Type>,
     argument_indices: Vec<usize>,
     positional_indices: Vec<usize>,
     positional_types: Vec<Type>,
     keyword_arguments: Vec<OwnedKeywordArgument>,
+    keyword_hash_indices: Vec<usize>,
     has_keyword_splat: bool,
     has_dynamic_positional_splat: bool,
     dynamic_positional_splat_types: Vec<Type>,
@@ -134,17 +99,20 @@ impl OwnedCallArguments {
             let value_node = value_node.value();
             keyword_arguments.push(KeywordArgument {
                 name: argument.name,
-                node: value_node,
+                node: Some(value_node),
+                site: argument.name_site,
                 type_: argument.type_,
             });
         }
         Some(CallArguments {
             argument_nodes: raw_argument_nodes,
+            argument_sites: self.argument_sites,
             argument_types: self.argument_types,
             argument_indices: self.argument_indices,
             positional_indices: self.positional_indices,
             positional_types: self.positional_types,
             keyword_arguments,
+            keyword_hash_indices: self.keyword_hash_indices,
             has_keyword_splat: self.has_keyword_splat,
             has_dynamic_positional_splat: self.has_dynamic_positional_splat,
             dynamic_positional_splat_types: self.dynamic_positional_splat_types,
@@ -153,6 +121,37 @@ impl OwnedCallArguments {
             has_unknown_keyword_splat: self.has_unknown_keyword_splat,
             forwards_arguments: self.forwards_arguments,
         })
+    }
+
+    pub(super) fn into_call_arguments<'node>(self) -> CallArguments<'node> {
+        let argument_sites = self.argument_sites;
+        let keyword_arguments = self
+            .keyword_arguments
+            .into_iter()
+            .map(|argument| KeywordArgument {
+                name: argument.name,
+                node: None,
+                site: argument.name_site,
+                type_: argument.type_,
+            })
+            .collect();
+        CallArguments {
+            argument_nodes: Vec::new(),
+            argument_sites,
+            argument_types: self.argument_types,
+            argument_indices: self.argument_indices,
+            positional_indices: self.positional_indices,
+            positional_types: self.positional_types,
+            keyword_arguments,
+            keyword_hash_indices: self.keyword_hash_indices,
+            has_keyword_splat: self.has_keyword_splat,
+            has_dynamic_positional_splat: self.has_dynamic_positional_splat,
+            dynamic_positional_splat_types: self.dynamic_positional_splat_types,
+            has_dynamic_keyword_splat: self.has_dynamic_keyword_splat,
+            has_unknown_positional_splat: self.has_unknown_positional_splat,
+            has_unknown_keyword_splat: self.has_unknown_keyword_splat,
+            forwards_arguments: self.forwards_arguments,
+        }
     }
 }
 
@@ -382,10 +381,10 @@ pub(super) fn hir_call_argument_inputs<'node>(
 }
 
 impl<'src> Analyzer<'src> {
-    pub(super) fn cfg_yield_result<'node>(
+    pub(super) fn cfg_yield_result(
         &mut self,
-        _node: &Node<'node>,
-        arguments: &CallArguments<'node>,
+        site: SourceSite,
+        arguments: &CallArguments<'_>,
         environment: &mut super::Environment,
     ) -> Option<Type> {
         let key = environment.method_key.clone()?;
@@ -403,9 +402,18 @@ impl<'src> Analyzer<'src> {
             for (index, actual) in arguments.argument_types.iter().enumerate() {
                 if let Some(expected) = expected.get(index) {
                     if !self.is_assignable(actual, expected) {
+                        let argument_site =
+                            arguments.argument_sites.get(index).copied().unwrap_or(site);
                         if let Some(argument) = arguments.argument_nodes.get(index) {
                             self.error(
                                 argument,
+                                format!(
+                                    "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
+                                ),
+                            );
+                        } else {
+                            self.error_at(
+                                argument_site,
                                 format!(
                                     "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
                                 ),
@@ -445,6 +453,17 @@ impl<'src> Analyzer<'src> {
             ),
             cfg::BlockOperand::Passed(value) => {
                 let expected = signature.block.as_ref().and_then(optional_proc_type);
+                if let (Some(expected), Some(name)) =
+                    (expected.as_ref(), self.cfg_passed_symbol_name(input))
+                {
+                    return Some(self.eval_symbol_passed_block_named(
+                        None,
+                        input.site,
+                        &name,
+                        expected,
+                        environment,
+                    ));
+                }
                 if let (Some(block), Some(expected)) = (block_node, expected.as_ref()) {
                     if block
                         .as_block_argument_node()
@@ -461,6 +480,23 @@ impl<'src> Analyzer<'src> {
                     .and_then(proc_parts)
                     .map(|(_, result)| result.clone())
             }
+        }
+    }
+
+    fn cfg_passed_symbol_name(&self, input: &OwnedCallInput) -> Option<String> {
+        let expression = input
+            .expression
+            .and_then(|expression| self.hir_program.expression(expression))?;
+        let hir::ExprKind::Call(call) = &expression.kind else {
+            return None;
+        };
+        let hir::BlockArgument::Passed(block) = call.block.as_ref()? else {
+            return None;
+        };
+        let expression = self.hir_program.expression(*block)?;
+        match &expression.kind {
+            hir::ExprKind::Literal(hir::Literal::Symbol(name)) => Some(name.clone()),
+            _ => None,
         }
     }
 
@@ -483,7 +519,7 @@ impl<'src> Analyzer<'src> {
         owned.materialize(self, node)
     }
 
-    fn cfg_owned_hir_call_arguments(
+    pub(super) fn cfg_owned_hir_call_arguments(
         &mut self,
         input: &OwnedCallInput,
         call: &hir::Call,
@@ -546,11 +582,16 @@ impl<'src> Analyzer<'src> {
                     )
                 })
             {
+                call_arguments.keyword_hash_indices.push(argument_index);
                 let mut key = Type::Never;
                 let mut value = Type::Never;
                 for (entry_index, argument) in group.iter().enumerate() {
                     match argument {
-                        hir::Argument::Keyword { name, value: _ } => {
+                        hir::Argument::Keyword {
+                            name,
+                            name_span,
+                            value: _,
+                        } => {
                             let cfg::ArgumentOperand::Keyword {
                                 name: operand_name,
                                 value: cfg_value_id,
@@ -564,8 +605,11 @@ impl<'src> Analyzer<'src> {
                             }
                             key = key.join(&Type::Symbol);
                             value = value.join(&type_);
+                            let name_site = SourceSite::from_span(*name_span, None);
+                            self.record_at(name_site, Type::Symbol, false, None);
                             call_arguments.keyword_arguments.push(OwnedKeywordArgument {
                                 name: name.as_str().to_owned(),
+                                name_site,
                                 type_,
                                 argument_index,
                                 entry_index,
@@ -669,6 +713,7 @@ impl<'src> Analyzer<'src> {
     ) -> Option<CallArguments<'node>> {
         let mut call_arguments = CallArguments::default();
         for (argument_index, argument) in input.arguments.iter().enumerate() {
+            call_arguments.argument_sites.push(input.site);
             match argument {
                 cfg::ArgumentOperand::Positional(value) => {
                     let type_ = values.get(value.0 as usize).cloned().flatten()?;
@@ -705,6 +750,7 @@ impl<'src> Analyzer<'src> {
                     let type_ = values.get(value.0 as usize).cloned().flatten()?;
                     call_arguments.argument_types.push(type_);
                     call_arguments.argument_indices.push(argument_index);
+                    call_arguments.keyword_hash_indices.push(argument_index);
                 }
                 cfg::ArgumentOperand::KeywordSplat(value) => {
                     let type_ = values.get(value.0 as usize).cloned().flatten()?;
@@ -722,6 +768,7 @@ impl<'src> Analyzer<'src> {
                         }
                     }
                     call_arguments.argument_indices.push(argument_index);
+                    call_arguments.keyword_hash_indices.push(argument_index);
                 }
                 cfg::ArgumentOperand::Forwarded => return None,
             }
@@ -759,18 +806,21 @@ pub(super) enum KeywordArgumentInput<'node> {
 
 pub(super) struct KeywordArgument<'node> {
     pub(super) name: String,
-    pub(super) node: Node<'node>,
+    pub(super) node: Option<Node<'node>>,
+    pub(super) site: SourceSite,
     pub(super) type_: Type,
 }
 
 #[derive(Default)]
 pub(super) struct CallArguments<'node> {
     pub(super) argument_nodes: Vec<Node<'node>>,
+    pub(super) argument_sites: Vec<SourceSite>,
     pub(super) argument_types: Vec<Type>,
     pub(super) argument_indices: Vec<usize>,
     pub(super) positional_indices: Vec<usize>,
     pub(super) positional_types: Vec<Type>,
     pub(super) keyword_arguments: Vec<KeywordArgument<'node>>,
+    pub(super) keyword_hash_indices: Vec<usize>,
     pub(super) has_keyword_splat: bool,
     pub(super) has_dynamic_positional_splat: bool,
     pub(super) dynamic_positional_splat_types: Vec<Type>,

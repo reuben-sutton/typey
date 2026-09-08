@@ -1,8 +1,15 @@
-use super::{name_matches, Analyzer, CallArguments};
+use super::{name_matches, Analyzer, CallArguments, SourceSite};
+use crate::prism;
 use crate::signature::MethodSig;
 use crate::types::Type;
 use ruby_prism::Node;
 use std::collections::BTreeSet;
+
+#[derive(Clone, Copy)]
+enum SignatureDiagnosticSite<'a, 'node> {
+    Node(&'a Node<'node>),
+    Source(SourceSite),
+}
 
 impl<'src> Analyzer<'src> {
     pub(super) fn invoke_signature<'node>(
@@ -14,6 +21,73 @@ impl<'src> Analyzer<'src> {
         receiver_type: Option<&Type>,
         block_return_type: Option<&Type>,
     ) -> Type {
+        self.invoke_signature_at_site(
+            SignatureDiagnosticSite::Node(node),
+            name,
+            signature,
+            arguments,
+            receiver_type,
+            block_return_type,
+        )
+    }
+
+    pub(super) fn invoke_signature_at(
+        &mut self,
+        site: SourceSite,
+        name: &str,
+        signature: &MethodSig,
+        arguments: &CallArguments<'_>,
+        receiver_type: Option<&Type>,
+        block_return_type: Option<&Type>,
+    ) -> Type {
+        self.invoke_signature_at_site(
+            SignatureDiagnosticSite::Source(site),
+            name,
+            signature,
+            arguments,
+            receiver_type,
+            block_return_type,
+        )
+    }
+
+    fn signature_error(
+        &mut self,
+        site: SignatureDiagnosticSite<'_, '_>,
+        message: impl Into<String>,
+    ) {
+        match site {
+            SignatureDiagnosticSite::Node(node) => self.error(node, message),
+            SignatureDiagnosticSite::Source(site) => self.error_at(site, message),
+        }
+    }
+
+    fn signature_check_assignable(
+        &mut self,
+        site: SignatureDiagnosticSite<'_, '_>,
+        actual: &Type,
+        expected: &Type,
+    ) {
+        match site {
+            SignatureDiagnosticSite::Node(node) => self.check_assignable(node, actual, expected),
+            SignatureDiagnosticSite::Source(site) => {
+                self.check_assignable_at(site, actual, expected)
+            }
+        }
+    }
+
+    fn invoke_signature_at_site<'node>(
+        &mut self,
+        diagnostic_site: SignatureDiagnosticSite<'_, 'node>,
+        name: &str,
+        signature: &MethodSig,
+        arguments: &CallArguments<'node>,
+        receiver_type: Option<&Type>,
+        block_return_type: Option<&Type>,
+    ) -> Type {
+        let source_site = match diagnostic_site {
+            SignatureDiagnosticSite::Node(node) => SourceSite::from_prism_span(prism::span(node)),
+            SignatureDiagnosticSite::Source(site) => site,
+        };
         let mut type_parameter_bindings =
             self.infer_type_parameter_bindings(signature, arguments, block_return_type);
         type_parameter_bindings.extend(self.infer_generic_member_bindings(
@@ -47,7 +121,7 @@ impl<'src> Analyzer<'src> {
                 for splat_type in &arguments.dynamic_positional_splat_types {
                     if let Some(element) = Self::dynamic_splat_element_type(splat_type) {
                         if !self.is_assignable(&element, &expected) {
-                            self.check_assignable(node, &element, &expected);
+                            self.signature_check_assignable(diagnostic_site, &element, &expected);
                         }
                     } else {
                         dynamic_splat_shape_error = true;
@@ -57,15 +131,15 @@ impl<'src> Analyzer<'src> {
                 dynamic_splat_shape_error = true;
             }
             if dynamic_splat_shape_error {
-                self.error(
-                    node,
+                self.signature_error(
+                    diagnostic_site,
                     "Splats are only supported where the size of the array is known statically",
                 );
             }
         }
         if arguments.has_dynamic_keyword_splat && !signature.accepts_keyword_rest {
-            self.error(
-                node,
+            self.signature_error(
+                diagnostic_site,
                 "Keyword args with splats are only supported where the shape of the hash is known statically",
             );
         }
@@ -95,14 +169,17 @@ impl<'src> Analyzer<'src> {
 
         if self.checking_initializer {
             if argument_types.len() < signature.required_params {
-                self.error(node, "Not enough arguments provided");
+                self.signature_error(diagnostic_site, "Not enough arguments provided");
             } else if !signature.accepts_rest && argument_types.len() > signature.params.len() {
-                self.error(node, "Too many arguments provided");
+                self.signature_error(diagnostic_site, "Too many arguments provided");
             }
             if missing_keywords {
                 for (name, parameter) in &signature.keywords {
                     if parameter.required && !provided_keywords.contains(name.as_str()) {
-                        self.error(node, format!("Missing required keyword argument `{name}`"));
+                        self.signature_error(
+                            diagnostic_site,
+                            format!("Missing required keyword argument `{name}`"),
+                        );
                     }
                 }
             }
@@ -113,19 +190,19 @@ impl<'src> Analyzer<'src> {
                     .is_some_and(|block| matches!(block, Type::Proc(_, _) | Type::BoundProc { .. }))
                 && !self.initializer_has_block
             {
-                self.error(node, "`initialize` requires a block parameter");
+                self.signature_error(diagnostic_site, "`initialize` requires a block parameter");
             }
         } else if name == "new"
             && positional_error
             && argument_types.len() < signature.required_params
         {
             if let Some(owner) = receiver_type.and_then(Self::class_object_owner) {
-                self.error(
-                    node,
+                self.signature_error(
+                    diagnostic_site,
                     format!("Not enough arguments provided for method `{owner}.new`"),
                 );
             } else {
-                self.error(node, "Wrong number of arguments for `new`");
+                self.signature_error(diagnostic_site, "Wrong number of arguments for `new`");
             }
         } else if positional_error || missing_keywords || unknown_keyword {
             let expected = if keyword_mode {
@@ -149,8 +226,8 @@ impl<'src> Analyzer<'src> {
             } else {
                 format!("at least {}", signature.required_params)
             };
-            self.error(
-                node,
+            self.signature_error(
+                diagnostic_site,
                 format!(
                     "Wrong number of arguments for `{name}`: expected {expected}, found {}",
                     argument_types.len() + arguments.keyword_arguments.len()
@@ -168,17 +245,27 @@ impl<'src> Analyzer<'src> {
                 .zip(argument_types)
                 .enumerate()
             {
-                if let (Some(argument), Some(expected)) = (
-                    arguments.argument_nodes.get(*argument_index),
-                    signature.positional_type(index, argument_types.len()),
-                ) {
+                if let Some(expected) = signature.positional_type(index, argument_types.len()) {
                     let expected = self.substitute_signature_type(
                         expected,
                         receiver_type,
                         &type_parameter_bindings,
                         &signature.type_parameters,
                     );
-                    self.check_assignable(argument, actual, &expected);
+                    let site = arguments
+                        .argument_nodes
+                        .get(*argument_index)
+                        .map(|node| SignatureDiagnosticSite::Node(node))
+                        .unwrap_or_else(|| {
+                            SignatureDiagnosticSite::Source(
+                                arguments
+                                    .argument_sites
+                                    .get(*argument_index)
+                                    .copied()
+                                    .unwrap_or(source_site),
+                            )
+                        });
+                    self.signature_check_assignable(site, actual, &expected);
                 }
             }
         } else if !arguments.forwards_arguments
@@ -192,24 +279,31 @@ impl<'src> Analyzer<'src> {
                 .enumerate()
             {
                 if arguments.has_dynamic_keyword_splat
-                    && arguments
-                        .argument_nodes
-                        .get(*argument_index)
-                        .is_some_and(|argument| argument.as_keyword_hash_node().is_some())
+                    && arguments.keyword_hash_indices.contains(argument_index)
                 {
                     continue;
                 }
-                if let (Some(argument), Some(expected)) = (
-                    arguments.argument_nodes.get(*argument_index),
-                    signature.positional_type(index, argument_types.len()),
-                ) {
+                if let Some(expected) = signature.positional_type(index, argument_types.len()) {
                     let expected = self.substitute_signature_type(
                         expected,
                         receiver_type,
                         &type_parameter_bindings,
                         &signature.type_parameters,
                     );
-                    self.check_assignable(argument, actual, &expected);
+                    let site = arguments
+                        .argument_nodes
+                        .get(*argument_index)
+                        .map(|node| SignatureDiagnosticSite::Node(node))
+                        .unwrap_or_else(|| {
+                            SignatureDiagnosticSite::Source(
+                                arguments
+                                    .argument_sites
+                                    .get(*argument_index)
+                                    .copied()
+                                    .unwrap_or(source_site),
+                            )
+                        });
+                    self.signature_check_assignable(site, actual, &expected);
                 }
             }
         }
@@ -222,7 +316,12 @@ impl<'src> Analyzer<'src> {
                         &type_parameter_bindings,
                         &signature.type_parameters,
                     );
-                    self.check_assignable(&argument.node, &argument.type_, &expected);
+                    let site = argument
+                        .node
+                        .as_ref()
+                        .map(SignatureDiagnosticSite::Node)
+                        .unwrap_or(SignatureDiagnosticSite::Source(argument.site));
+                    self.signature_check_assignable(site, &argument.type_, &expected);
                 }
             }
         }

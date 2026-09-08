@@ -1139,6 +1139,7 @@ impl<'src> Lowerer<'src> {
                             name: Name::new(
                                 String::from_utf8_lossy(symbol.unescaped()).into_owned(),
                             ),
+                            name_span: self.span(&assoc.key()),
                             value: self.lower_node(&assoc.value()),
                         });
                     } else {

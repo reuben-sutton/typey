@@ -43,6 +43,19 @@ fn lowers_calls_with_owned_spans_and_argument_shape() {
             .collect::<Vec<_>>(),
         vec!["1", "*values", "flag: 2, **options"]
     );
+    let keyword_name_span = call
+        .1
+        .arguments
+        .iter()
+        .find_map(|argument| match argument {
+            Argument::Keyword { name_span, .. } => Some(name_span),
+            _ => None,
+        })
+        .expect("keyword name span");
+    assert_eq!(
+        &source[keyword_name_span.start as usize..keyword_name_span.end as usize],
+        "flag:"
+    );
     assert!(matches!(
         call.1.block,
         Some(typey::hir::BlockArgument::Passed(_))

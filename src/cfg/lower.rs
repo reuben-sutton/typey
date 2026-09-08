@@ -613,7 +613,7 @@ impl<'program> Builder<'program> {
                 }
                 ArgumentOperand::Splat(flow.value.expect("splat produces a value"))
             }
-            Argument::Keyword { name, value } => {
+            Argument::Keyword { name, value, .. } => {
                 let flow = self.lower_expr(value, block);
                 if !flow.reachable {
                     return None;

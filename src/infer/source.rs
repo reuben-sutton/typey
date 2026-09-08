@@ -21,6 +21,10 @@ impl SourceSite {
         }
     }
 
+    pub(super) const fn from_prism_span(span: (usize, usize)) -> Self {
+        Self::new(span.0, span.1)
+    }
+
     pub(super) const fn from_span(span: hir::Span, expression: Option<hir::ExprId>) -> Self {
         Self {
             start: span.start as usize,

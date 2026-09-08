@@ -22,11 +22,11 @@ transfer spec described. Typey now has:
 The current local gates are 18 CFG tests, 10 HIR tests, 341 checker tests, and
 169 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
-path is still opt-in because the transfer host has two semantic bridges: it
-looks up Prism nodes by source span and it reconstructs call argument shapes
-from Prism children. Conditional and loop regions also still evaluate some
-child bodies through the recursive evaluator. A body containing an unsupported
-operation, an unmapped source operation, or an unwind edge falls back as a
+path is still opt-in because the transfer host has semantic bridges in the
+legacy recursive path: call dispatch and callback observation still use Prism
+children for exact diagnostics and block contracts, while conditional and
+loop regions still evaluate some child bodies recursively. A body containing
+an unsupported operation or an unmigrated callback shape falls back as a
 whole.
 
 The next step is therefore not another scheduler abstraction. It is to make
@@ -110,7 +110,8 @@ The first modularization steps are now in place:
   and loop-target transfer retained by the legacy evaluator;
 * `BodyTransfer` transfers literals, reads, writes, arrays, hashes, and
   pattern values from CFG/HIR payloads without looking up a Prism node;
-* HIR preserves top-level call argument groups and owned source spans;
+* HIR preserves top-level call argument groups, owned source spans, and
+  keyword-name spans;
 * `infer/call_types.rs` owns the parser-backed call boundary, and CFG dispatch
   receives an `OwnedCallInput` containing the call identity and CFG operands;
   and
@@ -118,15 +119,14 @@ The first modularization steps are now in place:
   trees recursively from HIR source sites, rejecting unsupported children
   before evaluation so it can safely fall back without partial state;
 * CFG call shape is first computed as an owned `OwnedCallArguments` value from
-  HIR groups and `BlockState` values; only the final legacy adapter attaches
-  Prism nodes for exact diagnostics and keyword-key recording, so the transfer
-  host no longer reconstructs call shape directly from `CallNode` children;
-* `infer/call_types.rs` owns `CallNodeIndex`, the narrow parser lookup that
-  retains all same-span Prism candidates and selects the semantic call node,
-  so enclosing statement nodes cannot hide a passed block from CFG dispatch;
-  and
-* `MakeClosure` now transfers from its owned `ClosureId` and closure span;
-  nested CFG bodies reuse the containing body's semantic node index, so
+  HIR groups and `BlockState` values. Owned keyword-name spans preserve the
+  source sites needed for symbol recording; the parser adapter remains only
+  for the recursive evaluator's exact diagnostics and builtin hooks;
+* `BodyTransfer` no longer depends on `CallNodeIndex`; its calls, argument
+  shapes, source sites, and closure identities come from owned CFG/HIR data;
+  `HirCallView` remains only as the recursive evaluator's compatibility
+  adapter; and
+* `MakeClosure` transfers from its owned `ClosureId` and closure span, so
   closure creation no longer performs a source-span lookup;
 * ordinary `while`/`until` bodies now pass CFG preflight, including local
   value-carrying `break` and `next`; non-local block outcomes remain explicitly
@@ -151,11 +151,13 @@ The first modularization steps are now in place:
 * retry is lowered to the protected body entry, and synthesized calls such as
   compound-assignment sends use owned CFG operands even without a HIR `Call`.
 
-The remaining bridges are deliberate and measurable: call dispatch still needs
-parser nodes for exact argument diagnostics and builtin hooks, and the
-specialized conditional/loop helpers still consume parser nodes. Removing
-those requires moving their diagnostic and block contracts to owned source
-sites rather than weakening the checker. CFG fallback telemetry now
+The remaining bridges are deliberate and measurable: inline callback blocks
+still preflight to the recursive evaluator until their expected parameter,
+receiver-binding, and return-checking contract is owned; the legacy call
+adapter still needs parser nodes for exact argument diagnostics and builtin
+hooks; and the specialized conditional/loop helpers still consume parser
+nodes. Removing those requires moving their diagnostic and block contracts to
+owned source sites rather than weakening the checker. CFG fallback telemetry now
 distinguishes unsupported operations, unsupported edges, and legacy bridges;
 the latter two categories are wired for the exceptional-control-flow work but
 are not yet populated by the migrated ordinary-body path. Non-local `return`,

@@ -288,7 +288,11 @@ pub enum Receiver {
 pub enum Argument {
     Positional(ExprId),
     Splat(ExprId),
-    Keyword { name: Name, value: ExprId },
+    Keyword {
+        name: Name,
+        name_span: Span,
+        value: ExprId,
+    },
     KeywordSplat(ExprId),
     Forwarded,
 }

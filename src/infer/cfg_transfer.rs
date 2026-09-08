@@ -1,7 +1,7 @@
 use super::cfg_state::{BlockState, BodyContext};
 use super::{
-    ivar_refinement_key, Analyzer, CallNodeIndex, CallSite, Environment, Eval, Flow, FlowKind,
-    HirCallView, OutcomeTypes, OwnedCallInput, SharedKey, SourceSite, UntypedOrigin,
+    ivar_refinement_key, Analyzer, CallSite, Environment, Eval, Flow, FlowKind, HirCallView,
+    OutcomeTypes, OwnedCallInput, SharedKey, SourceSite, UntypedOrigin,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
@@ -46,10 +46,9 @@ impl CfgFallbackCounters {
     }
 }
 
-struct BodyTransfer<'analyzer, 'src, 'node> {
+struct BodyTransfer<'analyzer, 'src> {
     analyzer: &'analyzer mut Analyzer<'src>,
     context: BodyContext,
-    nodes: &'node CallNodeIndex<'node>,
     fixed_array_elements: HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
     normal_type: Type,
     abrupt: OutcomeTypes,
@@ -101,9 +100,15 @@ fn expr_can_transfer(
         ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => true,
         ExprKind::Call(call) => {
             let block_supported = call.block.as_ref().is_none_or(|block| match block {
-                hir::BlockArgument::Inline(closure) => program
-                    .closure(*closure)
-                    .is_some_and(|closure| body_can_transfer(program, closure.body)),
+                hir::BlockArgument::Inline(closure) => {
+                    // Inline callback observation still requires the legacy
+                    // block contract (expected parameters, receiver binding,
+                    // and callback return checking). Do not enter CFG
+                    // transfer until that contract has an owned form; this
+                    // keeps a later fallback transactional.
+                    let _ = closure;
+                    false
+                }
                 hir::BlockArgument::Passed(value) => {
                     expr_can_transfer(program, *value, visiting, loop_depth, local_return)
                 }
@@ -510,7 +515,7 @@ fn loop_graph() -> &'static cfg::Cfg {
     })
 }
 
-impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
+impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
     fn suppress_internal_assignment_record(&self, operation: &cfg::Operation) -> bool {
         let Some(expression) = operation.expression else {
             return false;
@@ -533,7 +538,6 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         analyzer: &mut Analyzer<'src>,
         closure_id: hir::ClosureId,
         outer: &Environment,
-        nodes: &'node CallNodeIndex<'node>,
     ) -> Option<Type> {
         let (body_id, parameters, span) = {
             let closure = analyzer.hir_program.closure(closure_id)?;
@@ -580,12 +584,11 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 closure_environment.bind("it", type_);
             }
         }
-        let body_result = analyzer.eval_cfg_body_with_nodes(
+        let body_result = analyzer.eval_cfg_body_owned(
             SourceSite::from_span(span, None),
             body_id,
             &mut closure_environment,
             false,
-            nodes,
         )?;
         Some(Type::Proc(signature.params, Box::new(body_result.type_)))
     }
@@ -634,14 +637,17 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         }
     }
 
-    fn transfer_call(
+    fn transfer_call<'call_node>(
         analyzer: &mut Analyzer<'src>,
-        node: &Node<'node>,
+        node: Option<&Node<'call_node>>,
         input: OwnedCallInput,
         values: &[Option<Type>],
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
         environment: &mut Environment,
     ) -> Option<Eval> {
+        if node.is_none() && matches!(input.block, Some(cfg::BlockOperand::Inline(_))) {
+            return None;
+        }
         let call = input
             .expression
             .and_then(|expression| analyzer.hir_program.expression(expression))
@@ -650,24 +656,38 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 _ => None,
             });
         let call_arguments = if let Some(call) = call {
-            analyzer.cfg_call_arguments(
-                &input,
-                &call,
-                node,
-                values,
-                fixed_array_elements,
-                environment,
-            )?
+            if let Some(node) = node {
+                analyzer.cfg_call_arguments(
+                    &input,
+                    &call,
+                    node,
+                    values,
+                    fixed_array_elements,
+                    environment,
+                )?
+            } else {
+                analyzer
+                    .cfg_owned_hir_call_arguments(
+                        &input,
+                        &call,
+                        values,
+                        fixed_array_elements,
+                        environment,
+                    )?
+                    .into_call_arguments()
+            }
         } else {
             analyzer.cfg_owned_call_arguments(&input, values, fixed_array_elements)?
         };
 
-        let receiver_node = node.as_call_node().and_then(|call| call.receiver());
+        let receiver_node = node
+            .and_then(|node| node.as_call_node())
+            .and_then(|call| call.receiver());
         let block_node = node
-            .as_call_node()
+            .and_then(|node| node.as_call_node())
             .and_then(|call| call.block())
             .or_else(|| {
-                node.as_super_node()
+                node.and_then(Node::as_super_node)
                     .and_then(|super_node| super_node.block())
             });
         let receiver_type = match &input.receiver {
@@ -686,7 +706,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         };
         let has_block = input.block.is_some();
         let (type_, untyped_origin) = if matches!(input.receiver, cfg::ReceiverOperand::Yield) {
-            let type_ = analyzer.cfg_yield_result(node, &call_arguments, environment)?;
+            let type_ = analyzer.cfg_yield_result(input.site, &call_arguments, environment)?;
             (type_, UntypedOrigin::Propagated)
         } else if matches!(input.receiver, cfg::ReceiverOperand::Super) {
             let key = analyzer.super_method_key(environment.method_key.as_ref()?)?;
@@ -705,8 +725,8 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                     values,
                     environment,
                 );
-                let type_ = analyzer.invoke_signature(
-                    node,
+                let type_ = analyzer.invoke_signature_at(
+                    input.site,
                     input.name.as_str(),
                     &signature,
                     &call_arguments,
@@ -740,8 +760,8 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                     values,
                     environment,
                 );
-                let type_ = analyzer.invoke_signature(
-                    node,
+                let type_ = analyzer.invoke_signature_at(
+                    input.site,
                     input.name.as_str(),
                     &signature,
                     &call_arguments,
@@ -756,6 +776,9 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                     .unwrap_or(UntypedOrigin::InferredMethod);
                 (type_, origin)
             } else {
+                let Some(node) = node else {
+                    return None;
+                };
                 let type_ = analyzer.eval_global_call(
                     node,
                     input.name.as_str(),
@@ -807,8 +830,8 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                             values,
                             environment,
                         );
-                        let type_ = analyzer.invoke_signature(
-                            node,
+                        let type_ = analyzer.invoke_signature_at(
+                            input.site,
                             input.name.as_str(),
                             &signature,
                             &call_arguments,
@@ -830,6 +853,9 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                             .unwrap_or(UntypedOrigin::InferredMethod);
                         (type_, origin)
                     } else {
+                        if node.is_none() {
+                            return None;
+                        }
                         let type_ = analyzer.eval_method_call(
                             &dispatch_receiver,
                             input.name.as_str(),
@@ -844,6 +870,9 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                         (type_, origin)
                     }
                 } else {
+                    if node.is_none() {
+                        return None;
+                    }
                     let type_ = analyzer.eval_method_call(
                         &dispatch_receiver,
                         input.name.as_str(),
@@ -1125,7 +1154,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
     }
 }
 
-impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src, 'node> {
+impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src> {
     type State = BlockState;
     type Error = String;
 
@@ -1139,7 +1168,6 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
         let _strictness = self.context.strictness;
         let mut next = state.clone();
         let mut exception_edges = Vec::new();
-        let nodes = self.nodes;
         for operation in &block.operations {
             let site = SourceSite::from_span(operation.span, operation.expression);
             let type_ = match &operation.kind {
@@ -1168,14 +1196,9 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     Self::transfer_write(self.analyzer, site, place, actual, &mut next.environment)
                 }
                 cfg::OperationKind::Call { .. } => {
-                    let node = nodes
-                        .call_node((operation.span.start as usize, operation.span.end as usize))
-                        .ok_or_else(|| {
-                            format!("missing call Prism node at {:?}", operation.span)
-                        })?;
                     let result = Self::transfer_call(
                         self.analyzer,
-                        node,
+                        None::<&Node<'static>>,
                         OwnedCallInput::from_operation(operation).ok_or_else(|| {
                             format!("missing owned call input at {:?}", operation.span)
                         })?,
@@ -1203,7 +1226,12 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                         }
                     }
                     if !result.flow.contains(FlowKind::Normal) {
-                        self.analyzer.record(node, result.type_.clone());
+                        self.analyzer.record_at(
+                            site,
+                            result.type_.clone(),
+                            self.analyzer.report,
+                            None,
+                        );
                         return Ok(exception_edges);
                     }
                     result.normal_type.ok_or_else(|| {
@@ -1247,7 +1275,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     type_
                 }
                 cfg::OperationKind::MakeClosure { closure } => {
-                    Self::transfer_closure(self.analyzer, *closure, &next.environment, nodes)
+                    Self::transfer_closure(self.analyzer, *closure, &next.environment)
                         .ok_or_else(|| format!("closure transfer failed at {:?}", operation.span))?
                 }
                 _ => return Err(format!("unsupported CFG operation at {:?}", operation.span)),
@@ -1884,24 +1912,20 @@ impl<'src> Analyzer<'src> {
         record_result: bool,
     ) -> Option<Eval> {
         let (start, end) = prism::span(body_node);
-        let mut nodes = CallNodeIndex::default();
-        nodes.visit_body(body_node);
-        self.eval_cfg_body_with_nodes(
+        self.eval_cfg_body_owned(
             SourceSite::new(start, end),
             body_id,
             environment,
             record_result,
-            &nodes,
         )
     }
 
-    fn eval_cfg_body_with_nodes<'node>(
+    fn eval_cfg_body_owned(
         &mut self,
         body_site: SourceSite,
         body_id: hir::BodyId,
         environment: &mut Environment,
         record_result: bool,
-        nodes: &'node CallNodeIndex<'node>,
     ) -> Option<Eval> {
         if !body_can_transfer(&self.hir_program, body_id) {
             return None;
@@ -1950,21 +1974,6 @@ impl<'src> Analyzer<'src> {
             .collect::<HashMap<_, _>>();
         if graph.blocks.iter().any(|block| {
             block.operations.iter().any(|operation| {
-                matches!(
-                    operation.kind,
-                    cfg::OperationKind::Const { .. }
-                        | cfg::OperationKind::Read { .. }
-                        | cfg::OperationKind::ReadSpecial { .. }
-                        | cfg::OperationKind::Write { .. }
-                        | cfg::OperationKind::Call { .. }
-                        | cfg::OperationKind::MakeClosure { .. }
-                        | cfg::OperationKind::BuildArray { .. }
-                        | cfg::OperationKind::BuildHash { .. }
-                        | cfg::OperationKind::Record { .. }
-                        | cfg::OperationKind::PatternTest { .. }
-                ) && !nodes
-                    .contains_span((operation.span.start as usize, operation.span.end as usize))
-            }) || block.operations.iter().any(|operation| {
                 !matches!(
                     operation.kind,
                     cfg::OperationKind::Const { .. }
@@ -1997,7 +2006,6 @@ impl<'src> Analyzer<'src> {
         let mut transfer = BodyTransfer {
             analyzer: self,
             context,
-            nodes: &nodes,
             fixed_array_elements,
             normal_type: Type::Never,
             abrupt: OutcomeTypes::default(),
