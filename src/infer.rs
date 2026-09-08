@@ -32,8 +32,8 @@ mod type_system;
 
 use call_types::{
     hir_call_argument_inputs, prism_call_argument_inputs, CallArgumentEvaluation,
-    CallArgumentInput, CallArguments, CallSite, HirCallView, IndexAccess, KeywordArgument,
-    KeywordArgumentInput, OwnedCallInput,
+    CallArgumentInput, CallArguments, CallNodeIndex, CallSite, HirCallView, IndexAccess,
+    KeywordArgument, KeywordArgumentInput, OwnedCallInput,
 };
 use cfg_transfer::{CfgFallbackCounters, CfgFallbackKind};
 use declarations::{DeclarationState, MethodRegistrar};
