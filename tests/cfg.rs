@@ -211,7 +211,7 @@ fn lowers_compound_assignment_to_read_branch_write_and_join() {
     assert!(operations(&graph).iter().any(|operation| matches!(
         operation.kind,
         OperationKind::PatternTest {
-            pattern: Pattern::Truthy,
+            pattern: Pattern::LogicalAnd | Pattern::LogicalOr,
             ..
         }
     )));

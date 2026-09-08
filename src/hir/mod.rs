@@ -365,6 +365,9 @@ pub enum LoopKind {
 pub struct LoopExpr {
     pub kind: LoopKind,
     pub condition: ExprId,
+    /// The source span of the loop predicate, including syntax such as
+    /// parentheses that may be transparent in the value-producing HIR.
+    pub condition_span: Span,
     pub body: Option<ExprId>,
     /// The assignment target for `for`; absent for `while` and `until`.
     pub index: Option<AssignTarget>,

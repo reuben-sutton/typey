@@ -224,6 +224,11 @@ pub enum HashOperand {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
     Truthy,
+    /// Truthiness test used by a logical assignment. These retain the same
+    /// narrowing as [`Pattern::Truthy`] but preserve which side-effecting
+    /// assignment protocol is being transferred.
+    LogicalAnd,
+    LogicalOr,
     Nil,
     /// A collection iteration has both a zero-iteration and a body path,
     /// even when the collection's Ruby truthiness is known.

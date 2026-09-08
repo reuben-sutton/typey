@@ -25,7 +25,7 @@ pub(super) fn narrow_pattern_value(
                 source.without(&Type::Nil)
             }
         }
-        cfg::Pattern::Truthy => {
+        cfg::Pattern::Truthy | cfg::Pattern::LogicalAnd | cfg::Pattern::LogicalOr => {
             if truthy {
                 source.truthy_part()
             } else {

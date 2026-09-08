@@ -128,6 +128,43 @@ fn lowers_inline_blocks_as_owned_closures() {
 }
 
 #[test]
+fn lowers_else_statement_bodies_as_owned_hir() {
+    let program = expressions("if flag\n  left\nelse\n  \"missing\"\nend");
+    let if_expression = program
+        .expressions
+        .iter()
+        .find_map(|expression| match &expression.kind {
+            ExprKind::If { else_body, .. } => Some(else_body.expect("else body")),
+            _ => None,
+        })
+        .expect("if expression");
+    let else_body = program
+        .expression(if_expression)
+        .expect("else body expression");
+    assert!(matches!(else_body.kind, ExprKind::Sequence(_)));
+    assert!(!matches!(else_body.kind, ExprKind::Unsupported(_)));
+}
+
+#[test]
+fn preserves_transparent_loop_predicate_spans() {
+    let source = "while (current = value)\nend";
+    let program = expressions(source);
+    let loop_expression = program
+        .expressions
+        .iter()
+        .find_map(|expression| match &expression.kind {
+            ExprKind::Loop(loop_expression) => Some(loop_expression),
+            _ => None,
+        })
+        .expect("loop expression");
+    let span = loop_expression.condition_span;
+    assert_eq!(
+        &source[span.start as usize..span.end as usize],
+        "(current = value)"
+    );
+}
+
+#[test]
 fn lowers_assignment_targets_and_preserves_operators() {
     let source = r#"local = 1
 @ivar = local

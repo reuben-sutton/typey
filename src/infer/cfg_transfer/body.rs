@@ -101,6 +101,36 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         Some(Type::Proc(signature.params, Box::new(body_result.type_)))
     }
 
+    fn compound_assignment_receiver(
+        analyzer: &Analyzer<'src>,
+        input: &OwnedCallInput,
+        receiver: Type,
+    ) -> Type {
+        let Some(expression) = input
+            .expression
+            .and_then(|id| analyzer.program.hir_program.expression(id))
+        else {
+            return receiver;
+        };
+        let hir::ExprKind::Assign {
+            operator: hir::AssignOperator::Binary(operator),
+            ..
+        } = &expression.kind
+        else {
+            return receiver;
+        };
+        if operator.as_str() == input.name.as_str() {
+            // An operator write only reaches the operator call after its
+            // getter has produced a normal value. Match Ruby's compound
+            // assignment semantics without weakening ordinary `nil + x`
+            // dispatch: the getter remains nilable, while the normal path
+            // entering `+` is known to be non-nil.
+            receiver.without(&Type::Nil)
+        } else {
+            receiver
+        }
+    }
+
     fn transfer_write(
         analyzer: &mut Analyzer<'src>,
         site: SourceSite,
@@ -218,6 +248,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 environment.self_type.clone()
             }
         };
+        let receiver_type = Self::compound_assignment_receiver(analyzer, &input, receiver_type);
         let has_block = input.block.is_some();
         let mut block_result = None;
         let dynamic_instance_variable_type = if matches!(
@@ -422,6 +453,16 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     {
                         block_result = callback;
                         (type_, UntypedOrigin::FallbackCall)
+                    } else if let Some((type_, callback)) = super::builtins::transfer_builtin_call(
+                        analyzer,
+                        &input,
+                        &dispatch_receiver,
+                        &call_arguments,
+                        values,
+                        environment,
+                    ) {
+                        block_result = callback;
+                        (type_, UntypedOrigin::FallbackCall)
                     } else {
                         return None;
                     }
@@ -429,6 +470,16 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     analyzer,
                     &input,
                     &dispatch_receiver,
+                    values,
+                    environment,
+                ) {
+                    block_result = callback;
+                    (type_, UntypedOrigin::FallbackCall)
+                } else if let Some((type_, callback)) = super::builtins::transfer_builtin_call(
+                    analyzer,
+                    &input,
+                    &dispatch_receiver,
+                    &call_arguments,
                     values,
                     environment,
                 ) {
@@ -598,7 +649,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         state: &BlockState,
     ) -> Option<(bool, bool, Type)> {
         let (truthy, falsy) = match pattern {
-            cfg::Pattern::Truthy => (
+            cfg::Pattern::Truthy | cfg::Pattern::LogicalAnd | cfg::Pattern::LogicalOr => (
                 !source.truthy_part().is_never(),
                 !source.falsy_part().is_never(),
             ),
@@ -679,10 +730,35 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         // rather than gaining a second recorded type for Ruby's boolean
         // protocol call.  Keep the owned transfer's boolean result for branch
         // narrowing, but preserve the same observable type recording.
-        matches!(
-            operation.kind,
-            cfg::OperationKind::Call { ref name, .. } if name.as_str() == "!"
-        )
+        let cfg::OperationKind::Call { name, .. } = &operation.kind else {
+            return false;
+        };
+        if name.as_str() == "!" {
+            return true;
+        }
+        let Some(expression) = operation
+            .expression
+            .and_then(|id| self.analyzer.program.hir_program.expression(id))
+        else {
+            return false;
+        };
+        let operator = match &expression.kind {
+            hir::ExprKind::Assign { operator, .. } => operator,
+            _ => return false,
+        };
+        if matches!(operator, hir::AssignOperator::And | hir::AssignOperator::Or) {
+            // Logical writes also have an internal getter at the assignment
+            // span. Its nilable result is not the value of `||=`/`&&=`.
+            return !name.as_str().ends_with('=');
+        }
+        let hir::AssignOperator::Binary(operator) = operator else {
+            return false;
+        };
+        // A compound assignment has internal getter, operator, and setter
+        // calls at one source span. The getter's nilable type must not join
+        // into the published assignment type; Ruby only reaches the binary
+        // operator on its normal, non-nil receiver path.
+        name.as_str() != operator.as_str() && !name.as_str().ends_with('=')
     }
 
     fn narrow_conditional_branch(
@@ -949,11 +1025,12 @@ impl<'src> Analyzer<'src> {
                 );
                 return None;
             }
-            Err(cfg::transfer::WorklistError::Transfer(_)) => {
-                transfer.analyzer.record_cfg_fallback_at(
+            Err(cfg::transfer::WorklistError::Transfer(reason)) => {
+                transfer.analyzer.record_cfg_fallback_detail_at(
                     body_site,
                     "operation",
                     super::CfgFallbackKind::UnsupportedOperation,
+                    Some(&reason),
                 );
                 return None;
             }
@@ -1292,7 +1369,24 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     let (truthy, falsy, _) = self
                         .pattern_reachability(pattern, &source, &next)
                         .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
-                    (truthy, falsy)
+                    if matches!(pattern, cfg::Pattern::LogicalOr)
+                        && matches!(
+                            source_place,
+                            Some(
+                                cfg::Place::Local(_)
+                                    | cfg::Place::InstanceVariable(_)
+                                    | cfg::Place::ClassVariable(_)
+                                    | cfg::Place::Global(_)
+                            )
+                        )
+                    {
+                        // `||=` transfers always analyze their RHS in the
+                        // legacy/Sorbet assignment protocol, including when
+                        // the current value is already truthy.
+                        (true, true)
+                    } else {
+                        (truthy, falsy)
+                    }
                 } else {
                     self.conditional_reachability(graph, *truthy, *falsy, &source, &next)
                 };

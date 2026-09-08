@@ -1,6 +1,7 @@
 use super::{Analyzer, SourceSite};
 
 mod body;
+mod builtins;
 mod calls;
 mod collections;
 mod patterns;
@@ -53,12 +54,29 @@ impl<'src> Analyzer<'src> {
         kind: &str,
         fallback: CfgFallbackKind,
     ) {
+        self.record_cfg_fallback_detail_at(site, kind, fallback, None);
+    }
+
+    pub(super) fn record_cfg_fallback_detail_at(
+        &mut self,
+        site: SourceSite,
+        kind: &str,
+        fallback: CfgFallbackKind,
+        detail: Option<&str>,
+    ) {
         self.cfg_transfer_fallbacks.record(fallback);
         if self.config.debug {
-            eprintln!(
-                "[typey] CFG fallback for {kind} at {:?}: no owned transfer is available",
-                (site.start, site.end)
-            );
+            if let Some(detail) = detail {
+                eprintln!(
+                    "[typey] CFG fallback for {kind} at {:?}: {detail}",
+                    (site.start, site.end)
+                );
+            } else {
+                eprintln!(
+                    "[typey] CFG fallback for {kind} at {:?}: no owned transfer is available",
+                    (site.start, site.end)
+                );
+            }
         }
     }
 }

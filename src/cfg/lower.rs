@@ -807,6 +807,14 @@ impl<'program> Builder<'program> {
 
         let reachable = then_flow.reachable || else_flow.reachable;
         if reachable {
+            self.emit(
+                join,
+                self.span(expression),
+                OperationKind::Record {
+                    value: Some(joined),
+                },
+                false,
+            );
             self.normal(expression, join, Some(joined))
         } else {
             self.abrupt(expression, join)
@@ -851,7 +859,11 @@ impl<'program> Builder<'program> {
                     span,
                     OperationKind::PatternTest {
                         value: old,
-                        pattern: Pattern::Truthy,
+                        pattern: match operator {
+                            AssignOperator::And => Pattern::LogicalAnd,
+                            AssignOperator::Or => Pattern::LogicalOr,
+                            _ => unreachable!(),
+                        },
                     },
                     true,
                 );
@@ -1244,6 +1256,14 @@ impl<'program> Builder<'program> {
         let condition_flow = self.lower_expr(loop_expr.condition, condition);
         if condition_flow.reachable {
             let condition_value = condition_flow.value.expect("loop condition value");
+            self.emit(
+                condition_flow.block,
+                loop_expr.condition_span,
+                OperationKind::Record {
+                    value: Some(condition_value),
+                },
+                false,
+            );
             let (truthy, falsy) = match loop_expr.kind {
                 LoopKind::Until => (normal_exit, body),
                 LoopKind::While | LoopKind::For => (body, normal_exit),

@@ -623,9 +623,16 @@ impl<'src> Lowerer<'src> {
             } else {
                 self.nil(node)
             };
-            let else_body = if_node
-                .subsequent()
-                .map(|subsequent| self.lower_node(&subsequent));
+            let else_body = if_node.subsequent().map(|subsequent| {
+                if let Some(else_clause) = subsequent.as_else_node() {
+                    else_clause
+                        .statements()
+                        .map(|statements| self.lower_node(&statements.as_node()))
+                        .unwrap_or_else(|| self.nil(&subsequent))
+                } else {
+                    self.lower_node(&subsequent)
+                }
+            });
             return self.push_expr(
                 node,
                 ExprKind::If {
@@ -687,6 +694,7 @@ impl<'src> Lowerer<'src> {
             return self.push_expr(node, ExprKind::Retry);
         }
         if let Some(for_node) = node.as_for_node() {
+            let condition_span = self.span(&for_node.collection());
             let Some(index) = self.lower_for_target(&for_node.index()) else {
                 return self.unsupported(node);
             };
@@ -699,13 +707,16 @@ impl<'src> Lowerer<'src> {
                 ExprKind::Loop(LoopExpr {
                     kind: LoopKind::For,
                     condition,
+                    condition_span,
                     body,
                     index: Some(index),
                 }),
             );
         }
         if let Some(while_node) = node.as_while_node() {
-            let condition = self.lower_node(&while_node.predicate());
+            let predicate = while_node.predicate();
+            let condition_span = self.span(&predicate);
+            let condition = self.lower_node(&predicate);
             let body = while_node
                 .statements()
                 .map(|body| self.lower_node(&body.as_node()));
@@ -714,13 +725,16 @@ impl<'src> Lowerer<'src> {
                 ExprKind::Loop(LoopExpr {
                     kind: LoopKind::While,
                     condition,
+                    condition_span,
                     body,
                     index: None,
                 }),
             );
         }
         if let Some(until_node) = node.as_until_node() {
-            let condition = self.lower_node(&until_node.predicate());
+            let predicate = until_node.predicate();
+            let condition_span = self.span(&predicate);
+            let condition = self.lower_node(&predicate);
             let body = until_node
                 .statements()
                 .map(|body| self.lower_node(&body.as_node()));
@@ -729,6 +743,7 @@ impl<'src> Lowerer<'src> {
                 ExprKind::Loop(LoopExpr {
                     kind: LoopKind::Until,
                     condition,
+                    condition_span,
                     body,
                     index: None,
                 }),

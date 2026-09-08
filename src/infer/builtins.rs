@@ -571,7 +571,16 @@ impl<'src> Analyzer<'src> {
                     return Type::named("Enumerator");
                 }
                 let block_type = site.block.map_or(Type::Any, |block| {
-                    self.eval_block_node(block, &[key.clone(), value.clone()], environment)
+                    // A hash map callback commonly returns a two-element
+                    // array for a subsequent `to_h`. Preserve that literal
+                    // pair shape while evaluating the callback so the
+                    // structural key/value types remain available.
+                    let previous = self.preserve_literal_tuples;
+                    self.preserve_literal_tuples = true;
+                    let type_ =
+                        self.eval_block_node(block, &[key.clone(), value.clone()], environment);
+                    self.preserve_literal_tuples = previous;
+                    type_
                 });
                 Type::Array(Box::new(block_type))
             }
