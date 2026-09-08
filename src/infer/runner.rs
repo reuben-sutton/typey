@@ -73,7 +73,7 @@ impl<'src> Analyzer<'src> {
             eprintln!("[typey] registering declarations");
         }
         self.register_methods(root);
-        let parse_diagnostics = std::mem::take(&mut self.diagnostics);
+        let parse_diagnostics = std::mem::take(&mut self.reporting.diagnostics);
         if self.config.debug {
             eprintln!(
                 "[typey] registered {} methods, {} classes, and {} type aliases",
@@ -101,12 +101,12 @@ impl<'src> Analyzer<'src> {
         // transient node types. This is the same shape as Spinel's analysis:
         // all definitions are registered, then the tables are refined until
         // one complete pass makes no change.
-        self.report = false;
+        self.reporting.report = false;
         self.seed_calls = true;
         self.filter_method_bodies = false;
         self.fixpoint.debug_phase = "seed";
         self.fixpoint.debug_round = 0;
-        self.types.clear();
+        self.reporting.types.clear();
         self.fixpoint.debug_nodes = 0;
         if self.config.debug {
             eprintln!("[typey] seeding top-level call sites");
@@ -149,7 +149,7 @@ impl<'src> Analyzer<'src> {
             self.fixpoint.changed_shared.clear();
             self.fixpoint.debug_phase = "inference";
             self.fixpoint.debug_round = round;
-            self.types.clear();
+            self.reporting.types.clear();
             self.fixpoint.debug_nodes = 0;
             if self.config.debug {
                 eprintln!(
@@ -202,10 +202,10 @@ impl<'src> Analyzer<'src> {
 
         // Re-run once with settled summaries. This final pass is the only pass
         // that publishes diagnostics and per-node types to callers.
-        self.report = true;
-        self.diagnostics = parse_diagnostics;
+        self.reporting.report = true;
+        self.reporting.diagnostics = parse_diagnostics;
         self.seed_calls = false;
-        self.types.clear();
+        self.reporting.types.clear();
         self.filter_method_bodies = false;
         self.fixpoint.active_methods.clear();
         self.fixpoint.debug_phase = "final";
@@ -225,9 +225,9 @@ impl<'src> Analyzer<'src> {
         }
 
         self.report_inference_gaps();
-        let types = Self::deduplicate_types(std::mem::take(&mut self.types));
+        let types = Self::deduplicate_types(std::mem::take(&mut self.reporting.types));
         let mut seen_diagnostics = BTreeSet::new();
-        self.diagnostics.retain(|diagnostic| {
+        self.reporting.diagnostics.retain(|diagnostic| {
             seen_diagnostics.insert((
                 matches!(diagnostic.severity, Severity::Note),
                 diagnostic.start,
@@ -235,7 +235,7 @@ impl<'src> Analyzer<'src> {
                 diagnostic.message.clone(),
             ))
         });
-        self.diagnostics.sort_by(|left, right| {
+        self.reporting.diagnostics.sort_by(|left, right| {
             left.start
                 .cmp(&right.start)
                 .then_with(|| left.message.cmp(&right.message))
@@ -254,13 +254,13 @@ impl<'src> Analyzer<'src> {
             );
             eprintln!(
                 "[typey] complete: {} diagnostics, {} recorded types in {:?}",
-                self.diagnostics.len(),
+                self.reporting.diagnostics.len(),
                 types.len(),
                 run_started.elapsed()
             );
         }
         CheckResult {
-            diagnostics: self.diagnostics,
+            diagnostics: self.reporting.diagnostics,
             types,
         }
     }
@@ -302,7 +302,7 @@ impl<'src> Analyzer<'src> {
                 || key.name.clone(),
                 |owner| format!("{owner}::{}", key.name),
             );
-            self.diagnostics.push(Diagnostic::error(
+            self.reporting.diagnostics.push(Diagnostic::error(
                 self.source,
                 format!(
                     "Method `{name}` has insufficient inferred type information for strict mode"

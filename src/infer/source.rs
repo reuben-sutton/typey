@@ -15,6 +15,33 @@ pub(super) struct SourceSite {
     pub(super) expression: Option<hir::ExprId>,
 }
 
+/// Diagnostics and source-level products of an analysis pass.
+///
+/// Keeping this state together makes publication a boundary rather than a set
+/// of unrelated fields on `Analyzer`. Recursive evaluation and owned CFG
+/// transfer can both record through the same sink while the runner swaps
+/// reporting mode between seed, fixpoint, and final passes.
+#[derive(Debug)]
+pub(super) struct ReportingState {
+    pub(super) report: bool,
+    pub(super) suppress_diagnostics: bool,
+    pub(super) diagnostics: Vec<Diagnostic>,
+    pub(super) types: Vec<InferredType>,
+    pub(super) untyped_origins: BTreeMap<(usize, usize), UntypedOrigin>,
+}
+
+impl ReportingState {
+    pub(super) fn new(diagnostics: Vec<Diagnostic>) -> Self {
+        Self {
+            report: true,
+            suppress_diagnostics: false,
+            diagnostics,
+            types: Vec::new(),
+            untyped_origins: BTreeMap::new(),
+        }
+    }
+}
+
 impl SourceSite {
     pub(super) const fn new(start: usize, end: usize) -> Self {
         Self {
@@ -128,7 +155,8 @@ impl<'src> Analyzer<'src> {
     pub(super) fn record<'node>(&mut self, node: &Node<'node>, type_: Type) -> Type {
         let (start, end) = prism::span(node);
         let untyped_origin = if type_.contains_any() {
-            self.untyped_origins
+            self.reporting
+                .untyped_origins
                 .get(&(start, end))
                 .copied()
                 .or_else(|| {
@@ -151,7 +179,7 @@ impl<'src> Analyzer<'src> {
         self.record_at(
             SourceSite::new(start, end),
             type_,
-            self.report && Self::is_send_node(node),
+            self.reporting.report && Self::is_send_node(node),
             untyped_origin,
         )
     }
@@ -180,7 +208,7 @@ impl<'src> Analyzer<'src> {
     }
 
     pub(super) fn error<'node>(&mut self, node: &Node<'node>, message: impl Into<String>) {
-        if !self.report || self.suppress_diagnostics {
+        if !self.reporting.report || self.reporting.suppress_diagnostics {
             return;
         }
         let (start, end) = prism::span(node);
@@ -188,7 +216,7 @@ impl<'src> Analyzer<'src> {
     }
 
     pub(super) fn note<'node>(&mut self, node: &Node<'node>, message: impl Into<String>) {
-        if !self.report || self.suppress_diagnostics {
+        if !self.reporting.report || self.reporting.suppress_diagnostics {
             return;
         }
         let (start, end) = prism::span(node);
@@ -243,7 +271,8 @@ impl<'src> Analyzer<'src> {
         untyped_origin: Option<UntypedOrigin>,
     ) -> Type {
         let untyped_origin = if type_.contains_any() {
-            self.untyped_origins
+            self.reporting
+                .untyped_origins
                 .get(&(site.start, site.end))
                 .copied()
                 .or(untyped_origin)
@@ -251,12 +280,12 @@ impl<'src> Analyzer<'src> {
         } else {
             None
         };
-        self.types.push(InferredType {
+        self.reporting.types.push(InferredType {
             start: site.start,
             end: site.end,
             type_: type_.clone(),
             untyped_origin,
-            is_send: self.report && is_send,
+            is_send: self.reporting.report && is_send,
         });
         type_
     }
@@ -268,33 +297,39 @@ impl<'src> Analyzer<'src> {
         origin: UntypedOrigin,
     ) {
         if type_.contains_any() {
-            self.untyped_origins.insert((site.start, site.end), origin);
+            self.reporting
+                .untyped_origins
+                .insert((site.start, site.end), origin);
         }
     }
 
     pub(super) fn error_at(&mut self, site: SourceSite, message: impl Into<String>) {
-        if !self.report || self.suppress_diagnostics {
+        if !self.reporting.report || self.reporting.suppress_diagnostics {
             return;
         }
-        self.diagnostics.push(Diagnostic::error_with_line_map(
-            self.source,
-            &self.line_map,
-            message,
-            site.start,
-            site.end,
-        ));
+        self.reporting
+            .diagnostics
+            .push(Diagnostic::error_with_line_map(
+                self.source,
+                &self.line_map,
+                message,
+                site.start,
+                site.end,
+            ));
     }
 
     pub(super) fn note_at(&mut self, site: SourceSite, message: impl Into<String>) {
-        if !self.report || self.suppress_diagnostics {
+        if !self.reporting.report || self.reporting.suppress_diagnostics {
             return;
         }
-        self.diagnostics.push(Diagnostic::note_with_line_map(
-            self.source,
-            &self.line_map,
-            message,
-            site.start,
-            site.end,
-        ));
+        self.reporting
+            .diagnostics
+            .push(Diagnostic::note_with_line_map(
+                self.source,
+                &self.line_map,
+                message,
+                site.start,
+                site.end,
+            ));
     }
 }

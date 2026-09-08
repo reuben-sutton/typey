@@ -505,6 +505,7 @@ impl<'src> Analyzer<'src> {
         for element in &elements {
             let span = prism::span(&element);
             let type_ = self
+                .reporting
                 .types
                 .iter()
                 .rev()
@@ -514,7 +515,8 @@ impl<'src> Analyzer<'src> {
                         && !inferred.type_.contains_any()
                 })
                 .or_else(|| {
-                    self.types
+                    self.reporting
+                        .types
                         .iter()
                         .rev()
                         .find(|inferred| inferred.start == span.0 && inferred.end == span.1)

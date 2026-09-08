@@ -1130,7 +1130,7 @@ impl<'src> Analyzer<'src> {
 
         if callee_type.contains_any() {
             let (start, end) = prism::span(node);
-            self.untyped_origins.insert(
+            self.reporting.untyped_origins.insert(
                 (start, end),
                 untyped_origin.unwrap_or(UntypedOrigin::Propagated),
             );

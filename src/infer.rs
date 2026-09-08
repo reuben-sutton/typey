@@ -65,7 +65,7 @@ use method_state::{BlockReceiverBinding, MethodState};
 use method_types::{
     apply_parameter_shape, optional_proc_type, proc_parts, proc_receiver, ParameterShape,
 };
-use source::SourceSite;
+use source::{ReportingState, SourceSite};
 
 const DEBUG_NODE_INTERVAL: usize = 1_000;
 
@@ -305,7 +305,6 @@ pub(crate) fn check_with_policies(
         provisional_ivars: BTreeSet::new(),
         class_vars: BTreeMap::new(),
         globals: BTreeMap::new(),
-        report: true,
         seed_calls: false,
         rbi_ranges: rbi_ranges.to_vec(),
         builtin_rbi_ranges: builtin_rbi_ranges.to_vec(),
@@ -321,10 +320,7 @@ pub(crate) fn check_with_policies(
         checking_initializer: false,
         initializer_has_block: false,
         initializer_requires_block: false,
-        diagnostics: diagnostics.clone(),
-        types: Vec::new(),
-        untyped_origins: BTreeMap::new(),
-        suppress_diagnostics: false,
+        reporting: ReportingState::new(diagnostics.clone()),
         cfg_transfer_bodies: 0,
         cfg_transfer_calls: 0,
         cfg_transfer_assignments: 0,
@@ -366,7 +362,6 @@ struct Analyzer<'src> {
     provisional_ivars: BTreeSet<IvarKey>,
     class_vars: BTreeMap<ClassVarKey, Type>,
     globals: BTreeMap<String, Type>,
-    report: bool,
     seed_calls: bool,
     rbi_ranges: Vec<(usize, usize)>,
     builtin_rbi_ranges: Vec<(usize, usize)>,
@@ -382,10 +377,7 @@ struct Analyzer<'src> {
     checking_initializer: bool,
     initializer_has_block: bool,
     initializer_requires_block: bool,
-    diagnostics: Vec<Diagnostic>,
-    types: Vec<InferredType>,
-    untyped_origins: BTreeMap<(usize, usize), UntypedOrigin>,
-    suppress_diagnostics: bool,
+    reporting: ReportingState,
     cfg_transfer_bodies: usize,
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,

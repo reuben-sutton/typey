@@ -289,7 +289,8 @@ impl<'src> Analyzer<'src> {
 
     pub(super) fn recorded_node_type(&self, node: &Node<'_>) -> Option<Type> {
         let (start, end) = prism::span(node);
-        self.types
+        self.reporting
+            .types
             .iter()
             .rev()
             .find(|inferred| inferred.start == start && inferred.end == end)

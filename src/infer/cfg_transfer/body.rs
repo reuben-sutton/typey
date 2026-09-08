@@ -1093,7 +1093,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         self.analyzer.record_at(
                             site,
                             result.type_.clone(),
-                            self.analyzer.report,
+                            self.analyzer.reporting.report,
                             None,
                         );
                         return Ok(exception_edges);
@@ -1174,7 +1174,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
             {
                 if matches!(operation.kind, cfg::OperationKind::Call { .. }) {
                     self.analyzer
-                        .record_at(site, type_, self.analyzer.report, None);
+                        .record_at(site, type_, self.analyzer.reporting.report, None);
                 } else {
                     self.analyzer.record_at(site, type_, false, None);
                 }

@@ -25,10 +25,10 @@ impl<'src> Analyzer<'src> {
                 // execute. Top-level expressions remain independently
                 // reportable after a `T.noreturn` expression.
                 if report_unreachable {
-                    let previous_suppression = self.suppress_diagnostics;
-                    self.suppress_diagnostics = true;
+                    let previous_suppression = self.reporting.suppress_diagnostics;
+                    self.reporting.suppress_diagnostics = true;
                     let _ = self.eval_node(&child, environment);
-                    self.suppress_diagnostics = previous_suppression;
+                    self.reporting.suppress_diagnostics = previous_suppression;
                 } else {
                     let _ = self.eval_node(&child, environment);
                 }
@@ -594,10 +594,10 @@ impl<'src> Analyzer<'src> {
             // and type propagation, but it does not report ordinary missing
             // API errors from that operand: the expression is only queried
             // for whether it could be defined at runtime.
-            let previous_suppression = self.suppress_diagnostics;
-            self.suppress_diagnostics = true;
+            let previous_suppression = self.reporting.suppress_diagnostics;
+            self.reporting.suppress_diagnostics = true;
             let _ = self.eval_node(&defined.value(), environment);
-            self.suppress_diagnostics = previous_suppression;
+            self.reporting.suppress_diagnostics = previous_suppression;
             let type_ = self.apply_inline_assertion(node, Type::union([Type::Nil, Type::String]));
             return Eval::value(self.record(node, type_));
         }

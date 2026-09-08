@@ -17,7 +17,7 @@ impl<'src> Analyzer<'src> {
             if ruby_kind == rbs_kind {
                 continue;
             }
-            self.diagnostics.push(Diagnostic::error(
+            self.reporting.diagnostics.push(Diagnostic::error(
                 self.source,
                 format!(
                     "Argument kind mismatch for `{name}`, method declares `{}`, but RBS signature declares `{}`",
@@ -46,7 +46,7 @@ impl<'src> Analyzer<'src> {
                     && ruby_parameters.has_block
                     && ruby_parameters.block_name.is_none());
             if !matches_definition {
-                self.diagnostics.push(Diagnostic::error(
+                self.reporting.diagnostics.push(Diagnostic::error(
                     self.source,
                     format!("Unknown parameter name `{name}`"),
                     signature_offset,
@@ -59,7 +59,7 @@ impl<'src> Analyzer<'src> {
             if signature.param_names.iter().any(|name| name == "&")
                 && !signature.param_names.iter().any(|name| name == block_name)
             {
-                self.diagnostics.push(Diagnostic::error(
+                self.reporting.diagnostics.push(Diagnostic::error(
                     self.source,
                     format!("Malformed `sig`. Type not specified for parameter `{block_name}`"),
                     definition_offset,
@@ -74,7 +74,7 @@ impl<'src> Analyzer<'src> {
         self.declarations.type_aliases = self.annotations.type_aliases.clone();
         let mut registrar = MethodRegistrar::new(
             self.source,
-            &mut self.diagnostics,
+            &mut self.reporting.diagnostics,
             &mut self.declarations,
             &self.annotations.attribute_annotations,
             &self.annotations.class_type_parameters,
@@ -399,7 +399,8 @@ impl<'src> Analyzer<'src> {
             .get(start..)
             .and_then(|source| source.iter().position(|byte| *byte == b'\n'))
             .map_or(self.source.len(), |line_end| start + line_end);
-        self.diagnostics
+        self.reporting
+            .diagnostics
             .push(Diagnostic::error(self.source, message, start, end));
     }
 }
