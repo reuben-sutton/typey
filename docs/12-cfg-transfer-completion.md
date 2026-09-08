@@ -19,8 +19,8 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates are 18 CFG tests, 10 HIR tests, 335 checker tests, and
-163 conformance tests passing. The
+The current local gates are 18 CFG tests, 10 HIR tests, 336 checker tests, and
+165 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has two semantic bridges: it
 looks up Prism nodes by source span and it reconstructs call argument shapes
@@ -97,6 +97,9 @@ The first modularization steps are now in place:
   and
 * CFG argument materialization is isolated to that adapter, so the transfer
   host no longer reconstructs call shape directly from `CallNode` children;
+* source-span lookup retains all same-span Prism candidates and selects the
+  semantic call or closure node, so enclosing statement nodes cannot hide a
+  passed block from CFG dispatch; and
 * rescue matching routes raised states through unwind edges, while matched
   handlers consume the pending exception and unmatched exceptions continue to
   the outer handler;
