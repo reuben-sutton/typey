@@ -2,8 +2,8 @@
 
 use super::super::cfg_state::{BlockState, BodyContext};
 use super::super::{
-    ivar_refinement_key, proc_parts, Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes,
-    OwnedCallInput, SourceSite, UntypedOrigin,
+    ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput,
+    SourceSite, UntypedOrigin,
 };
 use super::cfg_global_refinement_key;
 use super::patterns::{case_pattern_is_type_test, narrow_pattern_value, pattern_source_place};
@@ -345,7 +345,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 );
             }
             let callable_type = if matches!(input.name.as_str(), "call" | "[]") {
-                Self::transfer_callable_call(
+                super::calls::transfer_callable_call(
                     analyzer,
                     input.site,
                     &dispatch_receiver,
@@ -424,7 +424,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         let raise_type = if call_can_return {
             Type::Never
         } else {
-            analyzer.cfg_call_raise_type(&input, &receiver_type, environment, &type_)
+            super::calls::cfg_call_raise_type(analyzer, &input, &receiver_type, environment, &type_)
         };
         let has_normal_path = call_can_return
             && block_result
@@ -460,50 +460,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         }
         analyzer.remember_untyped_origin_at(input.site, &result.type_, untyped_origin);
         Some(result)
-    }
-
-    fn transfer_callable_call(
-        analyzer: &mut Analyzer<'src>,
-        site: SourceSite,
-        receiver: &Type,
-        arguments: &super::super::CallArguments<'_>,
-    ) -> Option<Type> {
-        match receiver {
-            Type::Proc(_, _) | Type::BoundProc { .. } => {
-                let (parameters, result) = proc_parts(receiver)?;
-                for (index, (actual, expected)) in
-                    arguments.argument_types.iter().zip(parameters).enumerate()
-                {
-                    if !analyzer.is_assignable(actual, expected) {
-                        let argument_site =
-                            arguments.argument_sites.get(index).copied().unwrap_or(site);
-                        analyzer.error_at(
-                            argument_site,
-                            format!(
-                                "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
-                            ),
-                        );
-                    }
-                }
-                Some(result.clone())
-            }
-            Type::Union(members)
-                if members.iter().all(|member| {
-                    member.is_nil() || matches!(member, Type::Proc(_, _) | Type::BoundProc { .. })
-                }) =>
-            {
-                let mut result = Type::Never;
-                for member in members {
-                    if !member.is_nil() {
-                        result = result.join(&Self::transfer_callable_call(
-                            analyzer, site, member, arguments,
-                        )?);
-                    }
-                }
-                Some(if result.is_never() { Type::Any } else { result })
-            }
-            _ => None,
-        }
     }
 
     fn transfer_array(
@@ -794,40 +750,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
 }
 
 impl<'src> Analyzer<'src> {
-    fn cfg_call_raise_type(
-        &self,
-        input: &OwnedCallInput,
-        receiver_type: &Type,
-        environment: &Environment,
-        return_type: &Type,
-    ) -> Type {
-        if !return_type.is_never() {
-            return Type::Never;
-        }
-        if matches!(&input.receiver, cfg::ReceiverOperand::Implicit) {
-            return match input.name.as_str() {
-                "exit" | "exit!" | "abort" => Type::named("SystemExit"),
-                "raise" | "fail" => Type::named("RuntimeError"),
-                _ => Type::Never,
-            };
-        }
-        let key = match &input.receiver {
-            cfg::ReceiverOperand::Super => environment
-                .method_key
-                .as_ref()
-                .and_then(|current| self.super_method_key(current)),
-            cfg::ReceiverOperand::Value(_) => {
-                self.receiver_method_key(None, receiver_type, input.name.as_str(), environment)
-            }
-            cfg::ReceiverOperand::Yield | cfg::ReceiverOperand::Implicit => None,
-        };
-        key.and_then(|key| self.resolve_method_key(&key))
-            .and_then(|key| self.declarations.methods.get(&key))
-            .and_then(|state| state.raise_type.clone())
-            .filter(|type_| !type_.is_never())
-            .unwrap_or_else(|| Type::named("StandardError"))
-    }
-
     fn seed_cfg_global_state(&self, graph: &cfg::Cfg, environment: &mut Environment) {
         for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
             let place = match &operation.kind {

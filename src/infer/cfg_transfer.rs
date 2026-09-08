@@ -1,6 +1,7 @@
 use super::{Analyzer, SourceSite};
 
 mod body;
+mod calls;
 mod patterns;
 mod preflight;
 mod value;
