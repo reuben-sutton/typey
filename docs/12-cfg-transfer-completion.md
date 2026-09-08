@@ -178,6 +178,10 @@ The first modularization steps are now in place:
 * pattern reachability, case-test recognition, and environment narrowing now
   live in `infer/cfg_transfer/patterns.rs`, keeping owned predicate semantics
   independent from the worklist coordinator.
+* fixpoint seeding, summary worklist scheduling, final publication, and strict
+  inference-gap reporting now live in `infer/runner.rs`; `infer.rs` retains
+  the shared analyzer state and semantic entry points instead of also owning
+  the analysis lifecycle.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
   `BoundProc` `call`/`[]` operations from CFG values, including argument
   checking and optional RBS block contracts; the optional-block fixture also
