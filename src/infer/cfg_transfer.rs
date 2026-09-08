@@ -1,7 +1,6 @@
 use super::{
-    ivar_refinement_key, Analyzer, CallArguments, CallSite, Environment, Eval, Flow, FlowKind,
-    HirCallView, KeywordArgument, MethodKey, OutcomeTypes, OwnedCallInput, SharedKey, SourceSite,
-    Strictness,
+    ivar_refinement_key, Analyzer, CallSite, Environment, Eval, Flow, FlowKind, HirCallView,
+    MethodKey, OutcomeTypes, OwnedCallInput, SharedKey, SourceSite, Strictness,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
@@ -441,135 +440,8 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 hir::ExprKind::Call(call) => Some(call.clone()),
                 _ => None,
             })?;
-        let raw_argument_nodes = node
-            .as_call_node()?
-            .arguments()
-            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
-            .unwrap_or_default();
-        if raw_argument_nodes.len() != call.argument_groups.len() {
-            return None;
-        }
-        let mut raw_argument_nodes = raw_argument_nodes.into_iter();
-        let operands = &input.arguments;
-        let mut call_arguments = CallArguments::default();
-        let mut operand_index = 0usize;
-        let mut group_start = 0usize;
-        for (argument_index, (group_end, span)) in call
-            .argument_groups
-            .iter()
-            .zip(&call.argument_spans)
-            .enumerate()
-        {
-            let argument_node = raw_argument_nodes.next()?;
-            debug_assert_eq!(
-                prism::span(&argument_node),
-                (span.start as usize, span.end as usize)
-            );
-            let group = call.arguments.get(group_start..*group_end)?;
-            if !group.is_empty()
-                && group
-                    .iter()
-                    .all(|argument| matches!(argument, hir::Argument::Keyword { .. }))
-            {
-                let keyword_value_nodes = argument_node
-                    .as_keyword_hash_node()?
-                    .elements()
-                    .into_iter()
-                    .map(|element| {
-                        let assoc = element.as_assoc_node()?;
-                        analyzer.record(&assoc.key(), Type::Symbol);
-                        Some(assoc.value())
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                let mut keyword_value_nodes = keyword_value_nodes.into_iter();
-                let mut key = Type::Never;
-                let mut value = Type::Never;
-                let mut keyword_arguments = Vec::with_capacity(group.len());
-                for argument in group {
-                    let hir::Argument::Keyword { name, value: _ } = argument else {
-                        return None;
-                    };
-                    let cfg::ArgumentOperand::Keyword {
-                        name: operand_name,
-                        value: cfg_value_id,
-                    } = operands.get(operand_index)?
-                    else {
-                        return None;
-                    };
-                    let type_ = values.get(cfg_value_id.0 as usize).cloned().flatten()?;
-                    let value_node = keyword_value_nodes.next()?;
-                    if name.as_str() != operand_name.as_str() {
-                        return None;
-                    }
-                    key = key.join(&Type::Symbol);
-                    value = value.join(&type_);
-                    keyword_arguments.push(KeywordArgument {
-                        name: name.as_str().to_owned(),
-                        node: value_node,
-                        type_,
-                    });
-                    operand_index += 1;
-                }
-                let key = if key.is_never() { Type::Any } else { key };
-                let value = if value.is_never() { Type::Any } else { value };
-                let hash_type = analyzer.apply_inline_assertion(
-                    &argument_node,
-                    Type::Hash(Box::new(key), Box::new(value)),
-                );
-                analyzer.record(&argument_node, hash_type.clone());
-                call_arguments.argument_nodes.push(argument_node);
-                call_arguments.argument_types.push(hash_type);
-                call_arguments.argument_indices.push(argument_index);
-                call_arguments.keyword_arguments.extend(keyword_arguments);
-                group_start = *group_end;
-                continue;
-            }
-            if group.len() != 1 {
-                return None;
-            }
-            if let Some(cfg::ArgumentOperand::Splat(value)) = operands.get(operand_index) {
-                let type_ = values.get(value.0 as usize).cloned().flatten()?;
-                if let Some(elements) = fixed_array_elements.get(value) {
-                    for element in elements {
-                        let type_ = values.get(element.0 as usize).cloned().flatten()?;
-                        call_arguments.argument_types.push(type_.clone());
-                        call_arguments.argument_indices.push(argument_index);
-                        call_arguments.positional_indices.push(argument_index);
-                        call_arguments.positional_types.push(type_);
-                    }
-                } else if let Type::Tuple(elements) = type_ {
-                    for type_ in elements {
-                        call_arguments.argument_types.push(type_.clone());
-                        call_arguments.argument_indices.push(argument_index);
-                        call_arguments.positional_indices.push(argument_index);
-                        call_arguments.positional_types.push(type_);
-                    }
-                } else if type_.is_any() {
-                    call_arguments.has_unknown_positional_splat = true;
-                } else {
-                    call_arguments.has_dynamic_positional_splat = true;
-                    call_arguments.dynamic_positional_splat_types.push(type_);
-                }
-                call_arguments.argument_nodes.push(argument_node);
-                operand_index += 1;
-                group_start = *group_end;
-                continue;
-            }
-            let Some(cfg::ArgumentOperand::Positional(value)) = operands.get(operand_index) else {
-                return None;
-            };
-            let type_ = values.get(value.0 as usize).cloned().flatten()?;
-            call_arguments.argument_nodes.push(argument_node);
-            call_arguments.argument_types.push(type_.clone());
-            call_arguments.argument_indices.push(argument_index);
-            call_arguments.positional_indices.push(argument_index);
-            call_arguments.positional_types.push(type_);
-            operand_index += 1;
-            group_start = *group_end;
-        }
-        if group_start != call.arguments.len() || operand_index != operands.len() {
-            return None;
-        }
+        let call_arguments =
+            analyzer.cfg_call_arguments(&input, &call, node, values, fixed_array_elements)?;
 
         let receiver_node = node.as_call_node()?.receiver();
         let receiver_type = match &input.receiver {
