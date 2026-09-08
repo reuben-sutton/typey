@@ -175,6 +175,13 @@ fn expr_can_transfer(
             .closure(*closure)
             .and_then(|closure| program.body(closure.body))
             .is_some_and(|body| expr_can_transfer(program, body.root, visiting)),
+        ExprKind::Begin(begin)
+            if begin.rescue.is_empty() && begin.else_body.is_none() && begin.ensure.is_none() =>
+        {
+            begin
+                .body
+                .is_none_or(|body| expr_can_transfer(program, body, visiting))
+        }
         ExprKind::Assign {
             target,
             value,

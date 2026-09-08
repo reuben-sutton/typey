@@ -70,6 +70,13 @@ class CfgBodyTransfer
     values.map(&processor)
   end
 
+  def plain_begin
+    begin
+      value = 1
+      value.to_s
+    end
+  end
+
   #: (Integer, String) -> void
   def positional_target(one, two)
   end
@@ -125,6 +132,7 @@ CfgBodyTransfer.new.value
 T.reveal_type(CfgBodyTransfer.new.safe_navigation("text")) # note: Revealed type: `T.nilable(String)`
 T.reveal_type(CfgBodyTransfer.new.inline_block) # note: Revealed type: `T::Array[String]`
 T.reveal_type(CfgBodyTransfer.new.passed_block) # note: Revealed type: `T::Array[String]`
+T.reveal_type(CfgBodyTransfer.new.plain_begin) # note: Revealed type: `String`
 T.reveal_type(CfgSuperChild.new.render) # note: Revealed type: `String`
 T.reveal_type(CfgForwardChild.new.render(1)) # note: Revealed type: `String`
 T.reveal_type(CfgYield.new.value { |value| value.to_s }) # note: Revealed type: `String`
