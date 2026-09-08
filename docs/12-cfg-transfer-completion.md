@@ -183,7 +183,9 @@ The first modularization steps are now in place:
   compound-assignment sends use owned CFG operands even without a HIR `Call`.
 * ordinary inline callback blocks now transfer from owned closure parameters,
   bodies, captured locals, bound receivers, and generic return contracts;
-  `define_method` remains an explicit future-method bridge.
+  inline `define_method` and `define_singleton_method` bodies now use the same
+  owned closure path; forwarded or passed blocks still require future-method
+  binding semantics.
 * recursive fallback no longer routes ordinary `if`, `while`/`until`, or `for`
   nodes through a synthetic CFG adapter; owned CFG bodies own branch and loop
   transfer, while unsupported bodies fall back transactionally to the legacy
@@ -251,7 +253,7 @@ The first modularization steps are now in place:
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
-builtin hooks, and
+builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
 semantics. Removing those requires moving their diagnostic and block contracts
 to owned source sites rather than weakening the checker. CFG fallback telemetry now
