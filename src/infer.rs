@@ -1262,8 +1262,15 @@ pub(crate) fn check_with_policies(
     let mut cfg_call_spans = HashSet::new();
     let mut cfg_write_spans = HashSet::new();
     let mut cfg_call_names = HashMap::new();
+    let mut cfg_conditionals = HashMap::new();
     let cfg_unsupported_count = cfgs.iter().map(|graph| graph.unsupported_spans.len()).sum();
     for graph in &cfgs {
+        for conditional in &graph.conditionals {
+            if let Some(expression) = hir_program.expression(conditional.expression) {
+                let span = (expression.span.start as usize, expression.span.end as usize);
+                cfg_conditionals.insert(span, conditional.clone());
+            }
+        }
         for block in &graph.blocks {
             for operation in &block.operations {
                 let span = (operation.span.start as usize, operation.span.end as usize);
@@ -1339,6 +1346,7 @@ pub(crate) fn check_with_policies(
         cfg_call_spans,
         cfg_write_spans,
         cfg_call_names,
+        cfg_conditionals,
         source_nodes,
         hir_call_ids,
         hir_assignment_ids,
@@ -1376,6 +1384,7 @@ pub(crate) fn check_with_policies(
         suppress_diagnostics: false,
         cfg_transfer_calls: 0,
         cfg_transfer_assignments: 0,
+        cfg_transfer_conditionals: 0,
         cfg_transfer_fallbacks: 0,
     };
     let result = analyzer.run(&root);
@@ -1400,6 +1409,7 @@ struct Analyzer<'src> {
     cfg_call_spans: HashSet<(usize, usize)>,
     cfg_write_spans: HashSet<(usize, usize)>,
     cfg_call_names: HashMap<(usize, usize), Vec<String>>,
+    cfg_conditionals: HashMap<(usize, usize), cfg::Conditional>,
     source_nodes: Option<HashMap<(usize, usize), Node<'src>>>,
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
@@ -1437,6 +1447,7 @@ struct Analyzer<'src> {
     suppress_diagnostics: bool,
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
+    cfg_transfer_conditionals: usize,
     cfg_transfer_fallbacks: usize,
 }
 
@@ -1682,10 +1693,14 @@ impl<'src> Analyzer<'src> {
         self.source_nodes.as_ref()?.get(&span)
     }
 
+    fn cfg_conditional_for_node(&self, node: &Node<'_>) -> Option<cfg::Conditional> {
+        self.cfg_conditionals.get(&prism::span(node)).cloned()
+    }
+
     fn report_cfg_fallback(&self, node: &Node<'_>, kind: &str) {
         if self.config.debug {
             eprintln!(
-                "[typey] CFG fallback for {kind} at {:?}: HIR operation is orphaned under an unsupported parent",
+                "[typey] CFG fallback for {kind} at {:?}: no owned transfer is available",
                 prism::span(node)
             );
         }
@@ -1718,6 +1733,123 @@ impl<'src> Analyzer<'src> {
         self.cfg_transfer_assignments = self.cfg_transfer_assignments.saturating_add(1);
         debug_assert!(self.source_node_for_span(prism::span(node)).is_some());
         self.eval_hir_assignment(node, target, value, operator, environment)
+    }
+
+    fn transfer_cfg_if<'node>(
+        &mut self,
+        node: &Node<'node>,
+        if_node: &IfNode<'node>,
+        conditional: cfg::Conditional,
+        environment: &mut Environment,
+    ) -> Eval {
+        self.cfg_transfer_conditionals = self.cfg_transfer_conditionals.saturating_add(1);
+        let predicate = if_node.predicate();
+        let then_node = if_node.statements().map(|statements| statements.as_node());
+        let subsequent = if_node.subsequent();
+        self.eval_cfg_conditional_paths(
+            node,
+            &predicate,
+            then_node,
+            subsequent,
+            if_node,
+            conditional,
+            environment,
+        )
+    }
+
+    fn eval_cfg_conditional_paths<'node>(
+        &mut self,
+        node: &Node<'node>,
+        predicate: &Node<'node>,
+        then_node: Option<Node<'node>>,
+        subsequent: Option<Node<'node>>,
+        if_node: &IfNode<'node>,
+        conditional: cfg::Conditional,
+        environment: &mut Environment,
+    ) -> Eval {
+        debug_assert_ne!(conditional.truthy, conditional.falsy);
+        debug_assert_ne!(conditional.join, conditional.truthy);
+        debug_assert_ne!(conditional.join, conditional.falsy);
+
+        let previous_defer_inline_assertions = self.defer_inline_assertions;
+        self.defer_inline_assertions = true;
+        let predicate_type = self
+            .eval_node(predicate, environment)
+            .normal_type
+            .unwrap_or(Type::Never);
+        self.defer_inline_assertions = previous_defer_inline_assertions;
+        let (then_reachable, else_reachable) =
+            self.predicate_reachability(predicate, environment, &predicate_type);
+        let report_unreachable = self.should_report_unreachable_branch(node)
+            && self.predicate_is_precise(predicate, environment);
+
+        let mut then_environment = environment.clone();
+        self.narrow_from_predicate(predicate, &mut then_environment, true);
+        if !then_reachable && report_unreachable {
+            if let Some(statements) = if_node.statements() {
+                if let Some(first) = statements.body().into_iter().next() {
+                    self.error(&first, "This code is unreachable");
+                }
+            }
+        }
+        let then_result = then_node.map_or_else(
+            || Eval::value(Type::Nil),
+            |then_node| self.eval_node(&then_node, &mut then_environment),
+        );
+        let then_result = if then_reachable {
+            then_result
+        } else {
+            Eval::unreachable()
+        };
+
+        let mut else_environment = environment.clone();
+        self.narrow_from_predicate(predicate, &mut else_environment, false);
+        let else_result = if let Some(subsequent) = subsequent {
+            if !else_reachable && report_unreachable {
+                if let Some(else_clause) = subsequent.as_else_node() {
+                    if let Some(statements) = else_clause.statements() {
+                        if let Some(first) = statements.body().into_iter().next() {
+                            self.error(&first, "This code is unreachable");
+                        }
+                    }
+                }
+            }
+            self.eval_alternative(&subsequent, &mut else_environment)
+        } else {
+            Eval::value(Type::Nil)
+        };
+        let else_result = if else_reachable {
+            else_result
+        } else {
+            Eval::unreachable()
+        };
+
+        *environment = self.join_flow_environments(
+            &then_environment,
+            then_result.flow,
+            &else_environment,
+            else_result.flow,
+        );
+        let mut result = Eval::combine(&then_result, &else_result);
+        let type_ = self.apply_inline_assertion(node, result.type_.clone());
+        result.type_ = self.record(node, type_);
+        result
+    }
+
+    fn eval_if_dispatch<'node>(
+        &mut self,
+        node: &Node<'node>,
+        if_node: &IfNode<'node>,
+        environment: &mut Environment,
+    ) -> Eval {
+        if self.config.enable_cfg {
+            if let Some(conditional) = self.cfg_conditional_for_node(node) {
+                return self.transfer_cfg_if(node, if_node, conditional, environment);
+            }
+            self.cfg_transfer_fallbacks = self.cfg_transfer_fallbacks.saturating_add(1);
+            self.report_cfg_fallback(node, "conditional");
+        }
+        self.eval_if(node, if_node, environment)
     }
 
     fn hir_call_view<'node>(
@@ -2129,8 +2261,11 @@ impl<'src> Analyzer<'src> {
         });
         if self.config.debug {
             eprintln!(
-                "[typey] CFG transfers: {} calls, {} assignments, {} legacy fallbacks",
-                self.cfg_transfer_calls, self.cfg_transfer_assignments, self.cfg_transfer_fallbacks
+                "[typey] CFG transfers: {} calls, {} assignments, {} conditionals, {} legacy fallbacks",
+                self.cfg_transfer_calls,
+                self.cfg_transfer_assignments,
+                self.cfg_transfer_conditionals,
+                self.cfg_transfer_fallbacks
             );
             eprintln!(
                 "[typey] complete: {} diagnostics, {} recorded types in {:?}",
@@ -3591,7 +3726,7 @@ impl<'src> Analyzer<'src> {
             return self.eval_rescue_modifier(node, &rescue, environment);
         }
         if let Some(if_node) = node.as_if_node() {
-            return self.eval_if(node, &if_node, environment);
+            return self.eval_if_dispatch(node, &if_node, environment);
         }
         if let Some(unless) = node.as_unless_node() {
             return self.eval_unless(node, &unless, environment);
@@ -6365,7 +6500,7 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         if let Some(if_node) = node.as_if_node() {
-            return self.eval_if(node, &if_node, environment);
+            return self.eval_if_dispatch(node, &if_node, environment);
         }
         if let Some(unless) = node.as_unless_node() {
             return self.eval_unless(node, &unless, environment);

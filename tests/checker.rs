@@ -89,6 +89,7 @@ fn preserves_positional_hash_argument_shape_through_hir_calls() {
 #[test]
 fn compiles_cfg_bodies_without_changing_checker_results() {
     let source = "value = 1\nif value\n  value.to_s\nend\n";
+    let baseline = check(source, CheckerConfig::default());
     let result = check(
         source,
         CheckerConfig {
@@ -96,7 +97,24 @@ fn compiles_cfg_bodies_without_changing_checker_results() {
             ..CheckerConfig::default()
         },
     );
+    assert_eq!(result.diagnostics, baseline.diagnostics);
+    assert_eq!(result.types, baseline.types);
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn transfers_cfg_conditionals_without_changing_flow_results() {
+    let source = std::fs::read_to_string("tests/fixtures/flow_outcomes.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
 }
 
 #[test]

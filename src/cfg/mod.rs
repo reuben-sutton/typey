@@ -27,12 +27,27 @@ pub struct Cfg {
     pub body: BodyId,
     pub entry: BlockId,
     pub blocks: Vec<BasicBlock>,
+    /// Conditional regions retain the owned HIR expression IDs that created
+    /// their branch and join blocks.  The IDs let the transfer phase execute
+    /// a branch without rediscovering it from parser nodes.
+    pub conditionals: Vec<Conditional>,
     /// Source spans where lowering required a transitional unsupported handoff.
     pub unsupported_spans: Vec<Span>,
     /// The value produced by each HIR expression, when it has a normally
     /// completing path. This keeps the graph connected to source HIR without
     /// embedding parser or inference state in the CFG.
     pub expression_values: Vec<Option<ValueId>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Conditional {
+    pub expression: ExprId,
+    pub condition: ExprId,
+    pub then_body: ExprId,
+    pub else_body: Option<ExprId>,
+    pub truthy: BlockId,
+    pub falsy: BlockId,
+    pub join: BlockId,
 }
 
 impl Cfg {

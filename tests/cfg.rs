@@ -174,6 +174,38 @@ fn lowers_if_with_normal_join_and_value_parameter() {
 }
 
 #[test]
+fn records_conditional_hir_identity_and_cfg_targets() {
+    let program = lower(FileId(3), b"if condition\n  left\nelse\n  right\nend");
+    let body = program.root.expect("lowered root body");
+    let graph = build(&program, body);
+    let conditional = graph.conditionals.first().expect("conditional region");
+    let expression = program
+        .expression(conditional.expression)
+        .expect("conditional expression");
+    assert!(matches!(expression.kind, ExprKind::If { .. }));
+    assert!(matches!(
+        graph
+            .block(conditional.truthy)
+            .expect("truthy block")
+            .terminator,
+        Terminator::Jump { .. } | Terminator::Return(_) | Terminator::Unreachable
+    ));
+    assert!(matches!(
+        graph
+            .block(conditional.falsy)
+            .expect("falsy block")
+            .terminator,
+        Terminator::Jump { .. } | Terminator::Return(_) | Terminator::Unreachable
+    ));
+    assert!(graph
+        .block(conditional.join)
+        .expect("join block")
+        .parameters
+        .iter()
+        .any(|parameter| !parameter.incoming.is_empty()));
+}
+
+#[test]
 fn lowers_compound_assignment_to_read_branch_write_and_join() {
     let graph = cfg("value ||= fallback");
     assert!(operations(&graph).iter().any(|operation| matches!(

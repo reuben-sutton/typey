@@ -6,7 +6,8 @@
 
 use super::{
     ArgumentOperand, ArrayOperand, BasicBlock, BlockId, BlockOperand, BlockParameter, Cfg,
-    HashOperand, Operation, OperationKind, Pattern, Place, ReceiverOperand, Terminator, ValueId,
+    Conditional, HashOperand, Operation, OperationKind, Pattern, Place, ReceiverOperand,
+    Terminator, ValueId,
 };
 use crate::hir::{
     self, Argument, AssignOperator, AssignTarget, BeginExpr, BodyId, ExprId, ExprKind, LoopExpr,
@@ -70,6 +71,7 @@ impl<'program> Builder<'program> {
                 body,
                 entry: BlockId(0),
                 blocks: Vec::new(),
+                conditionals: Vec::new(),
                 unsupported_spans: Vec::new(),
                 expression_values: vec![None; program.expressions.len()],
             },
@@ -641,6 +643,15 @@ impl<'program> Builder<'program> {
             then_block,
             else_block,
         );
+        self.cfg.conditionals.push(Conditional {
+            expression,
+            condition,
+            then_body,
+            else_body,
+            truthy: then_block,
+            falsy: else_block,
+            join,
+        });
 
         let then_flow = self.lower_expr(then_body, then_block);
         if then_flow.reachable {

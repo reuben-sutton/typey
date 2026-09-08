@@ -23,6 +23,9 @@ recursive evaluator remains the compatibility baseline.
 * `1c2c3ef` added the opt-in Prism child-node index used by the temporary
   transfer bridge.
 * `ceb682f` exposed the migration path as `typey --cfg`.
+* The current work records owned conditional regions and transfers `if`
+  branches and joins through those regions while retaining the existing flow
+  lattice and source-node child evaluation.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -32,7 +35,7 @@ into a concrete value or silently replaced with `T.untyped`.
 
 The current gates pass:
 
-* CFG structural tests: 7 passed;
+* CFG structural tests: 14 passed;
 * HIR lowering tests: 10 passed;
 * checker tests: 328 passed;
 * conformance tests: 158 passed;
@@ -45,20 +48,19 @@ baseline performance because CFG construction is not yet enabled by default.
 
 ## Remaining migration boundary
 
-The legacy recursive evaluator still owns conditional, loop, rescue, ensure,
-and general expression transfer. CFG mode currently uses the graph to select
-call/assignment transfer entry points and falls back explicitly for executable
-expressions that are still orphaned under unsupported syntax.
+The legacy recursive evaluator still owns loop, rescue, ensure, and general
+expression transfer. CFG mode now selects conditional branch bodies and joins
+from owned CFG regions, while retaining source-node child evaluation as a
+temporary bridge. It still uses explicit fallbacks for executable expressions
+that are orphaned under unsupported syntax.
 
 The next stages are therefore:
 
-1. use CFG block transfer for conditionals and joins while preserving the
-   existing environment lattice;
-2. transfer loops, `break`, and `next` through CFG edges;
-3. transfer rescue, `retry`, and ensure edges;
-4. compare diagnostics, inferred types, flow outcomes, send metrics, and
+1. transfer loops, `break`, and `next` through CFG edges;
+2. transfer rescue, `retry`, and ensure edges;
+3. compare diagnostics, inferred types, flow outcomes, send metrics, and
    untyped provenance against the recursive path;
-5. remove the opt-in switch and legacy path only after those comparisons are
+4. remove the opt-in switch and legacy path only after those comparisons are
    complete.
 
 The source-node index and HIR expression IDs are intentionally temporary
