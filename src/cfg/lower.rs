@@ -45,11 +45,19 @@ pub fn build_all(program: &Program) -> Vec<Cfg> {
 /// program-wide expression-value table. These graphs are immutable after
 /// lowering and can be cached for every inference pass.
 pub(crate) fn build_all_for_index(program: &Program) -> Vec<Cfg> {
+    let expressions_by_span = expression_index(program);
     program
         .bodies
         .iter()
         .enumerate()
-        .map(|(index, _)| build_for_index(program, BodyId(index as u32)))
+        .map(|(index, _)| {
+            build_with_index_and_values(
+                program,
+                BodyId(index as u32),
+                Some(&expressions_by_span),
+                false,
+            )
+        })
         .collect()
 }
 
@@ -1485,4 +1493,26 @@ fn builder_new_block_like(
 ) -> BlockId {
     let _ = block;
     builder.new_block_with_unwind(unwind)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transfer_graphs_retain_expression_identity_without_value_tables() {
+        let source = b"value = 1\nvalue.to_s\n";
+        let program = hir::lower(hir::FileId(0), source);
+        let graphs = build_all_for_index(&program);
+        let graph = graphs.first().expect("root graph");
+        assert!(graph.expression_values.is_empty());
+        assert!(graph
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .any(
+                |operation| matches!(operation.kind, OperationKind::Call { .. })
+                    && operation.expression.is_some()
+            ));
+    }
 }
