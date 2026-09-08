@@ -97,7 +97,9 @@ The first modularization steps are now in place:
 * `infer/call_types.rs` owns the parser-backed call boundary, and CFG dispatch
   receives an `OwnedCallInput` containing the call identity and CFG operands;
   and
-* CFG argument materialization is isolated to that adapter, so the transfer
+* CFG call shape is first computed as an owned `OwnedCallArguments` value from
+  HIR groups and `BlockState` values; only the final legacy adapter attaches
+  Prism nodes for exact diagnostics and keyword-key recording, so the transfer
   host no longer reconstructs call shape directly from `CallNode` children;
 * `infer/call_types.rs` owns `CallNodeIndex`, the narrow parser lookup that
   retains all same-span Prism candidates and selects the semantic call node,

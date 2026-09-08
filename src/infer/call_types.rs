@@ -71,6 +71,91 @@ pub(super) struct OwnedCallInput {
     pub(super) safe_navigation: bool,
 }
 
+#[derive(Clone, Debug)]
+struct OwnedKeywordArgument {
+    name: String,
+    type_: Type,
+    argument_index: usize,
+    entry_index: usize,
+}
+
+/// Semantic call arguments produced from HIR and CFG values. The legacy
+/// `CallArguments` shape is materialized only after this has been computed,
+/// when parser nodes are needed for an exact diagnostic or builtin hook.
+#[derive(Clone, Debug, Default)]
+struct OwnedCallArguments {
+    argument_sites: Vec<SourceSite>,
+    argument_types: Vec<Type>,
+    argument_indices: Vec<usize>,
+    positional_indices: Vec<usize>,
+    positional_types: Vec<Type>,
+    keyword_arguments: Vec<OwnedKeywordArgument>,
+    has_keyword_splat: bool,
+    has_dynamic_positional_splat: bool,
+    dynamic_positional_splat_types: Vec<Type>,
+    has_dynamic_keyword_splat: bool,
+    has_unknown_positional_splat: bool,
+    has_unknown_keyword_splat: bool,
+    forwards_arguments: bool,
+}
+
+impl OwnedCallArguments {
+    fn materialize<'node>(
+        self,
+        analyzer: &mut Analyzer<'_>,
+        node: &Node<'node>,
+    ) -> Option<CallArguments<'node>> {
+        let raw_argument_nodes = node
+            .as_call_node()
+            .and_then(|call| call.arguments())
+            .or_else(|| {
+                node.as_super_node()
+                    .and_then(|super_node| super_node.arguments())
+            })
+            .or_else(|| {
+                node.as_yield_node()
+                    .and_then(|yield_node| yield_node.arguments())
+            })
+            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if raw_argument_nodes.len() != self.argument_sites.len() {
+            return None;
+        }
+        let mut keyword_arguments = Vec::with_capacity(self.keyword_arguments.len());
+        for argument in self.keyword_arguments {
+            let argument_node = raw_argument_nodes.get(argument.argument_index)?;
+            let value_node = argument_node
+                .as_keyword_hash_node()?
+                .elements()
+                .into_iter()
+                .nth(argument.entry_index)?
+                .as_assoc_node()?;
+            analyzer.record(&value_node.key(), Type::Symbol);
+            let value_node = value_node.value();
+            keyword_arguments.push(KeywordArgument {
+                name: argument.name,
+                node: value_node,
+                type_: argument.type_,
+            });
+        }
+        Some(CallArguments {
+            argument_nodes: raw_argument_nodes,
+            argument_types: self.argument_types,
+            argument_indices: self.argument_indices,
+            positional_indices: self.positional_indices,
+            positional_types: self.positional_types,
+            keyword_arguments,
+            has_keyword_splat: self.has_keyword_splat,
+            has_dynamic_positional_splat: self.has_dynamic_positional_splat,
+            dynamic_positional_splat_types: self.dynamic_positional_splat_types,
+            has_dynamic_keyword_splat: self.has_dynamic_keyword_splat,
+            has_unknown_positional_splat: self.has_unknown_positional_splat,
+            has_unknown_keyword_splat: self.has_unknown_keyword_splat,
+            forwards_arguments: self.forwards_arguments,
+        })
+    }
+}
+
 impl OwnedCallInput {
     pub(super) fn from_operation(operation: &cfg::Operation) -> Option<Self> {
         let cfg::OperationKind::Call {
@@ -388,6 +473,24 @@ impl<'src> Analyzer<'src> {
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
         environment: &super::Environment,
     ) -> Option<CallArguments<'node>> {
+        let owned = self.cfg_owned_hir_call_arguments(
+            input,
+            call,
+            values,
+            fixed_array_elements,
+            environment,
+        )?;
+        owned.materialize(self, node)
+    }
+
+    fn cfg_owned_hir_call_arguments(
+        &mut self,
+        input: &OwnedCallInput,
+        call: &hir::Call,
+        values: &[Option<Type>],
+        fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
+        environment: &super::Environment,
+    ) -> Option<OwnedCallArguments> {
         if call
             .arguments
             .iter()
@@ -403,34 +506,26 @@ impl<'src> Analyzer<'src> {
             let method = environment.method_key.as_ref()?;
             let state = self.declarations.methods.get(method)?;
             let positional_types = state.call_signature().params;
-            let mut call_arguments = CallArguments {
+            let mut call_arguments = OwnedCallArguments {
                 argument_types: positional_types.clone(),
                 positional_types,
                 forwards_arguments: true,
-                ..CallArguments::default()
+                argument_sites: call
+                    .argument_spans
+                    .iter()
+                    .copied()
+                    .map(|span| SourceSite::from_span(span, None))
+                    .collect(),
+                ..OwnedCallArguments::default()
             };
             call_arguments.argument_indices = (0..call_arguments.argument_types.len()).collect();
             call_arguments.positional_indices = call_arguments.argument_indices.clone();
             return Some(call_arguments);
         }
-        let raw_argument_nodes = node
-            .as_call_node()
-            .and_then(|call| call.arguments())
-            .or_else(|| {
-                node.as_super_node()
-                    .and_then(|super_node| super_node.arguments())
-            })
-            .or_else(|| {
-                node.as_yield_node()
-                    .and_then(|yield_node| yield_node.arguments())
-            })
-            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
-            .unwrap_or_default();
-        if raw_argument_nodes.len() != call.argument_groups.len() {
+        if call.argument_spans.len() != call.argument_groups.len() {
             return None;
         }
-        let mut raw_argument_nodes = raw_argument_nodes.into_iter();
-        let mut call_arguments = CallArguments::default();
+        let mut call_arguments = OwnedCallArguments::default();
         let mut operand_index = 0usize;
         let mut group_start = 0usize;
         for (argument_index, (group_end, span)) in call
@@ -439,11 +534,9 @@ impl<'src> Analyzer<'src> {
             .zip(&call.argument_spans)
             .enumerate()
         {
-            let argument_node = raw_argument_nodes.next()?;
-            debug_assert_eq!(
-                crate::prism::span(&argument_node),
-                (span.start as usize, span.end as usize)
-            );
+            call_arguments
+                .argument_sites
+                .push(SourceSite::from_span(*span, None));
             let group = call.arguments.get(group_start..*group_end)?;
             if !group.is_empty()
                 && group.iter().all(|argument| {
@@ -453,29 +546,11 @@ impl<'src> Analyzer<'src> {
                     )
                 })
             {
-                let keyword_entries = argument_node
-                    .as_keyword_hash_node()?
-                    .elements()
-                    .into_iter()
-                    .map(|element| {
-                        if let Some(assoc) = element.as_assoc_node() {
-                            self.record(&assoc.key(), Type::Symbol);
-                            Some((true, assoc.value()))
-                        } else if let Some(splat) = element.as_assoc_splat_node() {
-                            Some((false, splat.value()?))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                let mut keyword_entries = keyword_entries.into_iter();
                 let mut key = Type::Never;
                 let mut value = Type::Never;
-                let mut keyword_arguments = Vec::with_capacity(group.len());
-                for argument in group {
-                    let (pair, value_node) = keyword_entries.next()?;
+                for (entry_index, argument) in group.iter().enumerate() {
                     match argument {
-                        hir::Argument::Keyword { name, value: _ } if pair => {
+                        hir::Argument::Keyword { name, value: _ } => {
                             let cfg::ArgumentOperand::Keyword {
                                 name: operand_name,
                                 value: cfg_value_id,
@@ -489,13 +564,14 @@ impl<'src> Analyzer<'src> {
                             }
                             key = key.join(&Type::Symbol);
                             value = value.join(&type_);
-                            keyword_arguments.push(KeywordArgument {
+                            call_arguments.keyword_arguments.push(OwnedKeywordArgument {
                                 name: name.as_str().to_owned(),
-                                node: value_node,
                                 type_,
+                                argument_index,
+                                entry_index,
                             });
                         }
-                        hir::Argument::KeywordSplat(_) if !pair => {
+                        hir::Argument::KeywordSplat(_) => {
                             let cfg::ArgumentOperand::KeywordSplat(value_id) =
                                 input.arguments.get(operand_index)?
                             else {
@@ -525,20 +601,14 @@ impl<'src> Analyzer<'src> {
                     }
                     operand_index += 1;
                 }
-                if keyword_entries.next().is_some() {
-                    return None;
-                }
                 let key = if key.is_never() { Type::Any } else { key };
                 let value = if value.is_never() { Type::Any } else { value };
-                let hash_type = self.apply_inline_assertion(
-                    &argument_node,
-                    Type::Hash(Box::new(key), Box::new(value)),
-                );
-                self.record(&argument_node, hash_type.clone());
-                call_arguments.argument_nodes.push(argument_node);
+                let site = SourceSite::from_span(*span, None);
+                let hash_type = self
+                    .apply_inline_assertion_at(site, Type::Hash(Box::new(key), Box::new(value)));
+                let hash_type = self.record_at(site, hash_type, false, None);
                 call_arguments.argument_types.push(hash_type);
                 call_arguments.argument_indices.push(argument_index);
-                call_arguments.keyword_arguments.extend(keyword_arguments);
                 group_start = *group_end;
                 continue;
             }
@@ -568,7 +638,6 @@ impl<'src> Analyzer<'src> {
                     call_arguments.has_dynamic_positional_splat = true;
                     call_arguments.dynamic_positional_splat_types.push(type_);
                 }
-                call_arguments.argument_nodes.push(argument_node);
                 operand_index += 1;
                 group_start = *group_end;
                 continue;
@@ -578,7 +647,6 @@ impl<'src> Analyzer<'src> {
                 return None;
             };
             let type_ = values.get(value.0 as usize).cloned().flatten()?;
-            call_arguments.argument_nodes.push(argument_node);
             call_arguments.argument_types.push(type_.clone());
             call_arguments.argument_indices.push(argument_index);
             call_arguments.positional_indices.push(argument_index);
