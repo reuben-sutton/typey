@@ -166,6 +166,22 @@ fn transfers_straight_line_method_bodies_without_changing_results() {
 }
 
 #[test]
+fn transfers_logical_writes_for_owned_storage_places() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/hir_assignment_dispatch.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn transfers_rescue_handlers_and_unwind_edges_without_changing_results() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_exception_transfer.rb").expect("fixture");

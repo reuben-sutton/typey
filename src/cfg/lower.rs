@@ -859,6 +859,14 @@ impl<'program> Builder<'program> {
                         vec![written.1.expect("assignment write produces a value")],
                     );
                 }
+                self.emit(
+                    join,
+                    span,
+                    OperationKind::Record {
+                        value: Some(joined),
+                    },
+                    false,
+                );
                 self.normal(expression, join, Some(joined))
             }
             AssignOperator::Binary(operator) => {

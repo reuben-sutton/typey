@@ -332,6 +332,16 @@ impl Environment {
         self.known_truthiness.remove(&name);
     }
 
+    fn remove(&mut self, name: &str) {
+        self.locals.remove(name);
+        self.inferred_locals.remove(name);
+        self.provisional_locals.remove(name);
+        self.open_array_locals.remove(name);
+        self.known_nonempty_arrays.remove(name);
+        self.predicate_aliases.remove(name);
+        self.known_truthiness.remove(name);
+    }
+
     fn mark_inferred(&mut self, name: impl Into<String>) {
         let name = name.into();
         if self.locals.contains_key(&name) {

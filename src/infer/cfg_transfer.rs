@@ -11,6 +11,10 @@ use ruby_prism::{IfNode, Node};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+fn cfg_global_refinement_key(name: &str) -> String {
+    format!("\u{1}cfg-global:{name}")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CfgFallbackKind {
     UnsupportedOperation,
@@ -256,27 +260,13 @@ fn expr_can_transfer(
                 expr_can_transfer(program, ensure, visiting, loop_depth, local_return)
             })
         }
-        ExprKind::Assign {
-            target,
-            value,
-            operator,
-            ..
-        } => {
-            let direct_target = matches!(
-                target,
-                hir::AssignTarget::Local(_)
-                    | hir::AssignTarget::InstanceVariable(_)
-                    | hir::AssignTarget::ClassVariable(_)
-                    | hir::AssignTarget::Global(_)
-                    | hir::AssignTarget::Constant(_)
-            );
-            let logical_target = matches!(target, hir::AssignTarget::Local(_));
+        ExprKind::Assign { target, value, .. } => {
             let target_supported = match target {
                 hir::AssignTarget::Local(_)
                 | hir::AssignTarget::InstanceVariable(_)
                 | hir::AssignTarget::ClassVariable(_)
                 | hir::AssignTarget::Global(_)
-                | hir::AssignTarget::Constant(_) => direct_target,
+                | hir::AssignTarget::Constant(_) => true,
                 hir::AssignTarget::Attribute { receiver, .. } => {
                     expr_can_transfer(program, *receiver, visiting, loop_depth, local_return)
                 }
@@ -300,17 +290,7 @@ fn expr_can_transfer(
                         })
                 }
             };
-            matches!(
-                (operator, target_supported),
-                (
-                    hir::AssignOperator::Set | hir::AssignOperator::Binary(_),
-                    true
-                ) | (hir::AssignOperator::And | hir::AssignOperator::Or, true)
-            ) && (logical_target
-                || matches!(
-                    operator,
-                    hir::AssignOperator::Set | hir::AssignOperator::Binary(_)
-                ))
+            target_supported
                 && expr_can_transfer(program, *value, visiting, loop_depth, local_return)
         }
         ExprKind::Sequence(expressions) => expressions.iter().all(|expression| {
@@ -622,6 +602,24 @@ fn loop_graph() -> &'static cfg::Cfg {
 }
 
 impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
+    fn suppress_internal_assignment_record(&self, operation: &cfg::Operation) -> bool {
+        let Some(expression) = operation.expression else {
+            return false;
+        };
+        let Some(hir::Expr {
+            kind: hir::ExprKind::Assign { operator, .. },
+            ..
+        }) = self.analyzer.hir_program.expression(expression)
+        else {
+            return false;
+        };
+        matches!(operator, hir::AssignOperator::And | hir::AssignOperator::Or)
+            && matches!(
+                operation.kind,
+                cfg::OperationKind::Read { .. } | cfg::OperationKind::Write { .. }
+            )
+    }
+
     fn transfer_closure(
         analyzer: &mut Analyzer<'src>,
         closure_id: hir::ClosureId,
@@ -716,7 +714,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             }
             cfg::Place::Global(name) => {
                 let type_ = analyzer.apply_inline_assertion_at(site, actual);
-                analyzer.observe_global(name.as_str().to_owned(), &type_);
+                environment.bind(cfg_global_refinement_key(name.as_str()), type_.clone());
                 type_
             }
             cfg::Place::Constant(path) => {
@@ -1348,10 +1346,12 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
             if let Some(result) = operation.result {
                 next.set_value(result, type_.clone());
             }
-            if !matches!(
-                operation.kind,
-                cfg::OperationKind::PatternTest { .. } | cfg::OperationKind::Record { .. }
-            ) {
+            if !self.suppress_internal_assignment_record(operation)
+                && !matches!(
+                    operation.kind,
+                    cfg::OperationKind::PatternTest { .. } | cfg::OperationKind::Record { .. }
+                )
+            {
                 if matches!(operation.kind, cfg::OperationKind::Call { .. }) {
                     self.analyzer
                         .record_at(site, type_, self.analyzer.report, None);
@@ -1911,6 +1911,57 @@ impl<'analyzer, 'src, 'node, 'nodes> cfg::transfer::BlockTransfer
 }
 
 impl<'src> Analyzer<'src> {
+    fn seed_cfg_global_state(&self, graph: &cfg::Cfg, environment: &mut Environment) {
+        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
+            let place = match &operation.kind {
+                cfg::OperationKind::Read { place } | cfg::OperationKind::Write { place, .. } => {
+                    place
+                }
+                _ => continue,
+            };
+            let cfg::Place::Global(name) = place else {
+                continue;
+            };
+            let name = name.as_str();
+            let type_ = self.globals.get(name).cloned().unwrap_or(Type::Any);
+            environment.bind(cfg_global_refinement_key(name), type_);
+        }
+    }
+
+    fn commit_cfg_global_state(&mut self, graph: &cfg::Cfg, environment: &Environment) {
+        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
+            let place = match &operation.kind {
+                cfg::OperationKind::Write { place, .. } => place,
+                _ => continue,
+            };
+            let cfg::Place::Global(name) = place else {
+                continue;
+            };
+            let name = name.as_str();
+            if let Some(type_) = environment
+                .contains(&cfg_global_refinement_key(name))
+                .then(|| environment.get(&cfg_global_refinement_key(name)))
+            {
+                self.observe_global(name.to_owned(), &type_);
+            }
+        }
+    }
+
+    fn clear_cfg_global_state(graph: &cfg::Cfg, environment: &mut Environment) {
+        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
+            let place = match &operation.kind {
+                cfg::OperationKind::Read { place } | cfg::OperationKind::Write { place, .. } => {
+                    place
+                }
+                _ => continue,
+            };
+            let cfg::Place::Global(name) = place else {
+                continue;
+            };
+            environment.remove(&cfg_global_refinement_key(name.as_str()));
+        }
+    }
+
     /// Run the generic CFG transfer over a complete, straight-line method
     /// body. Bodies with dispatch, branches, or exceptional control flow stay
     /// on the recursive evaluator until their owned transfer exists; the
@@ -2031,7 +2082,9 @@ impl<'src> Analyzer<'src> {
             parameters: body.parameters.clone(),
             strictness: self.strictness_at(body.span.start as usize),
         };
-        let initial = BlockState::with_values(environment.clone(), Vec::new(), Flow::normal());
+        let mut initial_environment = environment.clone();
+        self.seed_cfg_global_state(&graph, &mut initial_environment);
+        let initial = BlockState::with_values(initial_environment, Vec::new(), Flow::normal());
         let mut transfer = BodyTransfer {
             analyzer: self,
             context,
@@ -2046,10 +2099,12 @@ impl<'src> Analyzer<'src> {
         let normal_type = transfer.normal_type.clone();
         let abrupt = transfer.abrupt.clone();
         let terminal_flow = transfer.terminal_flow;
-        let final_environment = transfer.final_environment.clone()?;
+        let mut final_environment = transfer.final_environment.clone()?;
         drop(worklist);
         drop(transfer);
         self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);
+        self.commit_cfg_global_state(&graph, &final_environment);
+        Self::clear_cfg_global_state(&graph, &mut final_environment);
         *environment = final_environment;
         let mut result = Eval::from_parts(
             Some(normal_type),
@@ -2290,10 +2345,11 @@ impl<'src> Analyzer<'src> {
             Read::Global(name) => {
                 let name = name.as_str().to_owned();
                 self.record_shared_read(SharedKey::Global(name.clone()), environment);
-                self.apply_inline_assertion_at(
-                    site,
-                    self.globals.get(&name).cloned().unwrap_or(Type::Any),
-                )
+                let actual = environment
+                    .contains(&cfg_global_refinement_key(&name))
+                    .then(|| environment.get(&cfg_global_refinement_key(&name)))
+                    .unwrap_or_else(|| self.globals.get(&name).cloned().unwrap_or(Type::Any));
+                self.apply_inline_assertion_at(site, actual)
             }
             Read::Constant(path) => {
                 let name = path.as_str().to_owned();
