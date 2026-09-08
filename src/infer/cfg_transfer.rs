@@ -1,14 +1,9 @@
-use super::cfg_state::BlockState;
-use super::{Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, SourceSite};
-use crate::cfg;
-use crate::hir;
+use super::{Analyzer, SourceSite};
 use crate::prism;
-use crate::types::Type;
 use ruby_prism::Node;
 
 mod assignment;
 mod body;
-mod legacy;
 mod patterns;
 mod preflight;
 mod value;
@@ -91,7 +86,10 @@ impl<'src> Analyzer<'src> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::cfg_state::BlockState;
+    use super::super::{Environment, Flow, FlowKind};
     use super::*;
+    use crate::types::Type;
 
     fn environment(name: &str, type_: Type) -> Environment {
         let mut environment = Environment::default();

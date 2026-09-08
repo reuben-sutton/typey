@@ -327,8 +327,6 @@ pub(crate) fn check_with_policies(
         cfg_transfer_bodies: 0,
         cfg_transfer_calls: 0,
         cfg_transfer_assignments: 0,
-        cfg_transfer_conditionals: 0,
-        cfg_transfer_loops: 0,
         cfg_transfer_values: 0,
         cfg_transfer_fallbacks: CfgFallbackCounters::default(),
     };
@@ -390,8 +388,6 @@ struct Analyzer<'src> {
     cfg_transfer_bodies: usize,
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
-    cfg_transfer_conditionals: usize,
-    cfg_transfer_loops: usize,
     cfg_transfer_values: usize,
     cfg_transfer_fallbacks: CfgFallbackCounters,
 }

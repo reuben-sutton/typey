@@ -211,12 +211,10 @@ impl<'src> Analyzer<'src> {
         });
         if self.config.debug {
             eprintln!(
-                "[typey] CFG transfers: {} bodies, {} calls, {} assignments, {} conditionals, {} loops, {} values, {} fallbacks (unsupported operations {}, unsupported edges {}, legacy bridges {})",
+                "[typey] CFG transfers: {} bodies, {} calls, {} assignments, {} values, {} fallbacks (unsupported operations {}, unsupported edges {}, legacy bridges {})",
                 self.cfg_transfer_bodies,
                 self.cfg_transfer_calls,
                 self.cfg_transfer_assignments,
-                self.cfg_transfer_conditionals,
-                self.cfg_transfer_loops,
                 self.cfg_transfer_values,
                 self.cfg_transfer_fallbacks.total(),
                 self.cfg_transfer_fallbacks.unsupported_operation,

@@ -311,7 +311,7 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         if let Some(if_node) = node.as_if_node() {
-            return self.eval_if_dispatch(node, &if_node, environment);
+            return self.eval_if(node, &if_node, environment);
         }
         if let Some(unless) = node.as_unless_node() {
             return self.eval_unless(node, &unless, environment);

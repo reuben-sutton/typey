@@ -852,7 +852,7 @@ impl<'src> Analyzer<'src> {
             return self.eval_rescue_modifier(node, &rescue, environment);
         }
         if let Some(if_node) = node.as_if_node() {
-            return self.eval_if_dispatch(node, &if_node, environment);
+            return self.eval_if(node, &if_node, environment);
         }
         if let Some(unless) = node.as_unless_node() {
             return self.eval_unless(node, &unless, environment);
@@ -1021,15 +1021,6 @@ impl<'src> Analyzer<'src> {
         if let Some(while_node) = node.as_while_node() {
             let predicate = while_node.predicate();
             let statements = while_node.statements();
-            if self.config.enable_cfg {
-                return self.eval_cfg_loop(
-                    node,
-                    &predicate,
-                    statements.as_ref(),
-                    environment,
-                    true,
-                );
-            }
             let mut result = self.eval_loop(&predicate, statements.as_ref(), environment, true);
             let type_ =
                 self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
@@ -1039,15 +1030,6 @@ impl<'src> Analyzer<'src> {
         if let Some(until_node) = node.as_until_node() {
             let predicate = until_node.predicate();
             let statements = until_node.statements();
-            if self.config.enable_cfg {
-                return self.eval_cfg_loop(
-                    node,
-                    &predicate,
-                    statements.as_ref(),
-                    environment,
-                    false,
-                );
-            }
             let mut result = self.eval_loop(&predicate, statements.as_ref(), environment, false);
             let type_ =
                 self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
@@ -1055,9 +1037,6 @@ impl<'src> Analyzer<'src> {
             return result;
         }
         if let Some(for_node) = node.as_for_node() {
-            if self.config.enable_cfg {
-                return self.eval_cfg_for(node, &for_node, environment);
-            }
             return self.eval_for(node, &for_node, environment);
         }
 

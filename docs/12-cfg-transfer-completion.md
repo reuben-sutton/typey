@@ -184,10 +184,10 @@ The first modularization steps are now in place:
 * ordinary inline callback blocks now transfer from owned closure parameters,
   bodies, captured locals, bound receivers, and generic return contracts;
   `define_method` remains an explicit future-method bridge.
-* parser-backed conditional, `while`/`until`, and `for` CFG entry points now
-  live in `infer/cfg_transfer/legacy.rs`; the adapter now owns their parser
-  bridge, synthetic transfer states, graph constructors, and compatibility
-  worklists as one boundary.
+* recursive fallback no longer routes ordinary `if`, `while`/`until`, or `for`
+  nodes through a synthetic CFG adapter; owned CFG bodies own branch and loop
+  transfer, while unsupported bodies fall back transactionally to the legacy
+  evaluator;
 * complete owned-body transfer now lives in `infer/cfg_transfer/body.rs`,
   leaving the parent module to coordinate body entry, value/assignment bridges,
   and fallback telemetry while the block worklist owns operation semantics.
@@ -251,8 +251,7 @@ The first modularization steps are now in place:
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
-builtin hooks; the specialized conditional/loop helpers still consume parser
-nodes through the dedicated legacy adapter; and
+builtin hooks, and
 `define_method`/`define_singleton_method` still require future-method binding
 semantics. Removing those requires moving their diagnostic and block contracts
 to owned source sites rather than weakening the checker. CFG fallback telemetry now
@@ -404,8 +403,8 @@ because its Prism node was not found.
 5. Implement rescue, retry, and ensure unwind routing. Non-local `return`,
    `break`, and `next` outcome routing is now explicit; the remaining work is
    to retire the parser-backed call and DSL bridges.
-6. Delete `CallNodeIndex` from CFG transfer and make `HirCallView` recursive
-   only.
+6. Keep parser call views recursive-only and remove synthetic parser-backed CFG
+   adapters as their owned body equivalents become complete.
 7. Run CFG by default behind a temporary opt-out, then remove the opt-out once
    the differential gates pass.
 
