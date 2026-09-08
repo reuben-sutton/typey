@@ -1,8 +1,7 @@
 # typed: true
 
 # @interface
-# error: Classes can't be interfaces. Use `abstract!` instead of `interface!`
-class InvalidInterface; end
+class InvalidInterface; end # error: Classes can't be interfaces. Use `abstract!` instead of `interface!`
 
 module ValidInterface
   interface!
