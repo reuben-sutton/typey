@@ -134,6 +134,12 @@ pub enum OperationKind {
     BuildHash {
         elements: Vec<HashOperand>,
     },
+    /// Record a joined expression value without introducing another runtime
+    /// operation. This is used for begin/conditional join expressions whose
+    /// value is carried by a block parameter.
+    Record {
+        value: Option<ValueId>,
+    },
     PatternTest {
         value: ValueId,
         pattern: Pattern,

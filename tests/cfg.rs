@@ -327,6 +327,29 @@ fn lowers_ensure_completion_after_normal_and_unwind_paths() {
 }
 
 #[test]
+fn lowers_retry_to_the_protected_body_entry() {
+    let graph = cfg("begin\n  risky\nrescue StandardError\n  retry\nend");
+    let retry_target = graph
+        .blocks
+        .iter()
+        .find_map(|block| match block.terminator {
+            Terminator::Jump { target, .. }
+                if graph
+                    .block(target)
+                    .is_some_and(|target| target.unwind.is_some()) =>
+            {
+                Some(target)
+            }
+            _ => None,
+        })
+        .expect("retry jump to protected body");
+    assert!(graph
+        .blocks
+        .iter()
+        .any(|block| block.unwind == graph.block(retry_target).and_then(|block| block.unwind)));
+}
+
+#[test]
 fn lowers_rescue_reference_retry_and_ensure_edges() {
     let graph = cfg(
         "begin\n  risky\nrescue StandardError => error\n  retry\nensure\n  cleanup(error)\nend",

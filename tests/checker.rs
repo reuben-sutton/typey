@@ -199,6 +199,22 @@ fn transfers_ensure_on_normal_and_exceptional_paths_without_changing_results() {
 }
 
 #[test]
+fn transfers_retry_back_to_the_protected_body_without_changing_results() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_retry_transfer.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn uses_cfg_call_and_assignment_transfers_for_supported_shapes() {
     let source = r#"class Box
   def value=(value)

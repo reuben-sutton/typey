@@ -337,6 +337,77 @@ impl<'src> Analyzer<'src> {
         (group_start == call.arguments.len() && operand_index == input.arguments.len())
             .then_some(call_arguments)
     }
+
+    /// Materialize call arguments for CFG operations synthesized by lowering,
+    /// such as the `+` send inside `value += 1`. These operations have owned
+    /// operand values but no HIR `Call` or parser argument node to bridge.
+    pub(super) fn cfg_owned_call_arguments<'node>(
+        &mut self,
+        input: &OwnedCallInput,
+        values: &[Option<Type>],
+        fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
+    ) -> Option<CallArguments<'node>> {
+        let mut call_arguments = CallArguments::default();
+        for (argument_index, argument) in input.arguments.iter().enumerate() {
+            match argument {
+                cfg::ArgumentOperand::Positional(value) => {
+                    let type_ = values.get(value.0 as usize).cloned().flatten()?;
+                    call_arguments.argument_types.push(type_.clone());
+                    call_arguments.argument_indices.push(argument_index);
+                    call_arguments.positional_indices.push(argument_index);
+                    call_arguments.positional_types.push(type_);
+                }
+                cfg::ArgumentOperand::Splat(value) => {
+                    let type_ = values.get(value.0 as usize).cloned().flatten()?;
+                    if let Some(elements) = fixed_array_elements.get(value) {
+                        for element in elements {
+                            let type_ = values.get(element.0 as usize).cloned().flatten()?;
+                            call_arguments.argument_types.push(type_.clone());
+                            call_arguments.argument_indices.push(argument_index);
+                            call_arguments.positional_indices.push(argument_index);
+                            call_arguments.positional_types.push(type_);
+                        }
+                    } else if let Type::Tuple(elements) = type_ {
+                        for type_ in elements {
+                            call_arguments.argument_types.push(type_.clone());
+                            call_arguments.argument_indices.push(argument_index);
+                            call_arguments.positional_indices.push(argument_index);
+                            call_arguments.positional_types.push(type_);
+                        }
+                    } else if type_.is_any() {
+                        call_arguments.has_unknown_positional_splat = true;
+                    } else {
+                        call_arguments.has_dynamic_positional_splat = true;
+                        call_arguments.dynamic_positional_splat_types.push(type_);
+                    }
+                }
+                cfg::ArgumentOperand::Keyword { value, .. } => {
+                    let type_ = values.get(value.0 as usize).cloned().flatten()?;
+                    call_arguments.argument_types.push(type_);
+                    call_arguments.argument_indices.push(argument_index);
+                }
+                cfg::ArgumentOperand::KeywordSplat(value) => {
+                    let type_ = values.get(value.0 as usize).cloned().flatten()?;
+                    call_arguments.has_keyword_splat = true;
+                    match type_ {
+                        Type::Hash(key, value) => {
+                            call_arguments.has_dynamic_keyword_splat = true;
+                            call_arguments.argument_types.push(Type::Hash(key, value));
+                        }
+                        Type::Any => {
+                            call_arguments.has_unknown_keyword_splat = true;
+                        }
+                        _ => {
+                            call_arguments.has_dynamic_keyword_splat = true;
+                        }
+                    }
+                    call_arguments.argument_indices.push(argument_index);
+                }
+                cfg::ArgumentOperand::Forwarded => return None,
+            }
+        }
+        Some(call_arguments)
+    }
 }
 
 pub(super) enum CallArgumentInput<'node> {

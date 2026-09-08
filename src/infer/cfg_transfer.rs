@@ -306,6 +306,7 @@ fn expr_can_transfer(
         ExprKind::Sequence(expressions) => expressions
             .iter()
             .all(|expression| expr_can_transfer(program, *expression, visiting)),
+        ExprKind::Retry => true,
         ExprKind::If {
             condition,
             then_body,
@@ -617,15 +618,19 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             .and_then(|expression| match &expression.kind {
                 hir::ExprKind::Call(call) => Some(call.clone()),
                 _ => None,
-            })?;
-        let call_arguments = analyzer.cfg_call_arguments(
-            &input,
-            &call,
-            node,
-            values,
-            fixed_array_elements,
-            environment,
-        )?;
+            });
+        let call_arguments = if let Some(call) = call {
+            analyzer.cfg_call_arguments(
+                &input,
+                &call,
+                node,
+                values,
+                fixed_array_elements,
+                environment,
+            )?
+        } else {
+            analyzer.cfg_owned_call_arguments(&input, values, fixed_array_elements)?
+        };
 
         let receiver_node = node.as_call_node().and_then(|call| call.receiver());
         let block_node = node
@@ -1150,6 +1155,14 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     &mut next.environment,
                 )
                 .ok_or_else(|| format!("hash transfer failed at {:?}", operation.span))?,
+                cfg::OperationKind::Record { value } => {
+                    let type_ = value
+                        .as_ref()
+                        .and_then(|value| next.value(*value))
+                        .unwrap_or(Type::Never);
+                    self.analyzer.record_at(site, type_.clone(), false, None);
+                    type_
+                }
                 cfg::OperationKind::PatternTest { value, pattern } => {
                     let source = next
                         .value(*value)
@@ -1174,7 +1187,10 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
             if let Some(result) = operation.result {
                 next.set_value(result, type_.clone());
             }
-            if !matches!(operation.kind, cfg::OperationKind::PatternTest { .. }) {
+            if !matches!(
+                operation.kind,
+                cfg::OperationKind::PatternTest { .. } | cfg::OperationKind::Record { .. }
+            ) {
                 if matches!(operation.kind, cfg::OperationKind::Call { .. }) {
                     self.analyzer
                         .record_at(site, type_, self.analyzer.report, None);
@@ -1781,6 +1797,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::MakeClosure { .. }
                         | cfg::OperationKind::BuildArray { .. }
                         | cfg::OperationKind::BuildHash { .. }
+                        | cfg::OperationKind::Record { .. }
                         | cfg::OperationKind::PatternTest { .. }
                 ) && !nodes
                     .nodes
@@ -1796,6 +1813,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::MakeClosure { .. }
                         | cfg::OperationKind::BuildArray { .. }
                         | cfg::OperationKind::BuildHash { .. }
+                        | cfg::OperationKind::Record { .. }
                         | cfg::OperationKind::PatternTest { .. }
                 )
             })

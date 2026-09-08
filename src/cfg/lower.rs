@@ -116,8 +116,7 @@ struct LoopContext {
 
 #[derive(Clone, Copy, Debug)]
 struct RescueContext {
-    entry: BlockId,
-    exception: ValueId,
+    retry_target: BlockId,
 }
 
 struct Builder<'program> {
@@ -1291,7 +1290,8 @@ impl<'program> Builder<'program> {
         let Some(context) = self.rescues.last().copied() else {
             return self.lower_unsupported_transfer(expression, block, "retry-outside-rescue");
         };
-        self.jump(block, context.entry, vec![context.exception]);
+        let _ = self.emit(block, span, OperationKind::Record { value: None }, false);
+        self.jump(block, context.retry_target, Vec::new());
         let _ = span;
         self.abrupt(expression, block)
     }
@@ -1380,8 +1380,7 @@ impl<'program> Builder<'program> {
         if let Some(rescue_entry) = rescue_entry {
             let exception = self.add_parameter(rescue_entry);
             self.rescues.push(RescueContext {
-                entry: rescue_entry,
-                exception,
+                retry_target: body_start,
             });
             let mut test = rescue_entry;
             let rescue_count = begin.rescue.len();
@@ -1491,6 +1490,14 @@ impl<'program> Builder<'program> {
                 );
             }
         }
+        let _ = self.emit(
+            after,
+            span,
+            OperationKind::Record {
+                value: Some(after_value),
+            },
+            false,
+        );
         self.normal(expression, after, Some(after_value))
     }
 
