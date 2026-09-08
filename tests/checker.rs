@@ -1945,6 +1945,11 @@ fn preserves_symbol_block_diagnostics_through_cfg_transfer() {
 }
 
 #[test]
+fn reports_generic_block_argument_contracts_without_leaking_bindings() {
+    check_fixture("tests/fixtures/generic_block_argument.rb");
+}
+
+#[test]
 fn models_string_shellescape() {
     let result = check_fixture("tests/fixtures/string_shellescape.rb");
     assert!(

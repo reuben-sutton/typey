@@ -152,7 +152,8 @@ impl<'src> Analyzer<'src> {
     }
 
     pub(super) fn block_type_description(type_: &Type) -> String {
-        let Some((parameters, result)) = proc_parts(type_) else {
+        let type_ = Self::unresolved_block_type_as_anything(type_);
+        let Some((parameters, result)) = proc_parts(&type_) else {
             return type_.to_string();
         };
         let mut description = String::from("T.proc");
@@ -168,6 +169,58 @@ impl<'src> Analyzer<'src> {
         }
         description.push_str(&format!(".returns({result})"));
         description
+    }
+
+    fn unresolved_block_type_as_anything(type_: &Type) -> Type {
+        match type_ {
+            Type::TypeVar(_) => Type::Anything,
+            Type::Named(name, arguments) => Type::Named(
+                name.clone(),
+                arguments
+                    .iter()
+                    .map(Self::unresolved_block_type_as_anything)
+                    .collect(),
+            ),
+            Type::Array(element) => {
+                Type::Array(Box::new(Self::unresolved_block_type_as_anything(element)))
+            }
+            Type::Hash(key, value) => Type::Hash(
+                Box::new(Self::unresolved_block_type_as_anything(key)),
+                Box::new(Self::unresolved_block_type_as_anything(value)),
+            ),
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(Self::unresolved_block_type_as_anything)
+                    .collect(),
+            ),
+            Type::Proc(parameters, result) => Type::Proc(
+                parameters
+                    .iter()
+                    .map(Self::unresolved_block_type_as_anything)
+                    .collect(),
+                Box::new(Self::unresolved_block_type_as_anything(result)),
+            ),
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => Type::BoundProc {
+                receiver: Box::new(Self::unresolved_block_type_as_anything(receiver)),
+                parameters: parameters
+                    .iter()
+                    .map(Self::unresolved_block_type_as_anything)
+                    .collect(),
+                result: Box::new(Self::unresolved_block_type_as_anything(result)),
+            },
+            Type::Union(members) => {
+                Type::union(members.iter().map(Self::unresolved_block_type_as_anything))
+            }
+            Type::Intersection(members) => {
+                Type::intersection(members.iter().map(Self::unresolved_block_type_as_anything))
+            }
+            other => other.clone(),
+        }
     }
 
     pub(super) fn sorbet_type_description(type_: &Type) -> String {
@@ -719,11 +772,18 @@ impl<'src> Analyzer<'src> {
             })
             .flatten();
         if let Some(actual_block_signature) = passed_block_signature {
-            if let Some(expected_block_signature) = checked_block_signature
-                .as_ref()
-                .and_then(optional_proc_type)
+            // A passed block is checked against the contract before its
+            // return value is used to infer the caller's type parameter. If
+            // we use `checked_bindings` here, `Array#map`'s result parameter
+            // is already bound to the block's return type and the diagnostic
+            // incorrectly presents that inferred type as the expected
+            // contract.
+            if let Some(expected_block_signature) =
+                block_signature.as_ref().and_then(optional_proc_type)
             {
-                if !self.is_assignable(&actual_block_signature, &expected_block_signature) {
+                let expected_for_check =
+                    Self::unresolved_block_type_as_anything(&expected_block_signature);
+                if !self.is_assignable(&actual_block_signature, &expected_for_check) {
                     self.error(
                         block,
                         format!(
