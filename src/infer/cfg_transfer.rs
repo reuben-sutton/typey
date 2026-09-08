@@ -9,12 +9,12 @@ use crate::prism;
 use crate::types::Type;
 use ruby_prism::Node;
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
 
 mod legacy;
 mod patterns;
 mod preflight;
 
+use legacy::{ConditionalState, ConditionalTransfer, ForTransfer, LoopTransfer};
 use patterns::{case_pattern_is_type_test, narrow_pattern_value, pattern_source_place};
 
 fn cfg_global_refinement_key(name: &str) -> String {
@@ -60,149 +60,6 @@ struct BodyTransfer<'analyzer, 'src> {
     abrupt: OutcomeTypes,
     terminal_flow: Flow,
     final_environment: Option<Environment>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ConditionalState {
-    block: BlockState,
-    result: Eval,
-    path_reachable: bool,
-}
-
-struct ConditionalTransfer<'analyzer, 'src, 'node, 'nodes> {
-    analyzer: &'analyzer mut Analyzer<'src>,
-    predicate: &'nodes Node<'node>,
-    then_node: Option<&'nodes Node<'node>>,
-    subsequent: Option<&'nodes Node<'node>>,
-    then_first: Option<&'nodes Node<'node>>,
-    else_first: Option<&'nodes Node<'node>>,
-    then_reachable: bool,
-    else_reachable: bool,
-    report_unreachable: bool,
-}
-
-struct LoopTransfer<'analyzer, 'src, 'node, 'nodes> {
-    analyzer: &'analyzer mut Analyzer<'src>,
-    predicate: &'nodes Node<'node>,
-    statements: Option<&'nodes ruby_prism::StatementsNode<'node>>,
-    predicate_truthy: bool,
-    abrupt: OutcomeTypes,
-    break_type: Type,
-    terminal_flow: Flow,
-}
-
-struct ForTransfer<'analyzer, 'src, 'node, 'nodes> {
-    analyzer: &'analyzer mut Analyzer<'src>,
-    index: &'nodes Node<'node>,
-    statements: Option<&'nodes ruby_prism::StatementsNode<'node>>,
-    element_type: Type,
-    abrupt: OutcomeTypes,
-    break_type: Type,
-    terminal_flow: Flow,
-}
-
-fn conditional_graph() -> &'static cfg::Cfg {
-    static GRAPH: OnceLock<cfg::Cfg> = OnceLock::new();
-    GRAPH.get_or_init(|| cfg::Cfg {
-        body: hir::BodyId(0),
-        entry: cfg::BlockId(0),
-        blocks: vec![
-            cfg::BasicBlock {
-                id: cfg::BlockId(0),
-                parameters: Vec::new(),
-                operations: Vec::new(),
-                terminator: cfg::Terminator::Branch {
-                    condition: cfg::ValueId(0),
-                    truthy: cfg::BlockId(1),
-                    falsy: cfg::BlockId(2),
-                },
-                unwind: None,
-            },
-            cfg::BasicBlock {
-                id: cfg::BlockId(1),
-                parameters: Vec::new(),
-                operations: Vec::new(),
-                terminator: cfg::Terminator::Jump {
-                    target: cfg::BlockId(3),
-                    arguments: Vec::new(),
-                },
-                unwind: None,
-            },
-            cfg::BasicBlock {
-                id: cfg::BlockId(2),
-                parameters: Vec::new(),
-                operations: Vec::new(),
-                terminator: cfg::Terminator::Jump {
-                    target: cfg::BlockId(3),
-                    arguments: Vec::new(),
-                },
-                unwind: None,
-            },
-            cfg::BasicBlock {
-                id: cfg::BlockId(3),
-                parameters: Vec::new(),
-                operations: Vec::new(),
-                terminator: cfg::Terminator::Return(None),
-                unwind: None,
-            },
-        ],
-        conditionals: Vec::new(),
-        ensure_entries: Vec::new(),
-        unsupported_spans: Vec::new(),
-        expression_values: Vec::new(),
-    })
-}
-
-fn loop_graph() -> &'static cfg::Cfg {
-    static GRAPH: OnceLock<cfg::Cfg> = OnceLock::new();
-    GRAPH.get_or_init(|| cfg::Cfg {
-        body: hir::BodyId(0),
-        entry: cfg::BlockId(0),
-        blocks: vec![
-            cfg::BasicBlock {
-                id: cfg::BlockId(0),
-                parameters: Vec::new(),
-                operations: Vec::new(),
-                terminator: cfg::Terminator::Jump {
-                    target: cfg::BlockId(1),
-                    arguments: Vec::new(),
-                },
-                unwind: None,
-            },
-            cfg::BasicBlock {
-                id: cfg::BlockId(1),
-                parameters: Vec::new(),
-                operations: Vec::new(),
-                terminator: cfg::Terminator::Branch {
-                    condition: cfg::ValueId(0),
-                    truthy: cfg::BlockId(2),
-                    falsy: cfg::BlockId(3),
-                },
-                unwind: None,
-            },
-            cfg::BasicBlock {
-                id: cfg::BlockId(2),
-                parameters: Vec::new(),
-                operations: Vec::new(),
-                terminator: cfg::Terminator::Jump {
-                    target: cfg::BlockId(1),
-                    arguments: Vec::new(),
-                },
-                unwind: None,
-            },
-            cfg::BasicBlock {
-                id: cfg::BlockId(3),
-                parameters: Vec::new(),
-                operations: Vec::new(),
-                terminator: cfg::Terminator::Return(None),
-                unwind: None,
-            },
-        ],
-        conditionals: Vec::new(),
-        ensure_entries: Vec::new(),
-        unsupported_spans: Vec::new(),
-        expression_values: Vec::new(),
-    })
 }
 
 impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {

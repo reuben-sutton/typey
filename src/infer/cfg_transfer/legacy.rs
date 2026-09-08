@@ -7,6 +7,150 @@
 
 use super::*;
 use ruby_prism::IfNode;
+use std::sync::OnceLock;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ConditionalState {
+    pub(super) block: BlockState,
+    pub(super) result: Eval,
+    pub(super) path_reachable: bool,
+}
+
+pub(super) struct ConditionalTransfer<'analyzer, 'src, 'node, 'nodes> {
+    pub(super) analyzer: &'analyzer mut Analyzer<'src>,
+    pub(super) predicate: &'nodes Node<'node>,
+    pub(super) then_node: Option<&'nodes Node<'node>>,
+    pub(super) subsequent: Option<&'nodes Node<'node>>,
+    pub(super) then_first: Option<&'nodes Node<'node>>,
+    pub(super) else_first: Option<&'nodes Node<'node>>,
+    pub(super) then_reachable: bool,
+    pub(super) else_reachable: bool,
+    pub(super) report_unreachable: bool,
+}
+
+pub(super) struct LoopTransfer<'analyzer, 'src, 'node, 'nodes> {
+    pub(super) analyzer: &'analyzer mut Analyzer<'src>,
+    pub(super) predicate: &'nodes Node<'node>,
+    pub(super) statements: Option<&'nodes ruby_prism::StatementsNode<'node>>,
+    pub(super) predicate_truthy: bool,
+    pub(super) abrupt: OutcomeTypes,
+    pub(super) break_type: Type,
+    pub(super) terminal_flow: Flow,
+}
+
+pub(super) struct ForTransfer<'analyzer, 'src, 'node, 'nodes> {
+    pub(super) analyzer: &'analyzer mut Analyzer<'src>,
+    pub(super) index: &'nodes Node<'node>,
+    pub(super) statements: Option<&'nodes ruby_prism::StatementsNode<'node>>,
+    pub(super) element_type: Type,
+    pub(super) abrupt: OutcomeTypes,
+    pub(super) break_type: Type,
+    pub(super) terminal_flow: Flow,
+}
+
+pub(super) fn conditional_graph() -> &'static cfg::Cfg {
+    static GRAPH: OnceLock<cfg::Cfg> = OnceLock::new();
+    GRAPH.get_or_init(|| cfg::Cfg {
+        body: hir::BodyId(0),
+        entry: cfg::BlockId(0),
+        blocks: vec![
+            cfg::BasicBlock {
+                id: cfg::BlockId(0),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Branch {
+                    condition: cfg::ValueId(0),
+                    truthy: cfg::BlockId(1),
+                    falsy: cfg::BlockId(2),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(1),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Jump {
+                    target: cfg::BlockId(3),
+                    arguments: Vec::new(),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(2),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Jump {
+                    target: cfg::BlockId(3),
+                    arguments: Vec::new(),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(3),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Return(None),
+                unwind: None,
+            },
+        ],
+        conditionals: Vec::new(),
+        ensure_entries: Vec::new(),
+        unsupported_spans: Vec::new(),
+        expression_values: Vec::new(),
+    })
+}
+
+pub(super) fn loop_graph() -> &'static cfg::Cfg {
+    static GRAPH: OnceLock<cfg::Cfg> = OnceLock::new();
+    GRAPH.get_or_init(|| cfg::Cfg {
+        body: hir::BodyId(0),
+        entry: cfg::BlockId(0),
+        blocks: vec![
+            cfg::BasicBlock {
+                id: cfg::BlockId(0),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Jump {
+                    target: cfg::BlockId(1),
+                    arguments: Vec::new(),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(1),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Branch {
+                    condition: cfg::ValueId(0),
+                    truthy: cfg::BlockId(2),
+                    falsy: cfg::BlockId(3),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(2),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Jump {
+                    target: cfg::BlockId(1),
+                    arguments: Vec::new(),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(3),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Return(None),
+                unwind: None,
+            },
+        ],
+        conditionals: Vec::new(),
+        ensure_entries: Vec::new(),
+        unsupported_spans: Vec::new(),
+        expression_values: Vec::new(),
+    })
+}
 
 impl<'src> Analyzer<'src> {
     fn cfg_conditional_for_node(&self, node: &Node<'_>) -> Option<cfg::Conditional> {

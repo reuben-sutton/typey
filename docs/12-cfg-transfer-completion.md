@@ -163,6 +163,9 @@ The first modularization steps are now in place:
   live in `infer/cfg_transfer/legacy.rs`; the owned transfer module retains
   their reusable synthetic state machines without owning their Prism-node
   dispatch.
+* the legacy adapter now also owns those synthetic transfer states and graph
+  constructors, so the parent transfer module no longer mixes parser bridges
+  with their compatibility worklists.
 * the owned-body eligibility walk now lives in `infer/cfg_transfer/preflight.rs`;
   it is a parser-free HIR capability check separate from transfer state and
   inference results.
