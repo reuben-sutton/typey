@@ -19,8 +19,8 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates are 18 CFG tests, 10 HIR tests, 338 checker tests, and
-167 conformance tests passing. The
+The current local gates are 18 CFG tests, 10 HIR tests, 339 checker tests, and
+168 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has two semantic bridges: it
 looks up Prism nodes by source span and it reconstructs call argument shapes
@@ -110,6 +110,10 @@ The first modularization steps are now in place:
   through the generic CFG path; ordinary value comparisons retain both match
   and no-match paths, while class, `nil`, `true`, and `false` cases perform
   type-based narrowing;
+* method-local explicit `return` expressions now pass CFG preflight, join all
+  terminal return values and environments, and record enclosing conditional
+  expressions on return paths; non-local returns from ordinary blocks remain
+  deferred until outcome routing is explicit;
 * rescue matching routes raised states through unwind edges, while matched
   handlers consume the pending exception and unmatched exceptions continue to
   the outer handler;
