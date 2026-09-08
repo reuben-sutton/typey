@@ -266,6 +266,22 @@ end
 }
 
 #[test]
+fn keeps_executable_children_owned_by_unsupported_parents() {
+    let program = expressions(
+        r#"for item in values
+  item.to_s
+end
+"#,
+    );
+    assert!(program.expressions.iter().any(|expression| {
+        matches!(
+            &expression.kind,
+            ExprKind::Unsupported(unsupported) if !unsupported.children.is_empty()
+        )
+    }));
+}
+
+#[test]
 fn lowers_yield_inside_a_conditional_body() {
     let program = expressions(
         r#"def try

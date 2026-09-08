@@ -273,7 +273,14 @@ impl<'program> Builder<'program> {
                     },
                     true,
                 );
-                self.normal(expression, block, value)
+                let mut flow = self.normal(expression, block, value);
+                for child in unsupported.children {
+                    if !flow.reachable {
+                        break;
+                    }
+                    flow = self.lower_expr(child, flow.block);
+                }
+                flow
             }
         }
     }

@@ -180,9 +180,17 @@ impl<'src> Lowerer<'src> {
             node,
             ExprKind::Unsupported(Unsupported {
                 kind: Name::new("prism-node"),
+                children: Vec::new(),
             }),
         );
-        self.lower_nested_expressions(node);
+        let children = self.lower_nested_expressions(node);
+        if let Some(Expr {
+            kind: ExprKind::Unsupported(unsupported),
+            ..
+        }) = self.program.expressions.get_mut(expression.0 as usize)
+        {
+            unsupported.children = children;
+        }
         expression
     }
 
@@ -190,9 +198,13 @@ impl<'src> Lowerer<'src> {
     /// and assignments available to the migration adapter instead of making
     /// their source span fall back to Prism evaluation solely because the
     /// parent syntax has not acquired a dedicated HIR variant yet.
-    fn lower_nested_expressions(&mut self, node: &Node<'_>) {
-        let mut visitor = NestedExpressionLowerer { lowerer: self };
+    fn lower_nested_expressions(&mut self, node: &Node<'_>) -> Vec<ExprId> {
+        let mut visitor = NestedExpressionLowerer {
+            lowerer: self,
+            expressions: Vec::new(),
+        };
         visitor.visit(node);
+        visitor.expressions
     }
 
     fn is_assignment_node(node: &Node<'_>) -> bool {
@@ -1432,6 +1444,7 @@ impl<'src> Lowerer<'src> {
 
 struct NestedExpressionLowerer<'lower, 'src> {
     lowerer: &'lower mut Lowerer<'src>,
+    expressions: Vec<ExprId>,
 }
 
 impl<'pr, 'lower, 'src> Visit<'pr> for NestedExpressionLowerer<'lower, 'src> {
@@ -1445,7 +1458,8 @@ impl<'pr, 'lower, 'src> Visit<'pr> for NestedExpressionLowerer<'lower, 'src> {
                 self.lowerer.lowered_call_spans.insert(key)
             };
             if should_lower {
-                self.lowerer.lower_node(&node);
+                let expression = self.lowerer.lower_node(&node);
+                self.expressions.push(expression);
             }
         }
     }
@@ -1454,7 +1468,8 @@ impl<'pr, 'lower, 'src> Visit<'pr> for NestedExpressionLowerer<'lower, 'src> {
         let span = node.location();
         let key = (span.start_offset(), span.end_offset());
         if self.lowerer.lowered_call_spans.insert(key) {
-            self.lowerer.lower_call(&node.as_node(), node);
+            let expression = self.lowerer.lower_call(&node.as_node(), node);
+            self.expressions.push(expression);
         }
         ruby_prism::visit_call_node(self, node);
     }

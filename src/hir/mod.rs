@@ -375,6 +375,10 @@ pub struct RescueClause {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unsupported {
     pub kind: Name,
+    /// Executable HIR expressions discovered inside this unsupported parent.
+    /// The parent remains an explicit handoff, but nested calls and writes do
+    /// not become orphaned outside the body graph.
+    pub children: Vec<ExprId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

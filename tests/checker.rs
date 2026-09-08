@@ -126,6 +126,19 @@ box.value
 }
 
 #[test]
+fn cfg_opt_in_preserves_loop_and_rescue_fixture() {
+    let source = std::fs::read_to_string("tests/fixtures/flow_outcomes.rb").expect("fixture");
+    let result = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn reports_malformed_sorbet_proc_signatures() {
     check_fixture("tests/fixtures/malformed_bound_proc_signature.rb");
 }
