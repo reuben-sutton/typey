@@ -19,7 +19,7 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates are 18 CFG tests, 10 HIR tests, 339 checker tests, and
+The current local gates are 18 CFG tests, 10 HIR tests, 340 checker tests, and
 168 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has two semantic bridges: it
@@ -82,6 +82,11 @@ The first modularization steps are now in place:
 
 * `infer/source.rs` owns source-site recording, diagnostics, strictness checks,
   and inline-assertion lookup for CFG paths;
+* `infer/environment.rs` owns the parser-independent abstract environment,
+  including local provenance, refinements, self context, and path joins;
+* `infer/cfg_state.rs` owns CFG block state, body context, value joins, and
+  pending exception state, leaving `infer/cfg_transfer.rs` focused on operation
+  and terminator semantics;
 * `infer/method_types.rs` owns parser parameter-shape adaptation, proc/block
   decomposition, overload merging, and callable arity narrowing;
 * `infer/method_state.rs` owns the evolving inferred method summary used by
