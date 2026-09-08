@@ -1925,6 +1925,26 @@ fn models_symbol_to_proc_collection_blocks() {
 }
 
 #[test]
+fn reports_missing_methods_through_symbol_blocks() {
+    check_fixture("tests/fixtures/symbol_block_dispatch.rb");
+}
+
+#[test]
+fn preserves_symbol_block_diagnostics_through_cfg_transfer() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/symbol_block_dispatch.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+}
+
+#[test]
 fn models_string_shellescape() {
     let result = check_fixture("tests/fixtures/string_shellescape.rb");
     assert!(

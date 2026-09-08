@@ -1,13 +1,12 @@
 use super::{
     name_matches, optional_proc_type, prism, proc_parts, proc_receiver, strictness_rank, Analyzer,
-    BlockReceiverBinding, CallArguments, CallSite, Environment, Eval, MethodKey, MethodState,
-    SourceSite, Strictness,
+    BlockReceiverBinding, CallArguments, CallSite, Environment, Eval, KeywordArgument, MethodKey,
+    MethodState, SourceSite, Strictness,
 };
 use crate::hir;
 use crate::signature::{self, MethodSig};
 use crate::types::Type;
 use ruby_prism::{Node, ParametersNode};
-use std::collections::BTreeMap;
 
 impl<'src> Analyzer<'src> {
     /// `define_method` binds its block to instances of the receiver's class.
@@ -814,39 +813,77 @@ impl<'src> Analyzer<'src> {
         let Some(receiver) = parameters.first() else {
             return Type::Any;
         };
+        self.eval_symbol_passed_block_for_receiver(
+            node,
+            site,
+            name,
+            parameters,
+            receiver,
+            environment,
+            None,
+        )
+    }
+
+    fn eval_symbol_passed_block_for_receiver(
+        &mut self,
+        node: Option<&Node<'_>>,
+        site: SourceSite,
+        name: &str,
+        parameters: &[Type],
+        receiver: &Type,
+        environment: &mut Environment,
+        union_context: Option<&Type>,
+    ) -> Type {
+        if let Type::Union(members) = receiver {
+            return members.iter().fold(Type::Never, |result, member| {
+                result.join(&self.eval_symbol_passed_block_for_receiver(
+                    node,
+                    site,
+                    name,
+                    parameters,
+                    member,
+                    environment,
+                    Some(receiver).or(union_context),
+                ))
+            });
+        }
+
         let Some(key) = self.receiver_method_key(None, receiver, &name, environment) else {
-            return Type::Any;
+            return self.eval_symbol_passed_block_fallback(
+                node,
+                site,
+                name,
+                receiver,
+                union_context,
+                &CallArguments::default(),
+                environment,
+            );
         };
         self.record_method_dependency(&key, environment);
-        let Some(signature) = self.observe_call(&key, &CallArguments::default(), false) else {
-            return Type::Any;
+        let Some(initial_signature) = self.observe_call(&key, &CallArguments::default(), false)
+        else {
+            return self.eval_symbol_passed_block_fallback(
+                node,
+                site,
+                name,
+                receiver,
+                union_context,
+                &CallArguments::default(),
+                environment,
+            );
         };
+        // Symbol#to_proc consumes the first yielded value as the receiver;
+        // all remaining yielded values are passed to the named method.
+        let arguments = Self::symbol_method_arguments(parameters, &initial_signature, site);
+        let signature = self
+            .observe_call(&key, &arguments, false)
+            .unwrap_or(initial_signature);
         let owner = self
             .resolve_method_key(&key)
             .and_then(|resolved| resolved.owner)
             .unwrap_or_else(|| receiver.to_string());
         let method = format!("{owner}#{name}");
-
-        // Symbol#to_proc consumes the first yielded value as the receiver;
-        // all remaining yielded values are passed to the named method.
-        let mut positional = Vec::new();
-        let mut keywords = BTreeMap::<String, Type>::new();
-        for argument in parameters.iter().skip(1) {
-            if let Type::Named(shape, _) = argument {
-                if shape.starts_with('{') && shape.ends_with('}') {
-                    for keyword in signature.keywords.keys() {
-                        if let Some(type_) = signature::parse_inline_record_field(shape, keyword) {
-                            keywords.insert(keyword.clone(), type_);
-                        }
-                    }
-                    if !keywords.is_empty() {
-                        continue;
-                    }
-                }
-            }
-            positional.push(argument.clone());
-        }
-
+        let positional = &arguments.positional_types;
         if !signature.accepts_rest && positional.len() > signature.params.len() {
             self.error_at_or_node(
                 node,
@@ -872,7 +909,11 @@ impl<'src> Analyzer<'src> {
             }
         }
         for (name, parameter) in &signature.keywords {
-            let Some(actual) = keywords.get(name) else {
+            let Some(argument) = arguments
+                .keyword_arguments
+                .iter()
+                .find(|argument| argument.name == *name)
+            else {
                 if parameter.required {
                     self.error_at_or_node(
                         node,
@@ -882,30 +923,81 @@ impl<'src> Analyzer<'src> {
                 }
                 continue;
             };
-            if !self.is_assignable(actual, &parameter.type_) {
+            if !self.is_assignable(&argument.type_, &parameter.type_) {
                 self.error_at_or_node(
                     node,
                     site,
                     format!(
-                        "Expected `{}` but found `{actual}` for argument `{name}`",
-                        parameter.type_
+                        "Expected `{}` but found `{}` for argument `{name}`",
+                        parameter.type_, argument.type_
                     ),
                 );
             }
         }
-        if !signature.accepts_keyword_rest
-            && keywords
-                .keys()
-                .any(|name| !signature.keywords.contains_key(name))
-        {
-            // Inline record parameters are only materialized for keywords
-            // present in the called method's signature above.
-        }
         self.substitute_signature_type(
             &signature.return_type,
             Some(receiver),
-            &BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
             &signature.type_parameters,
         )
+    }
+
+    fn symbol_method_arguments(
+        parameters: &[Type],
+        signature: &MethodSig,
+        site: SourceSite,
+    ) -> CallArguments<'static> {
+        let mut arguments = CallArguments::default();
+        for parameter in parameters.iter().skip(1) {
+            let mut keyword = false;
+            if let Type::Named(shape, _) = parameter {
+                for name in signature.keywords.keys() {
+                    if let Some(type_) = signature::parse_inline_record_field(shape, name) {
+                        arguments.keyword_arguments.push(KeywordArgument {
+                            name: name.clone(),
+                            node: None,
+                            site,
+                            type_,
+                        });
+                        keyword = true;
+                    }
+                }
+            }
+            if !keyword {
+                arguments.argument_types.push(parameter.clone());
+                arguments.positional_types.push(parameter.clone());
+            }
+        }
+        arguments.argument_indices = (0..arguments.argument_types.len()).collect();
+        arguments.positional_indices = (0..arguments.positional_types.len()).collect();
+        arguments
+    }
+
+    fn eval_symbol_passed_block_fallback(
+        &mut self,
+        node: Option<&Node<'_>>,
+        site: SourceSite,
+        name: &str,
+        receiver: &Type,
+        union_context: Option<&Type>,
+        arguments: &CallArguments<'_>,
+        environment: &mut Environment,
+    ) -> Type {
+        let call_site = CallSite {
+            argument_nodes: &arguments.argument_nodes,
+            argument_types: &arguments.argument_types,
+            block: None,
+        };
+        let type_ = self.eval_method_call(receiver, name, &call_site, environment);
+        if type_.is_any() && !receiver.contains_any() && !receiver.is_never() {
+            let component =
+                union_context.map_or_else(String::new, |union| format!(" component of `{union}`"));
+            self.error_at_or_node(
+                node,
+                site,
+                format!("Method `{name}` does not exist on `{receiver}`{component}"),
+            );
+        }
+        type_
     }
 }
