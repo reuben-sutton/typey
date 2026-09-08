@@ -227,6 +227,27 @@ fn transfers_union_callable_calls_without_recursive_fallback() {
 }
 
 #[test]
+fn transfers_index_splat_writes_from_owned_operands() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_index_splat_write.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
 fn transfers_logical_writes_for_owned_storage_places() {
     let source =
         std::fs::read_to_string("tests/fixtures/hir_assignment_dispatch.rb").expect("fixture");

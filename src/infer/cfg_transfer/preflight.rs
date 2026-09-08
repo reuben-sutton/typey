@@ -140,17 +140,20 @@ fn expr_can_transfer(
                 } => {
                     expr_can_transfer(program, *receiver, visiting, loop_depth, local_return)
                         && arguments.iter().all(|argument| match argument {
-                            hir::Argument::Positional(value) => expr_can_transfer(
+                            hir::Argument::Positional(value)
+                            | hir::Argument::Splat(value)
+                            | hir::Argument::KeywordSplat(value)
+                            | hir::Argument::Keyword { value, .. } => expr_can_transfer(
                                 program,
                                 *value,
                                 visiting,
                                 loop_depth,
                                 local_return,
                             ),
-                            hir::Argument::Splat(_)
-                            | hir::Argument::Keyword { .. }
-                            | hir::Argument::KeywordSplat(_)
-                            | hir::Argument::Forwarded => false,
+                            // A synthesized `[]=` call has no surrounding
+                            // method-call shape from which forwarded values
+                            // can be recovered.
+                            hir::Argument::Forwarded => false,
                         })
                 }
             };

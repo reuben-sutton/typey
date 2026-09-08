@@ -302,22 +302,24 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     format!("Used `&.` operator on `{receiver_type}`, which can never be nil"),
                 );
             }
-            if matches!(input.name.as_str(), "call" | "[]") {
-                if let Some(type_) = Self::transfer_callable_call(
+            let callable_type = if matches!(input.name.as_str(), "call" | "[]") {
+                Self::transfer_callable_call(
                     analyzer,
                     input.site,
                     &dispatch_receiver,
                     &call_arguments,
-                ) {
-                    (type_, UntypedOrigin::Propagated)
-                } else if input.safe_navigation && dispatch_receiver.is_never() {
-                    (Type::Nil, UntypedOrigin::FallbackCall)
-                } else {
-                    return None;
-                }
+                )
+            } else {
+                None
+            };
+            if let Some(type_) = callable_type {
+                (type_, UntypedOrigin::Propagated)
             } else if input.safe_navigation && dispatch_receiver.is_never() {
                 (Type::Nil, UntypedOrigin::FallbackCall)
             } else {
+                // `[]` is also ordinary Ruby method dispatch. Only proc-like
+                // receivers use the callable shorthand; a nominal receiver
+                // must still resolve its declared `[]` method here.
                 let key = analyzer.receiver_method_key(
                     None,
                     &dispatch_receiver,

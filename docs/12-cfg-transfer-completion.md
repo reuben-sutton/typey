@@ -208,6 +208,10 @@ The first modularization steps are now in place:
 * the compatibility assignment adapter no longer evaluates an unsupported RHS
   through `eval_node`; it declines the owned assignment path before publishing
   state, leaving the complete assignment to the recursive evaluator.
+* index assignment preflight now preserves positional, keyword, and splat
+  operands for the synthesized `[]=` call; ordinary nominal `[]` sends also
+  fall back from callable shorthand to regular receiver dispatch when the
+  receiver is not proc-like.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
   `BoundProc` `call`/`[]` operations from CFG values, including unioned
   callable receivers, argument checking, and optional RBS block contracts;
