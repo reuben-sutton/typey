@@ -98,6 +98,7 @@ struct BodyTransfer<'analyzer, 'src, 'node> {
     analyzer: &'analyzer mut Analyzer<'src>,
     context: BodyContext,
     nodes: &'node SpanNodeIndex<'node>,
+    fixed_array_elements: HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
     normal_type: Type,
     abrupt: OutcomeTypes,
     terminal_flow: Flow,
@@ -139,15 +140,13 @@ fn expr_can_transfer(
                     _ => true,
                 }
                 && call.arguments.iter().all(|argument| match argument {
-                    hir::Argument::Positional(value) => {
+                    hir::Argument::Positional(value) | hir::Argument::Splat(value) => {
                         expr_can_transfer(program, *value, visiting)
                     }
                     hir::Argument::Keyword { value, .. } => {
                         expr_can_transfer(program, *value, visiting)
                     }
-                    hir::Argument::Splat(_)
-                    | hir::Argument::KeywordSplat(_)
-                    | hir::Argument::Forwarded => false,
+                    hir::Argument::KeywordSplat(_) | hir::Argument::Forwarded => false,
                 })
         }
         ExprKind::Array(elements) => elements.iter().all(|element| {
@@ -428,6 +427,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         node: &Node<'node>,
         operation: &cfg::OperationKind,
         values: &[Option<Type>],
+        fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
         environment: &mut Environment,
     ) -> Option<Eval> {
         let cfg::OperationKind::Call {
@@ -498,6 +498,33 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                     call_arguments.keyword_arguments.extend(keyword_arguments);
                     continue;
                 }
+            }
+            if let Some(cfg::ArgumentOperand::Splat(value)) = operands.get(operand_index) {
+                let type_ = values.get(value.0 as usize).cloned().flatten()?;
+                if let Some(elements) = fixed_array_elements.get(value) {
+                    for element in elements {
+                        let type_ = values.get(element.0 as usize).cloned().flatten()?;
+                        call_arguments.argument_types.push(type_.clone());
+                        call_arguments.argument_indices.push(argument_index);
+                        call_arguments.positional_indices.push(argument_index);
+                        call_arguments.positional_types.push(type_);
+                    }
+                } else if let Type::Tuple(elements) = type_ {
+                    for type_ in elements {
+                        call_arguments.argument_types.push(type_.clone());
+                        call_arguments.argument_indices.push(argument_index);
+                        call_arguments.positional_indices.push(argument_index);
+                        call_arguments.positional_types.push(type_);
+                    }
+                } else if type_.is_any() {
+                    call_arguments.has_unknown_positional_splat = true;
+                } else {
+                    call_arguments.has_dynamic_positional_splat = true;
+                    call_arguments.dynamic_positional_splat_types.push(type_);
+                }
+                call_arguments.argument_nodes.push(argument_node);
+                operand_index += 1;
+                continue;
             }
             let Some(cfg::ArgumentOperand::Positional(value)) = operands.get(operand_index) else {
                 return None;
@@ -607,6 +634,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         node: &Node<'node>,
         elements: &[cfg::ArrayOperand],
         values: &[Option<Type>],
+        preserve_fixed_shape: bool,
         environment: &mut Environment,
     ) -> Option<Type> {
         let mut element_types = Vec::with_capacity(elements.len());
@@ -637,8 +665,8 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             element
         };
         let inferred = if fixed_length
-            && analyzer.preserve_literal_tuples
-            && analyzer.literal_tuple_depth == 0
+            && (preserve_fixed_shape
+                || (analyzer.preserve_literal_tuples && analyzer.literal_tuple_depth == 0))
         {
             Type::Tuple(element_types)
         } else {
@@ -787,6 +815,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                         node,
                         &operation.kind,
                         &next.values,
+                        &self.fixed_array_elements,
                         &mut next.environment,
                     )
                     .ok_or(())?;
@@ -803,6 +832,9 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     node,
                     elements,
                     &next.values,
+                    operation
+                        .result
+                        .is_some_and(|result| self.fixed_array_elements.contains_key(&result)),
                     &mut next.environment,
                 )
                 .ok_or(())?,
@@ -1291,6 +1323,43 @@ impl<'src> Analyzer<'src> {
         // passes instead of rebuilding the same body for every method visit.
         let graph_store = self.cfg_graphs.as_ref()?.clone();
         let graph = graph_store.get(body_id.0 as usize)?;
+        let fixed_array_candidates = graph
+            .blocks
+            .iter()
+            .flat_map(|block| block.operations.iter())
+            .filter_map(|operation| {
+                let result = operation.result?;
+                let cfg::OperationKind::BuildArray { elements } = &operation.kind else {
+                    return None;
+                };
+                let elements = elements
+                    .iter()
+                    .map(|element| match element {
+                        cfg::ArrayOperand::Value(value) => Some(*value),
+                        cfg::ArrayOperand::Splat(_) => None,
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some((result, elements))
+            })
+            .collect::<HashMap<_, _>>();
+        let splatted_values = graph
+            .blocks
+            .iter()
+            .flat_map(|block| block.operations.iter())
+            .filter_map(|operation| match &operation.kind {
+                cfg::OperationKind::Call { arguments, .. } => Some(arguments),
+                _ => None,
+            })
+            .flat_map(|arguments| arguments.iter())
+            .filter_map(|argument| match argument {
+                cfg::ArgumentOperand::Splat(value) => Some(*value),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let fixed_array_elements = fixed_array_candidates
+            .into_iter()
+            .filter(|(value, _)| splatted_values.contains(value))
+            .collect::<HashMap<_, _>>();
         let mut nodes = SpanNodeIndex::default();
         nodes.visit(body_node);
         if graph.blocks.iter().any(|block| {
@@ -1341,6 +1410,7 @@ impl<'src> Analyzer<'src> {
             analyzer: self,
             context,
             nodes: &nodes,
+            fixed_array_elements,
             normal_type: Type::Never,
             abrupt: OutcomeTypes::default(),
             terminal_flow: Flow::empty(),

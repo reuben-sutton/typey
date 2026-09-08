@@ -39,6 +39,18 @@ class CfgBodyTransfer
     keyword_target(1, label: "ready")
   end
 
+  #: (Integer, String) -> void
+  def positional_target(one, two)
+  end
+
+  def fixed_splat_call
+    positional_target(*[1, "ready"])
+  end
+
+  def dynamic_splat_call(values)
+    positional_target(*values)
+  end
+
   #: (String?) -> String
   def conditional(value)
     if value
