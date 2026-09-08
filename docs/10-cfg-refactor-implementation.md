@@ -53,6 +53,9 @@ recursive evaluator remains the compatibility baseline.
 * `20baa11` extended complete-body transfer to non-splat array and hash
   construction. Splat wrappers remain an explicit fallback until their source
   spans are represented in CFG operands.
+* `79185dd` admitted binary compound assignments on direct storage places via
+  their existing CFG read/call/write sequence; logical and dynamic assignment
+  forms remain explicit fallback boundaries.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned

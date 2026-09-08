@@ -52,6 +52,11 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
   Collection splats remain a deliberate fallback: their wrapper source spans
   are not yet represented by the owned CFG operands, and transferring them
   would lose recorded source types.
+* `79185dd` admitted binary compound assignments whose target is a direct
+  storage place. Their existing owned lowering is a straight-line
+  read/call/write sequence, so the body worklist can transfer them without
+  adding a second assignment evaluator. `&&=`/`||=`, attribute/index writes,
+  and dynamic compound targets remain outside this boundary.
 
 ## Next boundary
 
@@ -60,8 +65,9 @@ semantics, rescue/ensure, and branch/body expression adapters. Complete-body
 transfer is deliberately narrow: it does not yet interpret keyword/splat/block
 calls, safe navigation, `super`, `yield`, closures, or abrupt terminators
 inside a body. The next implementation boundaries are the remaining call
-shapes and compound/dynamic writes, followed by complete branch bodies and
-rescue/ensure edges. Collection splats also need explicit operand-span
+shapes, logical compound assignments, and dynamic writes, followed by
+complete branch bodies and rescue/ensure edges. Collection splats also need
+explicit operand-span
 metadata before they can cross this boundary. The recursive path must remain
 available for differential checks until each operation and terminator has an
 equivalent transfer.
