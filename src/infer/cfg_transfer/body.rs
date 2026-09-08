@@ -78,22 +78,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         name.as_str() != operator.as_str() && !name.as_str().ends_with('=')
     }
 
-    fn narrow_conditional_branch(
-        &mut self,
-        graph: &cfg::Cfg,
-        block: cfg::BlockId,
-        truthy: bool,
-        environment: &mut Environment,
-    ) {
-        let Some(conditional) = graph.conditionals.iter().find(|conditional| {
-            (truthy && conditional.truthy == block) || (!truthy && conditional.falsy == block)
-        }) else {
-            return;
-        };
-        self.analyzer
-            .narrow_cfg_predicate(conditional.condition, environment, truthy);
-    }
-
     fn exception_edge(
         &self,
         graph: &cfg::Cfg,
@@ -115,33 +99,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             .blocks
             .iter()
             .any(|candidate| candidate.unwind == Some(block))
-    }
-
-    fn conditional_reachability(
-        &self,
-        graph: &cfg::Cfg,
-        truthy: cfg::BlockId,
-        falsy: cfg::BlockId,
-        source: &Type,
-        state: &BlockState,
-    ) -> (bool, bool) {
-        let condition = graph
-            .conditionals
-            .iter()
-            .find(|conditional| conditional.truthy == truthy && conditional.falsy == falsy)
-            .map(|conditional| conditional.condition);
-        if let Some(hir::ExprKind::Read(Read::Local(local))) = condition
-            .and_then(|condition| self.analyzer.program.hir_program.expression(condition))
-            .map(|expression| &expression.kind)
-        {
-            let Some(name) = self.analyzer.program.hir_program.local_name(*local) else {
-                return super::patterns::truthiness_reachability(source);
-            };
-            if state.environment.is_inferred(name.as_str()) {
-                return (true, true);
-            }
-        }
-        super::patterns::truthiness_reachability(source)
     }
 
     fn return_is_non_local(&self) -> bool {
@@ -662,13 +619,21 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         (truthy, falsy)
                     }
                 } else {
-                    self.conditional_reachability(graph, *truthy, *falsy, &source, &next)
+                    super::flow::conditional_reachability(
+                        self.analyzer,
+                        graph,
+                        *truthy,
+                        *falsy,
+                        &source,
+                        &next,
+                    )
                 };
                 let mut edges = Vec::with_capacity(2);
                 if truthy_reachable {
                     let mut state = next.clone();
                     if pattern.is_none() {
-                        self.narrow_conditional_branch(
+                        super::flow::narrow_conditional_branch(
+                            self.analyzer,
                             graph,
                             *truthy,
                             true,
@@ -695,7 +660,8 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 if falsy_reachable {
                     let mut state = next;
                     if pattern.is_none() {
-                        self.narrow_conditional_branch(
+                        super::flow::narrow_conditional_branch(
+                            self.analyzer,
                             graph,
                             *falsy,
                             false,
