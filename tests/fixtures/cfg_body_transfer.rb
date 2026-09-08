@@ -30,6 +30,14 @@ class CfgBodyTransfer
     other &&= 3
     [value, other]
   end
+
+  def keyword_target(value, label:)
+    label
+  end
+
+  def keyword_call
+    keyword_target(1, label: "ready")
+  end
 end
 
 CfgBodyTransfer.new.value

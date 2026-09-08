@@ -1,6 +1,6 @@
 use super::{
     ivar_refinement_key, Analyzer, CallArguments, CallSite, Environment, Eval, Flow, FlowKind,
-    HirCallView, MethodKey, OutcomeTypes, SharedKey, Strictness,
+    HirCallView, KeywordArgument, MethodKey, OutcomeTypes, SharedKey, Strictness,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
@@ -142,8 +142,10 @@ fn expr_can_transfer(
                     hir::Argument::Positional(value) => {
                         expr_can_transfer(program, *value, visiting)
                     }
+                    hir::Argument::Keyword { value, .. } => {
+                        expr_can_transfer(program, *value, visiting)
+                    }
                     hir::Argument::Splat(_)
-                    | hir::Argument::Keyword { .. }
                     | hir::Argument::KeywordSplat(_)
                     | hir::Argument::Forwarded => false,
                 })
@@ -433,24 +435,74 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             return None;
         }
         let call = node.as_call_node()?;
-        let argument_nodes = call
+        let raw_arguments = call
             .arguments()
             .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
             .unwrap_or_default();
-        if argument_nodes.len() != operands.len() {
-            return None;
-        }
         let mut call_arguments = CallArguments::default();
-        for (index, (operand, argument_node)) in operands.iter().zip(argument_nodes).enumerate() {
-            let cfg::ArgumentOperand::Positional(value) = operand else {
+        let mut operand_index = 0usize;
+        for (argument_index, argument_node) in raw_arguments.into_iter().enumerate() {
+            if let Some(keyword_hash) = argument_node.as_keyword_hash_node() {
+                let elements = keyword_hash.elements().into_iter().collect::<Vec<_>>();
+                let keyword_group = operands
+                    .get(operand_index..operand_index.saturating_add(elements.len()))
+                    .is_some_and(|group| {
+                        group
+                            .iter()
+                            .all(|operand| matches!(operand, cfg::ArgumentOperand::Keyword { .. }))
+                    });
+                if keyword_group && !elements.is_empty() {
+                    let mut key = Type::Never;
+                    let mut value = Type::Never;
+                    let mut keyword_arguments = Vec::with_capacity(elements.len());
+                    for element in elements {
+                        let assoc = element.as_assoc_node()?;
+                        let cfg::ArgumentOperand::Keyword {
+                            name,
+                            value: value_id,
+                        } = operands.get(operand_index)?
+                        else {
+                            return None;
+                        };
+                        let type_ = values.get(value_id.0 as usize).cloned().flatten()?;
+                        let name = name.as_str().to_owned();
+                        key = key.join(&Type::Symbol);
+                        value = value.join(&type_);
+                        analyzer.record(&assoc.key(), Type::Symbol);
+                        keyword_arguments.push(KeywordArgument {
+                            name,
+                            node: assoc.value(),
+                            type_,
+                        });
+                        operand_index += 1;
+                    }
+                    let key = if key.is_never() { Type::Any } else { key };
+                    let value = if value.is_never() { Type::Any } else { value };
+                    let hash_type = analyzer.apply_inline_assertion(
+                        &argument_node,
+                        Type::Hash(Box::new(key), Box::new(value)),
+                    );
+                    analyzer.record(&argument_node, hash_type.clone());
+                    call_arguments.argument_nodes.push(argument_node);
+                    call_arguments.argument_types.push(hash_type.clone());
+                    call_arguments.argument_indices.push(argument_index);
+                    call_arguments.keyword_arguments.extend(keyword_arguments);
+                    continue;
+                }
+            }
+            let Some(cfg::ArgumentOperand::Positional(value)) = operands.get(operand_index) else {
                 return None;
             };
             let type_ = values.get(value.0 as usize).cloned().flatten()?;
             call_arguments.argument_nodes.push(argument_node);
             call_arguments.argument_types.push(type_.clone());
-            call_arguments.argument_indices.push(index);
-            call_arguments.positional_indices.push(index);
+            call_arguments.argument_indices.push(argument_index);
+            call_arguments.positional_indices.push(argument_index);
             call_arguments.positional_types.push(type_);
+            operand_index += 1;
+        }
+        if operand_index != operands.len() {
+            return None;
         }
 
         let receiver_node = call.receiver();
