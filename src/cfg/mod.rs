@@ -7,8 +7,10 @@
 
 use crate::hir::{self, BodyId, ClosureId, ConstantPath, ExprId, LocalId, Name, Span};
 
+pub mod index;
 pub mod lower;
 
+pub use index::CfgIndex;
 pub use lower::build;
 
 macro_rules! id_type {

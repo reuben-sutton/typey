@@ -9,7 +9,7 @@ use ruby_prism::{
     ArgumentsNode, CallNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit,
 };
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 mod arguments;
 mod blocks;
@@ -1248,48 +1248,15 @@ pub(crate) fn check_with_policies(
     let parsed = prism::parse(bytes);
     let root = parsed.node();
     let hir_program = hir::lower(hir::FileId(0), bytes);
-    let cfgs = config
-        .enable_cfg
-        .then(|| {
-            hir_program
-                .bodies
-                .iter()
-                .enumerate()
-                .map(|(index, _)| cfg::build(&hir_program, hir::BodyId(index as u32)))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let mut cfg_call_spans = HashSet::new();
-    let mut cfg_write_spans = HashSet::new();
-    let mut cfg_call_names = HashMap::new();
-    let mut cfg_conditionals = HashMap::new();
-    let cfg_unsupported_count = cfgs.iter().map(|graph| graph.unsupported_spans.len()).sum();
-    for graph in &cfgs {
-        for conditional in &graph.conditionals {
-            if let Some(expression) = hir_program.expression(conditional.expression) {
-                let span = (expression.span.start as usize, expression.span.end as usize);
-                cfg_conditionals.insert(span, conditional.clone());
-            }
-        }
-        for block in &graph.blocks {
-            for operation in &block.operations {
-                let span = (operation.span.start as usize, operation.span.end as usize);
-                match &operation.kind {
-                    cfg::OperationKind::Call { name, .. } => {
-                        cfg_call_spans.insert(span);
-                        cfg_call_names
-                            .entry(span)
-                            .or_insert_with(Vec::new)
-                            .push(name.as_str().to_owned());
-                    }
-                    cfg::OperationKind::Write { .. } => {
-                        cfg_write_spans.insert(span);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    let cfg_index = config.enable_cfg.then(|| {
+        let graphs = hir_program
+            .bodies
+            .iter()
+            .enumerate()
+            .map(|(index, _)| cfg::build(&hir_program, hir::BodyId(index as u32)))
+            .collect::<Vec<_>>();
+        cfg::CfgIndex::from_graphs(&hir_program, &graphs)
+    });
     let mut hir_call_ids = HashMap::new();
     let mut hir_assignment_ids = HashMap::new();
     for (index, expression) in hir_program.expressions.iter().enumerate() {
@@ -1341,12 +1308,7 @@ pub(crate) fn check_with_policies(
     let analyzer = Analyzer {
         source: bytes,
         hir_program,
-        cfg_body_count: cfgs.len(),
-        cfg_unsupported_count,
-        cfg_call_spans,
-        cfg_write_spans,
-        cfg_call_names,
-        cfg_conditionals,
+        cfg_index,
         source_nodes,
         hir_call_ids,
         hir_assignment_ids,
@@ -1404,12 +1366,7 @@ fn source_strictness_ranges(source: &str) -> Vec<(usize, usize, Strictness)> {
 struct Analyzer<'src> {
     source: &'src [u8],
     hir_program: hir::Program,
-    cfg_body_count: usize,
-    cfg_unsupported_count: usize,
-    cfg_call_spans: HashSet<(usize, usize)>,
-    cfg_write_spans: HashSet<(usize, usize)>,
-    cfg_call_names: HashMap<(usize, usize), Vec<String>>,
-    cfg_conditionals: HashMap<(usize, usize), cfg::Conditional>,
+    cfg_index: Option<cfg::CfgIndex>,
     source_nodes: Option<HashMap<(usize, usize), Node<'src>>>,
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
@@ -1675,18 +1632,23 @@ impl<'src> Analyzer<'src> {
     }
 
     fn has_cfg_call_operation(&self, node: &Node<'_>) -> bool {
-        self.cfg_call_spans.contains(&prism::span(node))
+        self.cfg_index
+            .as_ref()
+            .is_some_and(|index| index.has_call(prism::span(node)))
     }
 
     fn cfg_call_name_matches(&self, node: &Node<'_>, name: &str) -> bool {
-        self.cfg_call_names
-            .get(&prism::span(node))
+        self.cfg_index
+            .as_ref()
+            .and_then(|index| index.call_names(prism::span(node)))
             .is_some_and(|names| names.iter().any(|candidate| candidate == name))
     }
 
     fn has_cfg_assignment_operation(&self, node: &Node<'_>) -> bool {
         let span = prism::span(node);
-        self.cfg_call_spans.contains(&span) || self.cfg_write_spans.contains(&span)
+        self.cfg_index
+            .as_ref()
+            .is_some_and(|index| index.has_call(span) || index.has_write(span))
     }
 
     fn source_node_for_span(&self, span: (usize, usize)) -> Option<&Node<'src>> {
@@ -1694,7 +1656,10 @@ impl<'src> Analyzer<'src> {
     }
 
     fn cfg_conditional_for_node(&self, node: &Node<'_>) -> Option<cfg::Conditional> {
-        self.cfg_conditionals.get(&prism::span(node)).cloned()
+        self.cfg_index
+            .as_ref()
+            .and_then(|index| index.conditional(prism::span(node)))
+            .cloned()
     }
 
     fn report_cfg_fallback(&self, node: &Node<'_>, kind: &str) {
@@ -2106,11 +2071,13 @@ impl<'src> Analyzer<'src> {
             );
             eprintln!(
                 "[typey] compiled {} HIR bodies into CFG",
-                self.cfg_body_count
+                self.cfg_index.as_ref().map_or(0, cfg::CfgIndex::body_count)
             );
             eprintln!(
                 "[typey] CFG unsupported handoffs: {}",
-                self.cfg_unsupported_count
+                self.cfg_index
+                    .as_ref()
+                    .map_or(0, cfg::CfgIndex::unsupported_count)
             );
             eprintln!(
                 "[typey] registration complete in {:?}",
