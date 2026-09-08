@@ -17,7 +17,8 @@ transfer spec described. Typey now has:
 * an opt-in differential path which falls back to the recursive evaluator
   before publishing a partial result.
 
-The current local gates are 15 CFG tests and 331 checker tests passing. The
+The current local gates are 15 CFG tests, 10 HIR tests, 332 checker tests, and
+161 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has two semantic bridges: it
 looks up Prism nodes by source span and it reconstructs call argument shapes
@@ -79,6 +80,13 @@ The first modularization steps are now in place:
 
 * `infer/source.rs` owns source-site recording, diagnostics, strictness checks,
   and inline-assertion lookup for CFG paths;
+* `infer/method_types.rs` owns parser parameter-shape adaptation, proc/block
+  decomposition, overload merging, and callable arity narrowing;
+* `infer/method_state.rs` owns the evolving inferred method summary used by
+  declaration registration, fixpoint observation, and block contracts;
+* `infer/legacy_eval.rs` owns the recursive Prism evaluator's expression and
+  assignment dispatch, leaving the main inference host responsible for
+  orchestration and shared state rather than syntax dispatch;
 * `BodyTransfer` transfers literals, reads, writes, arrays, hashes, and
   pattern values from CFG/HIR payloads without looking up a Prism node;
 * HIR preserves top-level call argument groups and owned source spans;
@@ -88,11 +96,14 @@ The first modularization steps are now in place:
 * CFG argument materialization is isolated to that adapter, so the transfer
   host no longer reconstructs call shape directly from `CallNode` children.
 
-The remaining bridge is deliberate and measurable: legacy dispatch still
+The remaining bridges are deliberate and measurable: legacy dispatch still
 needs parser nodes for exact argument diagnostics and builtin hooks, and the
 specialized conditional/loop helpers still consume parser nodes. Removing
 those requires moving their diagnostic and block contracts to owned source
-sites/closure IDs rather than weakening the checker.
+sites/closure IDs rather than weakening the checker. CFG fallback telemetry now
+distinguishes unsupported operations, unsupported edges, and legacy bridges;
+the latter two categories are wired for the exceptional-control-flow work but
+are not yet populated by the migrated ordinary-body path.
 
 ## Design
 
