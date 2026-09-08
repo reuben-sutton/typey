@@ -1,8 +1,54 @@
-use super::{Analyzer, Environment, Eval, HirCallView};
+use super::{Analyzer, Environment, Eval, Flow, FlowKind, HirCallView};
 use crate::cfg;
 use crate::prism;
 use crate::types::Type;
 use ruby_prism::{IfNode, Node};
+
+/// The inference-side state at a CFG block boundary.
+///
+/// CFG construction remains type-free. This state is the first boundary where
+/// value IDs, environments, and abrupt flow outcomes become abstract facts
+/// that can be joined by the generic CFG worklist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct BlockState {
+    values: Vec<Option<Type>>,
+    environment: Environment,
+    flow: Flow,
+}
+
+impl BlockState {
+    fn with_values(environment: Environment, values: Vec<Option<Type>>, flow: Flow) -> Self {
+        Self {
+            values,
+            environment,
+            flow,
+        }
+    }
+
+    fn join(&self, other: &Self) -> Self {
+        let environment = match (
+            self.flow.contains(FlowKind::Normal),
+            other.flow.contains(FlowKind::Normal),
+        ) {
+            (true, false) => self.environment.clone(),
+            (false, true) => other.environment.clone(),
+            _ => self.environment.join(&other.environment),
+        };
+        let values = (0..self.values.len().max(other.values.len()))
+            .map(
+                |index| match (self.values.get(index), other.values.get(index)) {
+                    (Some(Some(left)), Some(Some(right))) => Some(left.join(right)),
+                    _ => None,
+                },
+            )
+            .collect();
+        Self {
+            values,
+            environment,
+            flow: self.flow.union(other.flow),
+        }
+    }
+}
 
 impl<'src> Analyzer<'src> {
     pub(super) fn has_cfg_call_operation(&self, node: &Node<'_>) -> bool {
@@ -165,15 +211,78 @@ impl<'src> Analyzer<'src> {
             Eval::unreachable()
         };
 
-        *environment = self.join_flow_environments(
-            &then_environment,
-            then_result.flow,
-            &else_environment,
-            else_result.flow,
-        );
+        let joined_state =
+            BlockState::with_values(then_environment, Vec::new(), then_result.flow).join(
+                &BlockState::with_values(else_environment, Vec::new(), else_result.flow),
+            );
+        *environment = joined_state.environment;
         let mut result = Eval::combine(&then_result, &else_result);
         let type_ = self.apply_inline_assertion(node, result.type_.clone());
         result.type_ = self.record(node, type_);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn environment(name: &str, type_: Type) -> Environment {
+        let mut environment = Environment::default();
+        environment.bind(name, type_);
+        environment
+    }
+
+    #[test]
+    fn normal_path_wins_over_an_abrupt_path() {
+        let normal = BlockState::with_values(
+            environment("value", Type::String),
+            vec![Some(Type::String)],
+            Flow::normal(),
+        );
+        let returned = BlockState::with_values(
+            environment("value", Type::Integer),
+            vec![Some(Type::Integer)],
+            Flow::abrupt(FlowKind::Return),
+        );
+
+        let joined = normal.join(&returned);
+
+        assert_eq!(joined.environment.get("value"), Type::String);
+        assert_eq!(joined.values, vec![Some(Type::String.join(&Type::Integer))]);
+        assert!(joined.flow.contains(FlowKind::Normal));
+        assert!(joined.flow.contains(FlowKind::Return));
+    }
+
+    #[test]
+    fn two_normal_paths_join_values_and_environment_facts() {
+        let left = BlockState::with_values(
+            environment("value", Type::String),
+            vec![Some(Type::String)],
+            Flow::normal(),
+        );
+        let right = BlockState::with_values(
+            environment("value", Type::Integer),
+            vec![Some(Type::Integer)],
+            Flow::normal(),
+        );
+
+        let joined = left.join(&right);
+
+        let expected = Type::String.join(&Type::Integer);
+        assert_eq!(joined.environment.get("value"), expected);
+        assert_eq!(joined.values, vec![Some(expected)]);
+    }
+
+    #[test]
+    fn missing_value_on_one_edge_is_not_invented_at_the_join() {
+        let left = BlockState::with_values(
+            Environment::default(),
+            vec![Some(Type::String)],
+            Flow::normal(),
+        );
+        let right = BlockState::with_values(Environment::default(), vec![None], Flow::normal());
+
+        assert_eq!(left.join(&right).values, vec![None]);
     }
 }
