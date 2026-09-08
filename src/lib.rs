@@ -4,6 +4,7 @@
 //! inference in separate modules.  Embedders can use the lattice on its own or
 //! call [`infer::check`] for a complete source-buffer check.
 
+pub mod cfg;
 pub mod conformance;
 pub mod diagnostic;
 pub mod directives;
