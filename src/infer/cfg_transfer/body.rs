@@ -78,29 +78,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         name.as_str() != operator.as_str() && !name.as_str().ends_with('=')
     }
 
-    fn exception_edge(
-        &self,
-        graph: &cfg::Cfg,
-        block: &cfg::BasicBlock,
-        mut state: BlockState,
-        exception: Type,
-    ) -> Option<cfg::transfer::TransferEdge<BlockState>> {
-        let target = block.unwind?;
-        let target_block = graph.block(target)?;
-        if let Some(parameter) = target_block.parameters.first() {
-            state.set_value(parameter.value, exception.clone());
-        }
-        state.route_exception(exception);
-        Some(cfg::transfer::TransferEdge { target, state })
-    }
-
-    fn is_rescue_entry(graph: &cfg::Cfg, block: cfg::BlockId) -> bool {
-        graph
-            .blocks
-            .iter()
-            .any(|candidate| candidate.unwind == Some(block))
-    }
-
     fn return_is_non_local(&self) -> bool {
         matches!(self.context.closure_kind, Some(hir::ClosureKind::Block))
     }
@@ -394,9 +371,12 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     .ok_or_else(|| format!("call transfer failed at {:?}", operation.span))?;
                     if result.flow.contains(FlowKind::Raise) {
                         let exception = result.abrupt.raise_type.clone();
-                        if let Some(edge) =
-                            self.exception_edge(graph, block, next.clone(), exception.clone())
-                        {
+                        if let Some(edge) = super::exceptions::exception_edge(
+                            graph,
+                            block,
+                            next.clone(),
+                            exception.clone(),
+                        ) {
                             exception_edges.push(edge);
                         } else {
                             self.abrupt = self
@@ -510,7 +490,9 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
         let edge = |target, state| cfg::transfer::TransferEdge { target, state };
         match &block.terminator {
             cfg::Terminator::Jump { target, arguments } => {
-                if next.pending_exception.is_some() && Self::is_rescue_entry(graph, block.id) {
+                if next.pending_exception.is_some()
+                    && super::exceptions::is_rescue_entry(graph, block.id)
+                {
                     next.handle_exception();
                 }
                 let target_block = graph
@@ -686,7 +668,9 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 let exception = next
                     .value(*value)
                     .unwrap_or_else(|| Type::named("StandardError"));
-                if let Some(edge) = self.exception_edge(graph, block, next, exception.clone()) {
+                if let Some(edge) =
+                    super::exceptions::exception_edge(graph, block, next, exception.clone())
+                {
                     exception_edges.push(edge);
                 } else {
                     self.abrupt = self
@@ -761,7 +745,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 if next.flow.contains(FlowKind::Raise) {
                     if let Some(exception) = next.pending_exception.clone() {
                         if let Some(exception_edge) =
-                            self.exception_edge(graph, block, next, exception.clone())
+                            super::exceptions::exception_edge(graph, block, next, exception.clone())
                         {
                             edges.push(exception_edge);
                         } else {
