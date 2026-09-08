@@ -255,6 +255,8 @@ impl Eval {
 
     pub(super) fn callback_has_normal_path(&self) -> bool {
         self.normal_type.is_some()
+            || !self.abrupt.break_type.is_never()
+            || !self.abrupt.next_type.is_never()
             || (self.abrupt.return_type.is_never()
                 && self.abrupt.raise_type.is_never()
                 && self.abrupt.retry_type.is_never())
