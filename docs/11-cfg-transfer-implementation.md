@@ -73,16 +73,21 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
 * `1b91c1a` made body graphs immutable per-check inputs. The analyzer lowers
   each index-compatible body once and reuses that graph across all inference
   passes, while the generic worklist continues to own scheduling and joins.
+* `ded755c` transferred ordinary `if` bodies through the same worklist. The
+  host now computes truthy/falsy reachability from the owned condition value,
+  joins branch results through CFG block parameters, and applies predicate
+  narrowing at the branch boundary. The parity fixture uses a nilable typed
+  parameter to exercise the narrowing path.
 
 ## Next boundary
 
 The analyzer still uses its recursive evaluator for compound/dynamic operation
-semantics, rescue/ensure, and branch/body expression adapters. Complete-body
-transfer is deliberately narrow: it does not yet interpret splat/block calls,
-safe navigation, `super`, `yield`, closures, or abrupt terminators
-inside a body. The next implementation boundaries are the remaining call
-shapes, non-local logical compound assignments, and dynamic compound writes,
-then complete branch bodies and rescue/ensure edges. Collection splats also need
+semantics, rescue/ensure, and unsupported branch/body expression shapes.
+Complete-body transfer is deliberately narrow: it does not yet interpret
+splat/block calls, safe navigation, `super`, `yield`, closures, or abrupt
+terminators inside a body. The next implementation boundaries are the remaining
+call shapes, non-local logical compound assignments, and dynamic compound
+writes, then remaining branch-body shapes and rescue/ensure edges. Collection splats also need
 explicit operand-span metadata before they can cross this boundary. The
 recursive path must remain available for differential checks until each
 operation and terminator has an equivalent transfer.

@@ -67,6 +67,9 @@ recursive evaluator remains the compatibility baseline.
   analyzer. CFG lowering is no longer repeated for each seed, fixpoint, or
   final method visit; the immutable graphs are shared by the CFG index and
   the transfer host.
+* `ded755c` moved ordinary `if` bodies through the complete-body worklist.
+  Branch reachability and joins now use owned value IDs, while the existing
+  predicate narrowing helper is applied to each owned branch environment.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -98,10 +101,10 @@ remaining run-to-run difference is negligible.
 
 The legacy recursive evaluator still owns rescue, ensure, and general
 expression transfer. CFG mode now selects conditional and loop regions from
-owned CFGs, and complete straight-line method bodies use the generic worklist.
-Conditional and loop bodies still retain source-node child evaluation as a
-temporary bridge. It still uses explicit fallbacks for executable expressions
-that are orphaned under unsupported syntax.
+owned CFGs, and complete method bodies with supported ordinary `if` branches
+use the generic worklist. Conditional and loop bodies still retain source-node
+child evaluation as a temporary bridge. It still uses explicit fallbacks for
+executable expressions that are orphaned under unsupported syntax.
 
 The next stages are therefore:
 
