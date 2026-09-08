@@ -231,6 +231,22 @@ fn transfers_symbol_passed_blocks_with_their_method_return_type() {
 }
 
 #[test]
+fn transfers_loop_bodies_through_the_owned_cfg_graph() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_loop_body.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn uses_cfg_call_and_assignment_transfers_for_supported_shapes() {
     let source = r#"class Box
   def value=(value)

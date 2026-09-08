@@ -181,13 +181,14 @@ fn body_can_transfer(program: &hir::Program, body: hir::BodyId) -> bool {
         return false;
     };
     let mut visiting = HashSet::new();
-    expr_can_transfer(program, body.root, &mut visiting)
+    expr_can_transfer(program, body.root, &mut visiting, 0)
 }
 
 fn expr_can_transfer(
     program: &hir::Program,
     expression: hir::ExprId,
     visiting: &mut HashSet<hir::ExprId>,
+    loop_depth: usize,
 ) -> bool {
     if !visiting.insert(expression) {
         return false;
@@ -202,8 +203,10 @@ fn expr_can_transfer(
                 hir::BlockArgument::Inline(closure) => program
                     .closure(*closure)
                     .and_then(|closure| program.body(closure.body))
-                    .is_some_and(|body| expr_can_transfer(program, body.root, visiting)),
-                hir::BlockArgument::Passed(value) => expr_can_transfer(program, *value, visiting),
+                    .is_some_and(|body| expr_can_transfer(program, body.root, visiting, 0)),
+                hir::BlockArgument::Passed(value) => {
+                    expr_can_transfer(program, *value, visiting, loop_depth)
+                }
             });
             block_supported
                 && match &call.receiver {
@@ -214,57 +217,59 @@ fn expr_can_transfer(
                 }
                 && match &call.receiver {
                     hir::Receiver::Explicit(receiver) => {
-                        expr_can_transfer(program, *receiver, visiting)
+                        expr_can_transfer(program, *receiver, visiting, loop_depth)
                     }
                     _ => true,
                 }
                 && call.arguments.iter().all(|argument| match argument {
                     hir::Argument::Positional(value) | hir::Argument::Splat(value) => {
-                        expr_can_transfer(program, *value, visiting)
+                        expr_can_transfer(program, *value, visiting, loop_depth)
                     }
                     hir::Argument::Keyword { value, .. } => {
-                        expr_can_transfer(program, *value, visiting)
+                        expr_can_transfer(program, *value, visiting, loop_depth)
                     }
                     hir::Argument::KeywordSplat(value) => {
-                        expr_can_transfer(program, *value, visiting)
+                        expr_can_transfer(program, *value, visiting, loop_depth)
                     }
                     hir::Argument::Forwarded => true,
                 })
         }
         ExprKind::Array(elements) => elements.iter().all(|element| match element {
-            ArrayElement::Value(value) => expr_can_transfer(program, *value, visiting),
-            ArrayElement::Splat { value, .. } => expr_can_transfer(program, *value, visiting),
+            ArrayElement::Value(value) => expr_can_transfer(program, *value, visiting, loop_depth),
+            ArrayElement::Splat { value, .. } => {
+                expr_can_transfer(program, *value, visiting, loop_depth)
+            }
         }),
         ExprKind::Hash(elements) => elements.iter().all(|element| match element {
             HashElement::Pair { key, value } => {
-                expr_can_transfer(program, *key, visiting)
-                    && expr_can_transfer(program, *value, visiting)
+                expr_can_transfer(program, *key, visiting, loop_depth)
+                    && expr_can_transfer(program, *value, visiting, loop_depth)
             }
-            HashElement::Splat { value, .. } => expr_can_transfer(program, *value, visiting),
+            HashElement::Splat { value, .. } => {
+                expr_can_transfer(program, *value, visiting, loop_depth)
+            }
         }),
         ExprKind::Closure(closure) => program
             .closure(*closure)
             .and_then(|closure| program.body(closure.body))
-            .is_some_and(|body| expr_can_transfer(program, body.root, visiting)),
+            .is_some_and(|body| expr_can_transfer(program, body.root, visiting, 0)),
         ExprKind::Begin(begin) => {
             begin
                 .body
-                .is_none_or(|body| expr_can_transfer(program, body, visiting))
+                .is_none_or(|body| expr_can_transfer(program, body, visiting, loop_depth))
                 && begin
                     .else_body
-                    .is_none_or(|body| expr_can_transfer(program, body, visiting))
+                    .is_none_or(|body| expr_can_transfer(program, body, visiting, loop_depth))
                 && begin.rescue.iter().all(|clause| {
-                    clause
-                        .exceptions
-                        .iter()
-                        .all(|exception| expr_can_transfer(program, *exception, visiting))
-                        && clause
-                            .body
-                            .is_none_or(|body| expr_can_transfer(program, body, visiting))
+                    clause.exceptions.iter().all(|exception| {
+                        expr_can_transfer(program, *exception, visiting, loop_depth)
+                    }) && clause
+                        .body
+                        .is_none_or(|body| expr_can_transfer(program, body, visiting, loop_depth))
                 })
                 && begin
                     .ensure
-                    .is_none_or(|ensure| expr_can_transfer(program, ensure, visiting))
+                    .is_none_or(|ensure| expr_can_transfer(program, ensure, visiting, loop_depth))
         }
         ExprKind::Assign {
             target,
@@ -288,16 +293,16 @@ fn expr_can_transfer(
                 | hir::AssignTarget::Global(_)
                 | hir::AssignTarget::Constant(_) => direct_target,
                 hir::AssignTarget::Attribute { receiver, .. } => {
-                    expr_can_transfer(program, *receiver, visiting)
+                    expr_can_transfer(program, *receiver, visiting, loop_depth)
                 }
                 hir::AssignTarget::Index {
                     receiver,
                     arguments,
                 } => {
-                    expr_can_transfer(program, *receiver, visiting)
+                    expr_can_transfer(program, *receiver, visiting, loop_depth)
                         && arguments.iter().all(|argument| match argument {
                             hir::Argument::Positional(value) => {
-                                expr_can_transfer(program, *value, visiting)
+                                expr_can_transfer(program, *value, visiting, loop_depth)
                             }
                             hir::Argument::Splat(_)
                             | hir::Argument::Keyword { .. }
@@ -317,20 +322,32 @@ fn expr_can_transfer(
                     operator,
                     hir::AssignOperator::Set | hir::AssignOperator::Binary(_)
                 ))
-                && expr_can_transfer(program, *value, visiting)
+                && expr_can_transfer(program, *value, visiting, loop_depth)
         }
         ExprKind::Sequence(expressions) => expressions
             .iter()
-            .all(|expression| expr_can_transfer(program, *expression, visiting)),
+            .all(|expression| expr_can_transfer(program, *expression, visiting, loop_depth)),
         ExprKind::Retry => true,
+        ExprKind::Loop(loop_expr) => {
+            expr_can_transfer(program, loop_expr.condition, visiting, loop_depth)
+                && loop_expr
+                    .body
+                    .is_none_or(|body| expr_can_transfer(program, body, visiting, loop_depth + 1))
+        }
+        // Value-carrying break and next still need non-local outcome values
+        // in the transfer state. A valueless form is safe here because its
+        // outcome is the same nil value already materialized by lowering.
+        ExprKind::Break(value) | ExprKind::Next(value) => loop_depth > 0 && value.is_none(),
         ExprKind::If {
             condition,
             then_body,
             else_body,
         } => {
-            expr_can_transfer(program, *condition, visiting)
-                && expr_can_transfer(program, *then_body, visiting)
-                && else_body.is_none_or(|else_body| expr_can_transfer(program, else_body, visiting))
+            expr_can_transfer(program, *condition, visiting, loop_depth)
+                && expr_can_transfer(program, *then_body, visiting, loop_depth)
+                && else_body.is_none_or(|else_body| {
+                    expr_can_transfer(program, else_body, visiting, loop_depth)
+                })
         }
         _ => false,
     };
