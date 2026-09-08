@@ -205,6 +205,9 @@ The first modularization steps are now in place:
   before the recursive Prism statement walker; definitions and unsupported
   top-level syntax still fall back as a whole through the transactional
   preflight boundary.
+* the compatibility assignment adapter no longer evaluates an unsupported RHS
+  through `eval_node`; it declines the owned assignment path before publishing
+  state, leaving the complete assignment to the recursive evaluator.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
   `BoundProc` `call`/`[]` operations from CFG values, including unioned
   callable receivers, argument checking, and optional RBS block contracts;

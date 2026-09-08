@@ -27,17 +27,16 @@ impl<'src> Analyzer<'src> {
     /// Transfer direct storage writes from owned HIR. Compound writes and
     /// attribute/index targets still use the established dispatch helpers
     /// until their read/branch/write sequence is driven by block state.
-    fn eval_cfg_assignment_value<'node>(
+    fn eval_cfg_assignment_value(
         &mut self,
         value_id: hir::ExprId,
-        value_node: &Node<'node>,
         environment: &mut Environment,
-    ) -> Type {
-        if Self::owned_value_tree_supported(&self.hir_program, value_id) {
-            self.eval_owned_value(value_id, environment).type_
-        } else {
-            Self::normal_type(self.eval_node(value_node, environment))
-        }
+    ) -> Option<Type> {
+        // Do not evaluate an unsupported RHS through Prism here. Returning
+        // `None` makes the entire assignment fall back transactionally, so
+        // the compatibility evaluator owns all of its child effects.
+        Self::owned_value_tree_supported(&self.hir_program, value_id)
+            .then(|| self.eval_owned_value(value_id, environment).type_)
     }
 
     fn transfer_cfg_set_assignment<'node>(
@@ -56,7 +55,7 @@ impl<'src> Analyzer<'src> {
         match target {
             hir::AssignTarget::Local(local) => {
                 let name = self.hir_program.local_name(local)?.as_str().to_owned();
-                let actual = self.eval_cfg_assignment_value(value_id, &value_node, environment);
+                let actual = self.eval_cfg_assignment_value(value_id, environment)?;
                 let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
                 if let Some(alias) = self.predicate_alias_for_value(&value_node, environment) {
                     environment.bind_predicate_alias(name.clone(), type_.clone(), alias);
@@ -74,7 +73,7 @@ impl<'src> Analyzer<'src> {
             }
             hir::AssignTarget::InstanceVariable(name) => {
                 let name = name.as_str().to_owned();
-                let actual = self.eval_cfg_assignment_value(value_id, &value_node, environment);
+                let actual = self.eval_cfg_assignment_value(value_id, environment)?;
                 let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
                 let type_ =
                     self.preserve_typed_empty_array_ivar(environment, &name, &value_node, type_);
@@ -88,19 +87,19 @@ impl<'src> Analyzer<'src> {
                 Some(Eval::value(self.record(node, type_)))
             }
             hir::AssignTarget::ClassVariable(name) => {
-                let actual = self.eval_cfg_assignment_value(value_id, &value_node, environment);
+                let actual = self.eval_cfg_assignment_value(value_id, environment)?;
                 let type_ = self.apply_inline_assertion(node, actual);
                 self.observe_class_var(environment, name.as_str().to_owned(), &type_);
                 Some(Eval::value(self.record(node, type_)))
             }
             hir::AssignTarget::Global(name) => {
-                let actual = self.eval_cfg_assignment_value(value_id, &value_node, environment);
+                let actual = self.eval_cfg_assignment_value(value_id, environment)?;
                 let type_ = self.apply_inline_assertion(node, actual);
                 self.observe_global(name.as_str().to_owned(), &type_);
                 Some(Eval::value(self.record(node, type_)))
             }
             hir::AssignTarget::Constant(name) => {
-                let actual = self.eval_cfg_assignment_value(value_id, &value_node, environment);
+                let actual = self.eval_cfg_assignment_value(value_id, environment)?;
                 let name = name.as_str().to_owned();
                 let struct_type = self.struct_subclass_type(environment, &value_node, &name);
                 if let Some(struct_type) = struct_type.as_ref() {
