@@ -3,6 +3,41 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn record_inferred_return(
+        &mut self,
+        key: MethodKey,
+        actual: Type,
+        terminates: bool,
+    ) {
+        match self.fixpoint.pending_returns.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((actual, terminates));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (current, current_terminates) = entry.get_mut();
+                *current = current.join(&actual);
+                *current_terminates &= terminates;
+            }
+        }
+    }
+
+    pub(super) fn commit_inferred_returns(&mut self) {
+        let pending_returns = std::mem::take(&mut self.fixpoint.pending_returns);
+        for (key, (return_type, return_terminates)) in pending_returns {
+            if let Some(state) = self.declarations.methods.get_mut(&key) {
+                if !state.explicit {
+                    let changed = state.return_type.as_ref() != Some(&return_type)
+                        || state.return_terminates != return_terminates;
+                    state.return_type = Some(return_type);
+                    state.return_terminates = return_terminates;
+                    if changed {
+                        self.fixpoint.changed_methods.insert(key);
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn run<'node>(mut self, root: &Node<'node>) -> CheckResult {
         let run_started = std::time::Instant::now();
         if self.config.debug {

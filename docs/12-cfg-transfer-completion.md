@@ -181,7 +181,8 @@ The first modularization steps are now in place:
 * fixpoint seeding, summary worklist scheduling, final publication, and strict
   inference-gap reporting now live in `infer/runner.rs`; `infer.rs` retains
   the shared analyzer state and semantic entry points instead of also owning
-  the analysis lifecycle.
+  the analysis lifecycle. Pending-return accumulation and summary commits are
+  part of that lifecycle boundary as well.
 * the remaining HIR-to-Prism lookup helpers for recursive calls and assignment
   children now live in `infer/legacy_bridge.rs`; their `pub(super)` surface is
   an explicit compatibility boundary used by the legacy evaluator and does
