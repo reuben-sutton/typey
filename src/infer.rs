@@ -3701,6 +3701,9 @@ impl<'src> Analyzer<'src> {
             return result;
         }
         if let Some(for_node) = node.as_for_node() {
+            if self.config.enable_cfg {
+                return self.eval_cfg_for(node, &for_node, environment);
+            }
             return self.eval_for(node, &for_node, environment);
         }
 
