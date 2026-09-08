@@ -11,13 +11,6 @@ impl<'src> Analyzer<'src> {
             .is_some_and(|index| index.has_call(prism::span(node)))
     }
 
-    fn cfg_call_name_matches(&self, node: &Node<'_>, name: &str) -> bool {
-        self.cfg_index
-            .as_ref()
-            .and_then(|index| index.call_names(prism::span(node)))
-            .is_some_and(|names| names.iter().any(|candidate| candidate == name))
-    }
-
     pub(super) fn has_cfg_assignment_operation(&self, node: &Node<'_>) -> bool {
         let span = prism::span(node);
         self.cfg_index
@@ -52,7 +45,6 @@ impl<'src> Analyzer<'src> {
         // HirCallView retains only Prism child nodes so the existing transfer
         // machinery can evaluate child expressions until the owned value
         // evaluator lands.
-        debug_assert!(self.cfg_call_name_matches(node, &call.name()));
         self.eval_call_result(node, &call, environment)
     }
 

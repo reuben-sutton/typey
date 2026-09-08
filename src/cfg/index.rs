@@ -15,21 +15,18 @@ pub struct CfgIndex {
     unsupported_count: usize,
     call_spans: HashSet<(usize, usize)>,
     write_spans: HashSet<(usize, usize)>,
-    call_names: HashMap<(usize, usize), Vec<String>>,
     conditionals: HashMap<(usize, usize), Conditional>,
 }
 
 impl CfgIndex {
     #[must_use]
     pub fn from_program(program: &Program) -> Self {
-        let expressions_by_span = super::lower::expression_index(program);
         let mut index = Self {
             body_count: program.bodies.len(),
             ..Self::default()
         };
         for (body, _) in program.bodies.iter().enumerate() {
-            let graph =
-                super::lower::build_for_index(program, BodyId(body as u32), &expressions_by_span);
+            let graph = super::lower::build_for_index(program, BodyId(body as u32));
             index.add_graph(program, &graph);
         }
         index
@@ -61,12 +58,8 @@ impl CfgIndex {
             for operation in &block.operations {
                 let span = (operation.span.start as usize, operation.span.end as usize);
                 match &operation.kind {
-                    super::OperationKind::Call { name, .. } => {
+                    super::OperationKind::Call { .. } => {
                         self.call_spans.insert(span);
-                        self.call_names
-                            .entry(span)
-                            .or_default()
-                            .push(name.as_str().to_owned());
                     }
                     super::OperationKind::Write { .. } => {
                         self.write_spans.insert(span);
@@ -95,11 +88,6 @@ impl CfgIndex {
     #[must_use]
     pub fn has_write(&self, span: (usize, usize)) -> bool {
         self.write_spans.contains(&span)
-    }
-
-    #[must_use]
-    pub fn call_names(&self, span: (usize, usize)) -> Option<&[String]> {
-        self.call_names.get(&span).map(Vec::as_slice)
     }
 
     #[must_use]

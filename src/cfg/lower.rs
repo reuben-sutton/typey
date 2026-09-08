@@ -19,7 +19,7 @@ use std::collections::HashMap;
 #[must_use]
 pub fn build(program: &Program, body: BodyId) -> Cfg {
     let expressions_by_span = expression_index(program);
-    build_with_index_and_values(program, body, &expressions_by_span, true)
+    build_with_index_and_values(program, body, Some(&expressions_by_span), true)
 }
 
 /// Build all body CFGs while sharing the HIR span index between bodies.
@@ -31,7 +31,12 @@ pub fn build_all(program: &Program) -> Vec<Cfg> {
         .iter()
         .enumerate()
         .map(|(index, _)| {
-            build_with_index_and_values(program, BodyId(index as u32), &expressions_by_span, true)
+            build_with_index_and_values(
+                program,
+                BodyId(index as u32),
+                Some(&expressions_by_span),
+                true,
+            )
         })
         .collect()
 }
@@ -50,18 +55,14 @@ pub(crate) fn expression_index(program: &Program) -> HashMap<(u32, u32), ExprId>
         .collect()
 }
 
-pub(crate) fn build_for_index(
-    program: &Program,
-    body: BodyId,
-    expressions_by_span: &HashMap<(u32, u32), ExprId>,
-) -> Cfg {
-    build_with_index_and_values(program, body, expressions_by_span, false)
+pub(crate) fn build_for_index(program: &Program, body: BodyId) -> Cfg {
+    build_with_index_and_values(program, body, None, false)
 }
 
 fn build_with_index_and_values(
     program: &Program,
     body: BodyId,
-    expressions_by_span: &HashMap<(u32, u32), ExprId>,
+    expressions_by_span: Option<&HashMap<(u32, u32), ExprId>>,
     retain_expression_values: bool,
 ) -> Cfg {
     Builder::new(program, body, expressions_by_span, retain_expression_values).finish()
@@ -101,7 +102,7 @@ struct RescueContext {
 
 struct Builder<'program> {
     program: &'program Program,
-    expressions_by_span: &'program HashMap<(u32, u32), ExprId>,
+    expressions_by_span: Option<&'program HashMap<(u32, u32), ExprId>>,
     cfg: Cfg,
     closed: Vec<bool>,
     next_value: u32,
@@ -114,7 +115,7 @@ impl<'program> Builder<'program> {
     fn new(
         program: &'program Program,
         body: BodyId,
-        expressions_by_span: &'program HashMap<(u32, u32), ExprId>,
+        expressions_by_span: Option<&'program HashMap<(u32, u32), ExprId>>,
         retain_expression_values: bool,
     ) -> Self {
         Self {
@@ -208,10 +209,9 @@ impl<'program> Builder<'program> {
             .operations
             .push(Operation {
                 span,
-                expression: self
-                    .expressions_by_span
-                    .get(&(span.start, span.end))
-                    .copied(),
+                expression: self.expressions_by_span.and_then(|expressions_by_span| {
+                    expressions_by_span.get(&(span.start, span.end)).copied()
+                }),
                 result: value,
                 kind,
             });
