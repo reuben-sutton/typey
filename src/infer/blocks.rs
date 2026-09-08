@@ -2,6 +2,7 @@ use super::{
     name_matches, optional_proc_type, prism, proc_parts, strictness_rank, Analyzer, CallArguments,
     CallSite, Environment, Eval, MethodKey, MethodState, Strictness,
 };
+use crate::hir;
 use crate::signature::MethodSig;
 use crate::types::Type;
 use ruby_prism::{Node, ParametersNode};
@@ -330,6 +331,10 @@ impl<'src> Analyzer<'src> {
                     .or_else(|| parameters.as_parameters_node())
             });
         MethodState::inferred(parameters).body_signature()
+    }
+
+    pub(super) fn inferred_hir_block_signature(parameters: &hir::Parameters) -> MethodSig {
+        MethodState::inferred_hir(parameters).body_signature()
     }
 
     pub(super) fn block_value_type(result: &Eval) -> Type {

@@ -906,6 +906,61 @@ impl MethodState {
         }
     }
 
+    fn inferred_hir(parameters: &hir::Parameters) -> Self {
+        let mut state = Self::inferred(None);
+        let mut positional_index = 0;
+        for parameter in &parameters.parameters {
+            match parameter.kind {
+                hir::ParameterKind::Required => {
+                    state.params.push(None);
+                    state.required_params += 1;
+                    positional_index += 1;
+                }
+                hir::ParameterKind::Optional => {
+                    state.params.push(None);
+                    positional_index += 1;
+                }
+                hir::ParameterKind::Rest => {
+                    state.rest_index = Some(positional_index);
+                    state.params.push(None);
+                    state.accepts_rest = true;
+                    positional_index += 1;
+                }
+                hir::ParameterKind::Forwarded => {
+                    if state.accepts_rest {
+                        state.accepts_keyword_rest = true;
+                    } else {
+                        state.rest_index = Some(positional_index);
+                        state.params.push(None);
+                        state.accepts_rest = true;
+                        positional_index += 1;
+                    }
+                }
+                hir::ParameterKind::Post => {
+                    state.params.push(None);
+                    state.required_params += 1;
+                    positional_index += 1;
+                }
+                hir::ParameterKind::RequiredKeyword => {
+                    if let Some(name) = &parameter.name {
+                        state.required_keywords.insert(name.as_str().to_owned());
+                        state.keywords.insert(name.as_str().to_owned(), None);
+                    }
+                }
+                hir::ParameterKind::OptionalKeyword => {
+                    if let Some(name) = &parameter.name {
+                        state.keywords.insert(name.as_str().to_owned(), None);
+                    }
+                }
+                hir::ParameterKind::KeywordRest => {
+                    state.accepts_keyword_rest = true;
+                }
+                hir::ParameterKind::Block | hir::ParameterKind::Anonymous => {}
+            }
+        }
+        state
+    }
+
     fn inferred_accessor(kind: AccessorKind) -> Self {
         let mut state = Self::inferred(None);
         state.return_type = Some(Type::Any);

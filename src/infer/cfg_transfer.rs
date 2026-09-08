@@ -127,7 +127,14 @@ fn expr_can_transfer(
     let supported = match &expr.kind {
         ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => true,
         ExprKind::Call(call) => {
-            call.block.is_none()
+            let block_supported = call.block.as_ref().is_none_or(|block| match block {
+                hir::BlockArgument::Inline(closure) => program
+                    .closure(*closure)
+                    .and_then(|closure| program.body(closure.body))
+                    .is_some_and(|body| expr_can_transfer(program, body.root, visiting)),
+                hir::BlockArgument::Passed(value) => expr_can_transfer(program, *value, visiting),
+            });
+            block_supported
                 && match &call.receiver {
                     hir::Receiver::Implicit | hir::Receiver::Explicit(_) => true,
                     hir::Receiver::Super | hir::Receiver::Yield => false,
@@ -162,6 +169,10 @@ fn expr_can_transfer(
             }
             HashElement::Splat { value, .. } => expr_can_transfer(program, *value, visiting),
         }),
+        ExprKind::Closure(closure) => program
+            .closure(*closure)
+            .and_then(|closure| program.body(closure.body))
+            .is_some_and(|body| expr_can_transfer(program, body.root, visiting)),
         ExprKind::Assign {
             target,
             value,
@@ -456,9 +467,6 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
         environment: &mut Environment,
     ) -> Option<Eval> {
-        if input.block.is_some() {
-            return None;
-        }
         let call = input
             .expression
             .and_then(|expression| analyzer.hir_program.expression(expression))
@@ -470,6 +478,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             analyzer.cfg_call_arguments(&input, &call, node, values, fixed_array_elements)?;
 
         let receiver_node = node.as_call_node()?.receiver();
+        let block_node = node.as_call_node()?.block();
         let receiver_type = match &input.receiver {
             cfg::ReceiverOperand::Implicit => environment.self_type.clone(),
             cfg::ReceiverOperand::Value(value) => {
@@ -480,22 +489,31 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         let site = CallSite {
             argument_nodes: &call_arguments.argument_nodes,
             argument_types: &call_arguments.argument_types,
-            block: None,
+            block: block_node.as_ref(),
         };
+        let has_block = input.block.is_some();
         let (type_, untyped_origin) = if matches!(input.receiver, cfg::ReceiverOperand::Implicit) {
             let key = analyzer.implicit_method_key(input.name.as_str(), environment);
             analyzer.record_method_dependency(&key, environment);
             if let Some(signature) = analyzer
-                .observe_call(&key, &call_arguments, false)
+                .observe_call(&key, &call_arguments, has_block)
                 .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
             {
+                let block_return_type = analyzer.observe_block_call(
+                    &key,
+                    block_node.as_ref(),
+                    &signature,
+                    &call_arguments,
+                    Some(&receiver_type),
+                    environment,
+                );
                 let type_ = analyzer.invoke_signature(
                     node,
                     input.name.as_str(),
                     &signature,
                     &call_arguments,
                     Some(&receiver_type),
-                    None,
+                    block_return_type.as_ref(),
                 );
                 let origin = analyzer
                     .resolve_method_key(&key)
@@ -543,16 +561,24 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 if let Some(key) = key {
                     analyzer.record_method_dependency(&key, environment);
                     if let Some(signature) = analyzer
-                        .observe_call(&key, &call_arguments, false)
+                        .observe_call(&key, &call_arguments, has_block)
                         .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
                     {
+                        let block_return_type = analyzer.observe_block_call(
+                            &key,
+                            block_node.as_ref(),
+                            &signature,
+                            &call_arguments,
+                            Some(&dispatch_receiver),
+                            environment,
+                        );
                         let type_ = analyzer.invoke_signature(
                             node,
                             input.name.as_str(),
                             &signature,
                             &call_arguments,
                             Some(&dispatch_receiver),
-                            None,
+                            block_return_type.as_ref(),
                         );
                         let type_ = if input.name.as_str() == "new"
                             && Analyzer::class_object_instance_type(&dispatch_receiver).is_some()
@@ -845,6 +871,11 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     let source = next.value(*value).ok_or(())?;
                     let (_, _, type_) = Self::pattern_reachability(pattern, &source).ok_or(())?;
                     type_
+                }
+                cfg::OperationKind::MakeClosure { closure } => {
+                    let closure = self.analyzer.hir_program.closure(*closure).ok_or(())?;
+                    let signature = Analyzer::inferred_hir_block_signature(&closure.parameters);
+                    Type::Proc(signature.params, Box::new(signature.return_type))
                 }
                 _ => return Err(()),
             };
