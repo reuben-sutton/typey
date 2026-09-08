@@ -26,6 +26,9 @@ recursive evaluator remains the compatibility baseline.
 * The current work records owned conditional regions and transfers `if`
   branches and joins through those regions while retaining the existing flow
   lattice and source-node child evaluation.
+* `29c18e6` and `4c169c5` moved literal/read operations and direct storage
+  writes into the inference-side CFG transfer module. Compound and dynamic
+  writes remain explicit compatibility bridges.
 * `dfe6009` removed avoidable CFG-index work. Index-only lowering no longer
   builds the full expression span map or clones call names, while full graph
   construction retains expression identity for structural consumers.
