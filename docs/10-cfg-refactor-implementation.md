@@ -70,6 +70,9 @@ recursive evaluator remains the compatibility baseline.
 * `ded755c` moved ordinary `if` bodies through the complete-body worklist.
   Branch reachability and joins now use owned value IDs, while the existing
   predicate narrowing helper is applied to each owned branch environment.
+* `e10d6c4` transferred positional splats in complete bodies. Fixed array
+  literals are expanded from their owned element IDs and retain tuple shape;
+  dynamic and unknown splats preserve their existing gradual call behavior.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -108,8 +111,9 @@ executable expressions that are orphaned under unsupported syntax.
 
 The next stages are therefore:
 
-1. transfer the remaining call shapes and compound/dynamic writes;
-2. transfer rescue, `retry`, ensure edges, and complete branch bodies;
+1. transfer the remaining keyword/forwarded/block call shapes and
+   compound/dynamic writes;
+2. transfer rescue, `retry`, ensure edges, and remaining branch-body shapes;
 3. compare diagnostics, inferred types, flow outcomes, send metrics, and
    untyped provenance against the recursive path;
 4. remove the opt-in switch and legacy path only after those comparisons are

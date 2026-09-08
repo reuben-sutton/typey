@@ -78,16 +78,20 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
   joins branch results through CFG block parameters, and applies predicate
   narrowing at the branch boundary. The parity fixture uses a nilable typed
   parameter to exercise the narrowing path.
+* `e10d6c4` transferred positional splats through complete bodies. Fixed
+  arrays are expanded from owned value IDs, while dynamic and unknown splats
+  set the same gradual call-shape flags as the recursive argument evaluator.
 
 ## Next boundary
 
 The analyzer still uses its recursive evaluator for compound/dynamic operation
 semantics, rescue/ensure, and unsupported branch/body expression shapes.
 Complete-body transfer is deliberately narrow: it does not yet interpret
-splat/block calls, safe navigation, `super`, `yield`, closures, or abrupt
-terminators inside a body. The next implementation boundaries are the remaining
-call shapes, non-local logical compound assignments, and dynamic compound
-writes, then remaining branch-body shapes and rescue/ensure edges. Collection splats also need
+keyword splat groups, forwarding/block calls, safe navigation, `super`,
+`yield`, closures, or abrupt terminators inside a body. The next implementation
+boundaries are the remaining call shapes, non-local logical compound
+assignments, and dynamic compound writes, then remaining branch-body shapes
+and rescue/ensure edges. Collection splats also need
 explicit operand-span metadata before they can cross this boundary. The
 recursive path must remain available for differential checks until each
 operation and terminator has an equivalent transfer.
