@@ -91,6 +91,12 @@ The first modularization steps are now in place:
   decomposition, overload merging, and callable arity narrowing;
 * `infer/method_state.rs` owns the evolving inferred method summary used by
   declaration registration, fixpoint observation, and block contracts;
+* `infer/signature_calls.rs` owns signature invocation semantics, including
+  generic bindings, argument-shape validation, splat checks, and specialized
+  collection return types;
+* `infer/method_lookup.rs` owns receiver/implicit method-key construction,
+  ancestor and alias lookup, initializer/struct-constructor support, method
+  dependencies, and recursive-call widening;
 * `infer/legacy_eval.rs` owns the recursive Prism evaluator's expression and
   assignment dispatch, leaving the main inference host responsible for
   orchestration and shared state rather than syntax dispatch;
