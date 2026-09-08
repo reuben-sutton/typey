@@ -17,6 +17,7 @@ mod blocks;
 mod builtins;
 mod call_types;
 mod calls;
+mod cfg_state;
 mod cfg_transfer;
 mod control_flow;
 mod declarations;
