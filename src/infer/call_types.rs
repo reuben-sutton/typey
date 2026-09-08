@@ -5,7 +5,7 @@
 //! layer makes that dependency explicit and gives CFG transfer a stable place
 //! to introduce source-owned call inputs.
 
-use super::{proc_parts, Analyzer, Flow, MethodKey, OutcomeTypes, SourceSite};
+use super::{optional_proc_type, proc_parts, Analyzer, Flow, MethodKey, OutcomeTypes, SourceSite};
 use crate::cfg;
 use crate::hir;
 use crate::signature::MethodSig;
@@ -119,11 +119,24 @@ impl<'src> Analyzer<'src> {
                 Some(receiver_type),
                 environment,
             ),
-            cfg::BlockOperand::Passed(value) => values
-                .get(value.0 as usize)
-                .and_then(Option::as_ref)
-                .and_then(proc_parts)
-                .map(|(_, result)| result.clone()),
+            cfg::BlockOperand::Passed(value) => {
+                let expected = signature.block.as_ref().and_then(optional_proc_type);
+                if let (Some(block), Some(expected)) = (block_node, expected.as_ref()) {
+                    if block
+                        .as_block_argument_node()
+                        .and_then(|block| block.expression())
+                        .and_then(|expression| expression.as_symbol_node())
+                        .is_some()
+                    {
+                        return Some(self.eval_symbol_passed_block(block, expected, environment));
+                    }
+                }
+                values
+                    .get(value.0 as usize)
+                    .and_then(Option::as_ref)
+                    .and_then(proc_parts)
+                    .map(|(_, result)| result.clone())
+            }
         }
     }
 

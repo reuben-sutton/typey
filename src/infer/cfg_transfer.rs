@@ -125,18 +125,34 @@ impl BlockState {
 
 #[derive(Default)]
 struct SpanNodeIndex<'node> {
-    nodes: HashMap<(usize, usize), Node<'node>>,
+    nodes: HashMap<(usize, usize), Vec<Node<'node>>>,
 }
 
 impl<'node> Visit<'node> for SpanNodeIndex<'node> {
     fn visit_branch_node_enter(&mut self, node: Node<'node>) {
         let span = prism::span(&node);
-        self.nodes.entry(span).or_insert(node);
+        self.nodes.entry(span).or_default().push(node);
     }
 
     fn visit_leaf_node_enter(&mut self, node: Node<'node>) {
         let span = prism::span(&node);
-        self.nodes.entry(span).or_insert(node);
+        self.nodes.entry(span).or_default().push(node);
+    }
+}
+
+impl<'node> SpanNodeIndex<'node> {
+    fn call_node(&self, span: (usize, usize)) -> Option<&Node<'node>> {
+        self.nodes
+            .get(&span)?
+            .iter()
+            .find(|node| node.as_call_node().is_some() || node.as_super_node().is_some())
+    }
+
+    fn closure_node(&self, span: (usize, usize)) -> Option<&Node<'node>> {
+        self.nodes
+            .get(&span)?
+            .iter()
+            .find(|node| node.as_block_node().is_some() || node.as_lambda_node().is_some())
     }
 }
 
@@ -1094,8 +1110,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                 }
                 cfg::OperationKind::Call { .. } => {
                     let node = nodes
-                        .nodes
-                        .get(&(operation.span.start as usize, operation.span.end as usize))
+                        .call_node((operation.span.start as usize, operation.span.end as usize))
                         .ok_or_else(|| {
                             format!("missing call Prism node at {:?}", operation.span)
                         })?;
@@ -1174,8 +1189,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                 }
                 cfg::OperationKind::MakeClosure { closure } => {
                     let node = nodes
-                        .nodes
-                        .get(&(operation.span.start as usize, operation.span.end as usize))
+                        .closure_node((operation.span.start as usize, operation.span.end as usize))
                         .ok_or_else(|| {
                             format!("missing call Prism node at {:?}", operation.span)
                         })?;
