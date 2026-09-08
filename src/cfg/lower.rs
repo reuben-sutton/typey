@@ -133,6 +133,7 @@ struct Builder<'program> {
     loops: Vec<LoopContext>,
     rescues: Vec<RescueContext>,
     ensures: Vec<EnsureContext>,
+    closure_kind: Option<hir::ClosureKind>,
     retain_expression_values: bool,
     current_expression: Option<ExprId>,
 }
@@ -144,6 +145,12 @@ impl<'program> Builder<'program> {
         expressions_by_span: Option<&'program HashMap<(u32, u32), ExprId>>,
         retain_expression_values: bool,
     ) -> Self {
+        let closure_kind = program.body(body).and_then(|body| match &body.owner {
+            hir::BodyOwner::Closure(closure) => {
+                program.closure(*closure).map(|closure| closure.kind)
+            }
+            _ => None,
+        });
         Self {
             program,
             expressions_by_span,
@@ -163,6 +170,7 @@ impl<'program> Builder<'program> {
             loops: Vec::new(),
             rescues: Vec::new(),
             ensures: Vec::new(),
+            closure_kind,
             retain_expression_values,
             current_expression: None,
         }
@@ -1427,6 +1435,9 @@ impl<'program> Builder<'program> {
     }
 
     fn lower_break(&mut self, expression: ExprId, block: BlockId, value: Option<ExprId>) -> Flow {
+        if self.closure_kind == Some(hir::ClosureKind::Block) && self.loops.is_empty() {
+            return self.lower_block_outcome(expression, block, value, OutcomeKind::Break);
+        }
         let Some(context) = self.loops.last().copied() else {
             return self.lower_unsupported_transfer(expression, block, "break-outside-loop");
         };
@@ -1447,6 +1458,9 @@ impl<'program> Builder<'program> {
     }
 
     fn lower_next(&mut self, expression: ExprId, block: BlockId, value: Option<ExprId>) -> Flow {
+        if self.closure_kind == Some(hir::ClosureKind::Block) && self.loops.is_empty() {
+            return self.lower_block_outcome(expression, block, value, OutcomeKind::Next);
+        }
         let Some(context) = self.loops.last().copied() else {
             return self.lower_unsupported_transfer(expression, block, "next-outside-loop");
         };
@@ -1463,6 +1477,39 @@ impl<'program> Builder<'program> {
             .expect("next seed produces a value")
         });
         self.jump(block, context.next_target, vec![value]);
+        self.abrupt(expression, block)
+    }
+
+    fn lower_block_outcome(
+        &mut self,
+        expression: ExprId,
+        block: BlockId,
+        value: Option<ExprId>,
+        kind: OutcomeKind,
+    ) -> Flow {
+        let (block, value) = self.lower_optional_value(block, value);
+        let value = value.unwrap_or_else(|| {
+            self.emit(
+                block,
+                self.span(expression),
+                OperationKind::Const {
+                    value: hir::Literal::Nil,
+                },
+                true,
+            )
+            .expect("block outcome seed produces a value")
+        });
+        self.emit(
+            block,
+            self.span(expression),
+            OperationKind::SetOutcome { kind, value },
+            false,
+        );
+        if let Some(ensure) = self.ensures.last().copied() {
+            self.jump(block, ensure.entry, vec![value]);
+        } else {
+            self.set_terminator(block, Terminator::Unreachable);
+        }
         self.abrupt(expression, block)
     }
 

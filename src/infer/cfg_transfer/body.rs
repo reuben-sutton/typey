@@ -1190,7 +1190,19 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 }
                 Ok(Vec::new())
             }
-            cfg::Terminator::Unreachable => Ok(Vec::new()),
+            cfg::Terminator::Unreachable => {
+                for (kind, type_) in [
+                    (FlowKind::Return, next.pending_outcomes.return_type.clone()),
+                    (FlowKind::Break, next.pending_outcomes.break_type.clone()),
+                    (FlowKind::Next, next.pending_outcomes.next_type.clone()),
+                    (FlowKind::Retry, next.pending_outcomes.retry_type.clone()),
+                ] {
+                    if !type_.is_never() {
+                        self.finish_outcome(kind, type_, next.environment.clone());
+                    }
+                }
+                Ok(Vec::new())
+            }
             cfg::Terminator::Branch {
                 condition,
                 truthy,

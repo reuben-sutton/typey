@@ -7,19 +7,28 @@
 use crate::hir::{self, ArrayElement, ExprKind, HashElement};
 use std::collections::HashSet;
 
+#[derive(Clone, Copy)]
+struct ControlContext {
+    allow_return: bool,
+    allow_block_outcomes: bool,
+}
+
 pub(super) fn body_can_transfer(program: &hir::Program, body_id: hir::BodyId) -> bool {
     let Some(body) = program.body(body_id) else {
         return false;
     };
     let mut visiting = HashSet::new();
-    let result = expr_can_transfer(
-        program,
-        body.root,
-        &mut visiting,
-        0,
-        body_allows_return(program, body),
-    );
-    result
+    let context = ControlContext {
+        allow_return: body_allows_return(program, body),
+        allow_block_outcomes: matches!(
+            &body.owner,
+            hir::BodyOwner::Closure(closure_id)
+                if program
+                    .closure(*closure_id)
+                    .is_some_and(|closure| closure.kind == hir::ClosureKind::Block)
+        ),
+    };
+    expr_can_transfer(program, body.root, &mut visiting, 0, context)
 }
 
 fn body_allows_return(program: &hir::Program, body: &hir::Body) -> bool {
@@ -38,7 +47,7 @@ fn expr_can_transfer(
     expression: hir::ExprId,
     visiting: &mut HashSet<hir::ExprId>,
     loop_depth: usize,
-    local_return: bool,
+    context: ControlContext,
 ) -> bool {
     if !visiting.insert(expression) {
         return false;
@@ -59,7 +68,7 @@ fn expr_can_transfer(
                         .is_some_and(|closure| body_can_transfer(program, closure.body))
                 }
                 hir::BlockArgument::Passed(value) => {
-                    expr_can_transfer(program, *value, visiting, loop_depth, local_return)
+                    expr_can_transfer(program, *value, visiting, loop_depth, context)
                 }
             });
             block_supported
@@ -71,57 +80,60 @@ fn expr_can_transfer(
                 }
                 && match &call.receiver {
                     hir::Receiver::Explicit(receiver) => {
-                        expr_can_transfer(program, *receiver, visiting, loop_depth, local_return)
+                        expr_can_transfer(program, *receiver, visiting, loop_depth, context)
                     }
                     _ => true,
                 }
                 && call.arguments.iter().all(|argument| match argument {
                     hir::Argument::Positional(value) | hir::Argument::Splat(value) => {
-                        expr_can_transfer(program, *value, visiting, loop_depth, local_return)
+                        expr_can_transfer(program, *value, visiting, loop_depth, context)
                     }
                     hir::Argument::Keyword { value, .. } => {
-                        expr_can_transfer(program, *value, visiting, loop_depth, local_return)
+                        expr_can_transfer(program, *value, visiting, loop_depth, context)
                     }
                     hir::Argument::KeywordSplat(value) => {
-                        expr_can_transfer(program, *value, visiting, loop_depth, local_return)
+                        expr_can_transfer(program, *value, visiting, loop_depth, context)
                     }
                     hir::Argument::Forwarded => true,
                 })
         }
         ExprKind::Array(elements) => elements.iter().all(|element| match element {
             ArrayElement::Value(value) => {
-                expr_can_transfer(program, *value, visiting, loop_depth, local_return)
+                expr_can_transfer(program, *value, visiting, loop_depth, context)
             }
             ArrayElement::Splat { value, .. } => {
-                expr_can_transfer(program, *value, visiting, loop_depth, local_return)
+                expr_can_transfer(program, *value, visiting, loop_depth, context)
             }
         }),
         ExprKind::Hash(elements) => elements.iter().all(|element| match element {
             HashElement::Pair { key, value } => {
-                expr_can_transfer(program, *key, visiting, loop_depth, local_return)
-                    && expr_can_transfer(program, *value, visiting, loop_depth, local_return)
+                expr_can_transfer(program, *key, visiting, loop_depth, context)
+                    && expr_can_transfer(program, *value, visiting, loop_depth, context)
             }
             HashElement::Splat { value, .. } => {
-                expr_can_transfer(program, *value, visiting, loop_depth, local_return)
+                expr_can_transfer(program, *value, visiting, loop_depth, context)
             }
         }),
         ExprKind::Closure(closure) => program
             .closure(*closure)
             .is_some_and(|closure| body_can_transfer(program, closure.body)),
         ExprKind::Begin(begin) => {
-            begin.body.is_none_or(|body| {
-                expr_can_transfer(program, body, visiting, loop_depth, local_return)
-            }) && begin.else_body.is_none_or(|body| {
-                expr_can_transfer(program, body, visiting, loop_depth, local_return)
-            }) && begin.rescue.iter().all(|clause| {
-                clause.exceptions.iter().all(|exception| {
-                    expr_can_transfer(program, *exception, visiting, loop_depth, local_return)
-                }) && clause.body.is_none_or(|body| {
-                    expr_can_transfer(program, body, visiting, loop_depth, local_return)
+            begin
+                .body
+                .is_none_or(|body| expr_can_transfer(program, body, visiting, loop_depth, context))
+                && begin.else_body.is_none_or(|body| {
+                    expr_can_transfer(program, body, visiting, loop_depth, context)
                 })
-            }) && begin.ensure.is_none_or(|ensure| {
-                expr_can_transfer(program, ensure, visiting, loop_depth, local_return)
-            })
+                && begin.rescue.iter().all(|clause| {
+                    clause.exceptions.iter().all(|exception| {
+                        expr_can_transfer(program, *exception, visiting, loop_depth, context)
+                    }) && clause.body.is_none_or(|body| {
+                        expr_can_transfer(program, body, visiting, loop_depth, context)
+                    })
+                })
+                && begin.ensure.is_none_or(|ensure| {
+                    expr_can_transfer(program, ensure, visiting, loop_depth, context)
+                })
         }
         ExprKind::Assign { target, value, .. } => {
             let target_supported = match target {
@@ -131,24 +143,20 @@ fn expr_can_transfer(
                 | hir::AssignTarget::Global(_)
                 | hir::AssignTarget::Constant(_) => true,
                 hir::AssignTarget::Attribute { receiver, .. } => {
-                    expr_can_transfer(program, *receiver, visiting, loop_depth, local_return)
+                    expr_can_transfer(program, *receiver, visiting, loop_depth, context)
                 }
                 hir::AssignTarget::Index {
                     receiver,
                     arguments,
                 } => {
-                    expr_can_transfer(program, *receiver, visiting, loop_depth, local_return)
+                    expr_can_transfer(program, *receiver, visiting, loop_depth, context)
                         && arguments.iter().all(|argument| match argument {
                             hir::Argument::Positional(value)
                             | hir::Argument::Splat(value)
                             | hir::Argument::KeywordSplat(value)
-                            | hir::Argument::Keyword { value, .. } => expr_can_transfer(
-                                program,
-                                *value,
-                                visiting,
-                                loop_depth,
-                                local_return,
-                            ),
+                            | hir::Argument::Keyword { value, .. } => {
+                                expr_can_transfer(program, *value, visiting, loop_depth, context)
+                            }
                             // A synthesized `[]=` call has no surrounding
                             // method-call shape from which forwarded values
                             // can be recovered.
@@ -156,11 +164,10 @@ fn expr_can_transfer(
                         })
                 }
             };
-            target_supported
-                && expr_can_transfer(program, *value, visiting, loop_depth, local_return)
+            target_supported && expr_can_transfer(program, *value, visiting, loop_depth, context)
         }
         ExprKind::Sequence(expressions) => expressions.iter().all(|expression| {
-            expr_can_transfer(program, *expression, visiting, loop_depth, local_return)
+            expr_can_transfer(program, *expression, visiting, loop_depth, context)
         }),
         ExprKind::Retry => true,
         ExprKind::Loop(loop_expr) => {
@@ -178,38 +185,32 @@ fn expr_can_transfer(
                 hir::LoopKind::While | hir::LoopKind::Until => loop_expr.index.is_none(),
             };
             target_supported
-                && expr_can_transfer(
-                    program,
-                    loop_expr.condition,
-                    visiting,
-                    loop_depth,
-                    local_return,
-                )
+                && expr_can_transfer(program, loop_expr.condition, visiting, loop_depth, context)
                 && loop_expr.body.is_none_or(|body| {
-                    expr_can_transfer(program, body, visiting, loop_depth + 1, local_return)
+                    expr_can_transfer(program, body, visiting, loop_depth + 1, context)
                 })
         }
         ExprKind::Case(case) => {
             case.scrutinee.is_none_or(|scrutinee| {
-                expr_can_transfer(program, scrutinee, visiting, loop_depth, local_return)
+                expr_can_transfer(program, scrutinee, visiting, loop_depth, context)
             }) && case.arms.iter().all(|arm| {
                 arm.conditions.iter().all(|condition| {
-                    expr_can_transfer(program, *condition, visiting, loop_depth, local_return)
-                }) && expr_can_transfer(program, arm.body, visiting, loop_depth, local_return)
+                    expr_can_transfer(program, *condition, visiting, loop_depth, context)
+                }) && expr_can_transfer(program, arm.body, visiting, loop_depth, context)
             }) && case.else_body.is_none_or(|else_body| {
-                expr_can_transfer(program, else_body, visiting, loop_depth, local_return)
+                expr_can_transfer(program, else_body, visiting, loop_depth, context)
             })
         }
         ExprKind::Return(value) => {
-            local_return
+            context.allow_return
                 && value.is_none_or(|value| {
-                    expr_can_transfer(program, value, visiting, loop_depth, local_return)
+                    expr_can_transfer(program, value, visiting, loop_depth, context)
                 })
         }
         ExprKind::Break(value) | ExprKind::Next(value) => {
-            loop_depth > 0
+            (loop_depth > 0 || context.allow_block_outcomes)
                 && value.is_none_or(|value| {
-                    expr_can_transfer(program, value, visiting, loop_depth, local_return)
+                    expr_can_transfer(program, value, visiting, loop_depth, context)
                 })
         }
         ExprKind::If {
@@ -217,10 +218,10 @@ fn expr_can_transfer(
             then_body,
             else_body,
         } => {
-            expr_can_transfer(program, *condition, visiting, loop_depth, local_return)
-                && expr_can_transfer(program, *then_body, visiting, loop_depth, local_return)
+            expr_can_transfer(program, *condition, visiting, loop_depth, context)
+                && expr_can_transfer(program, *then_body, visiting, loop_depth, context)
                 && else_body.is_none_or(|else_body| {
-                    expr_can_transfer(program, else_body, visiting, loop_depth, local_return)
+                    expr_can_transfer(program, else_body, visiting, loop_depth, context)
                 })
         }
         _ => false,
