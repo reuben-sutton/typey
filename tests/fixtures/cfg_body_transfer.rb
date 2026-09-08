@@ -16,6 +16,12 @@ class CfgBodyTransfer
     value += 2
     value
   end
+
+  def dynamic_write
+    mapping = {"old" => 1}
+    mapping["new"] = 2
+    mapping["new"]
+  end
 end
 
 CfgBodyTransfer.new.value

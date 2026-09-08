@@ -170,17 +170,36 @@ fn expr_can_transfer(
             operator,
             ..
         } => {
+            let target_supported = match target {
+                hir::AssignTarget::Local(_)
+                | hir::AssignTarget::InstanceVariable(_)
+                | hir::AssignTarget::ClassVariable(_)
+                | hir::AssignTarget::Global(_)
+                | hir::AssignTarget::Constant(_) => true,
+                hir::AssignTarget::Attribute { receiver, .. } => {
+                    expr_can_transfer(program, *receiver, visiting)
+                }
+                hir::AssignTarget::Index {
+                    receiver,
+                    arguments,
+                } => {
+                    expr_can_transfer(program, *receiver, visiting)
+                        && arguments.iter().all(|argument| match argument {
+                            hir::Argument::Positional(value) => {
+                                expr_can_transfer(program, *value, visiting)
+                            }
+                            hir::Argument::Splat(_)
+                            | hir::Argument::Keyword { .. }
+                            | hir::Argument::KeywordSplat(_)
+                            | hir::Argument::Forwarded => false,
+                        })
+                }
+            };
             matches!(
                 operator,
                 hir::AssignOperator::Set | hir::AssignOperator::Binary(_)
-            ) && matches!(
-                target,
-                hir::AssignTarget::Local(_)
-                    | hir::AssignTarget::InstanceVariable(_)
-                    | hir::AssignTarget::ClassVariable(_)
-                    | hir::AssignTarget::Global(_)
-                    | hir::AssignTarget::Constant(_)
-            ) && expr_can_transfer(program, *value, visiting)
+            ) && target_supported
+                && expr_can_transfer(program, *value, visiting)
         }
         ExprKind::Sequence(expressions) => expressions
             .iter()
