@@ -415,6 +415,62 @@ fn loop_graph() -> &'static cfg::Cfg {
 }
 
 impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
+    fn transfer_closure(
+        analyzer: &mut Analyzer<'src>,
+        closure_id: hir::ClosureId,
+        closure_node: &Node<'node>,
+        outer: &Environment,
+    ) -> Option<Type> {
+        let (body_id, parameters) = {
+            let closure = analyzer.hir_program.closure(closure_id)?;
+            (closure.body, closure.parameters.clone())
+        };
+        let signature = Analyzer::inferred_hir_block_signature(&parameters);
+        let mut closure_environment = outer.clone();
+        let mut positional_index = 0;
+        for parameter in &parameters.parameters {
+            let type_ = match parameter.kind {
+                hir::ParameterKind::Required
+                | hir::ParameterKind::Optional
+                | hir::ParameterKind::Post => {
+                    let type_ = signature
+                        .params
+                        .get(positional_index)
+                        .cloned()
+                        .unwrap_or(Type::Any);
+                    positional_index += 1;
+                    type_
+                }
+                hir::ParameterKind::Rest | hir::ParameterKind::Forwarded => {
+                    let type_ = signature
+                        .params
+                        .get(positional_index)
+                        .cloned()
+                        .unwrap_or(Type::Any);
+                    positional_index += 1;
+                    Type::Array(Box::new(type_))
+                }
+                hir::ParameterKind::RequiredKeyword | hir::ParameterKind::OptionalKeyword => {
+                    Type::Any
+                }
+                hir::ParameterKind::KeywordRest => {
+                    Type::Hash(Box::new(Type::Symbol), Box::new(Type::Any))
+                }
+                hir::ParameterKind::Block => Type::Proc(Vec::new(), Box::new(Type::Any)),
+                hir::ParameterKind::Anonymous => Type::Any,
+            };
+            if let Some(name) = &parameter.name {
+                closure_environment.bind(name.as_str().to_owned(), type_.clone());
+            }
+            if positional_index == 1 && parameter.name.is_none() {
+                closure_environment.bind("it", type_);
+            }
+        }
+        let body_result =
+            analyzer.eval_cfg_body(closure_node, body_id, &mut closure_environment)?;
+        Some(Type::Proc(signature.params, Box::new(body_result.type_)))
+    }
+
     fn transfer_write(
         analyzer: &mut Analyzer<'src>,
         site: SourceSite,
@@ -499,12 +555,14 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 .observe_call(&key, &call_arguments, has_block)
                 .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
             {
-                let block_return_type = analyzer.observe_block_call(
-                    &key,
+                let block_return_type = analyzer.cfg_block_return_type(
+                    &input,
                     block_node.as_ref(),
+                    &key,
                     &signature,
                     &call_arguments,
-                    Some(&receiver_type),
+                    &receiver_type,
+                    values,
                     environment,
                 );
                 let type_ = analyzer.invoke_signature(
@@ -564,12 +622,14 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                         .observe_call(&key, &call_arguments, has_block)
                         .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
                     {
-                        let block_return_type = analyzer.observe_block_call(
-                            &key,
+                        let block_return_type = analyzer.cfg_block_return_type(
+                            &input,
                             block_node.as_ref(),
+                            &key,
                             &signature,
                             &call_arguments,
-                            Some(&dispatch_receiver),
+                            &dispatch_receiver,
+                            values,
                             environment,
                         );
                         let type_ = analyzer.invoke_signature(
@@ -873,9 +933,12 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     type_
                 }
                 cfg::OperationKind::MakeClosure { closure } => {
-                    let closure = self.analyzer.hir_program.closure(*closure).ok_or(())?;
-                    let signature = Analyzer::inferred_hir_block_signature(&closure.parameters);
-                    Type::Proc(signature.params, Box::new(signature.return_type))
+                    let node = nodes
+                        .nodes
+                        .get(&(operation.span.start as usize, operation.span.end as usize))
+                        .ok_or(())?;
+                    Self::transfer_closure(self.analyzer, *closure, node, &next.environment)
+                        .ok_or(())?
                 }
                 _ => return Err(()),
             };
@@ -1420,6 +1483,7 @@ impl<'src> Analyzer<'src> {
                             | cfg::OperationKind::ReadSpecial { .. }
                             | cfg::OperationKind::Write { .. }
                             | cfg::OperationKind::Call { .. }
+                            | cfg::OperationKind::MakeClosure { .. }
                             | cfg::OperationKind::BuildArray { .. }
                             | cfg::OperationKind::BuildHash { .. }
                             | cfg::OperationKind::PatternTest { .. }
@@ -1435,6 +1499,7 @@ impl<'src> Analyzer<'src> {
                             | cfg::OperationKind::ReadSpecial { .. }
                             | cfg::OperationKind::Write { .. }
                             | cfg::OperationKind::Call { .. }
+                            | cfg::OperationKind::MakeClosure { .. }
                             | cfg::OperationKind::BuildArray { .. }
                             | cfg::OperationKind::BuildHash { .. }
                             | cfg::OperationKind::PatternTest { .. }

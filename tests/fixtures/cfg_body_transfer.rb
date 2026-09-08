@@ -64,6 +64,12 @@ class CfgBodyTransfer
     values.map { |value| value.to_s }
   end
 
+  def passed_block
+    values = [1, 2]
+    processor = ->(value) { value.to_s }
+    values.map(&processor)
+  end
+
   #: (Integer, String) -> void
   def positional_target(one, two)
   end
@@ -89,3 +95,4 @@ end
 CfgBodyTransfer.new.value
 T.reveal_type(CfgBodyTransfer.new.safe_navigation("text")) # note: Revealed type: `T.nilable(String)`
 T.reveal_type(CfgBodyTransfer.new.inline_block) # note: Revealed type: `T::Array[String]`
+T.reveal_type(CfgBodyTransfer.new.passed_block) # note: Revealed type: `T::Array[String]`

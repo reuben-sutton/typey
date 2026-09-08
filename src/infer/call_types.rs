@@ -5,9 +5,10 @@
 //! layer makes that dependency explicit and gives CFG transfer a stable place
 //! to introduce source-owned call inputs.
 
-use super::{Analyzer, Flow, OutcomeTypes, SourceSite};
+use super::{proc_parts, Analyzer, Flow, MethodKey, OutcomeTypes, SourceSite};
 use crate::cfg;
 use crate::hir;
+use crate::signature::MethodSig;
 use crate::types::Type;
 use ruby_prism::Node;
 use std::collections::HashMap;
@@ -57,6 +58,34 @@ impl OwnedCallInput {
 }
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn cfg_block_return_type<'node>(
+        &mut self,
+        input: &OwnedCallInput,
+        block_node: Option<&Node<'node>>,
+        key: &MethodKey,
+        signature: &MethodSig,
+        arguments: &CallArguments<'node>,
+        receiver_type: &Type,
+        values: &[Option<Type>],
+        environment: &mut super::Environment,
+    ) -> Option<Type> {
+        match input.block.as_ref()? {
+            cfg::BlockOperand::Inline(_) => self.observe_block_call(
+                key,
+                block_node,
+                signature,
+                arguments,
+                Some(receiver_type),
+                environment,
+            ),
+            cfg::BlockOperand::Passed(value) => values
+                .get(value.0 as usize)
+                .and_then(Option::as_ref)
+                .and_then(proc_parts)
+                .map(|(_, result)| result.clone()),
+        }
+    }
+
     pub(super) fn cfg_call_arguments<'node>(
         &mut self,
         input: &OwnedCallInput,
