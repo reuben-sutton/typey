@@ -87,6 +87,9 @@ The first modularization steps are now in place:
 * `infer/exceptions.rs` owns the Prism compatibility implementation for
   `begin`/`rescue`/`ensure` and rescue modifiers, keeping legacy unwind
   semantics separate from the analyzer coordinator and owned CFG transfer;
+* `infer/case_flow.rs` owns legacy Prism `case`/`case in` evaluation and its
+  case-specific narrowing helpers; shared predicate semantics remain in
+  `infer/predicate_flow.rs`;
 * `infer/cfg_state.rs` owns CFG block state, body context, value joins, and
   pending exception state, leaving `infer/cfg_transfer.rs` focused on operation
   and terminator semantics;
