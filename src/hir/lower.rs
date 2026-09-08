@@ -550,6 +550,8 @@ impl<'src> Lowerer<'src> {
                 Receiver::Super,
                 Name::new("super"),
                 arguments,
+                vec![1],
+                vec![self.span(node)],
                 block,
                 false,
             );
@@ -637,6 +639,8 @@ impl<'src> Lowerer<'src> {
                     receiver: Receiver::Explicit(predicate),
                     name: Name::new("!"),
                     arguments: Vec::new(),
+                    argument_groups: Vec::new(),
+                    argument_spans: Vec::new(),
                     block: None,
                     safe_navigation: false,
                     span: self.program.expressions[predicate.0 as usize].span,
@@ -950,16 +954,22 @@ impl<'src> Lowerer<'src> {
         let receiver = call.receiver().map_or(Receiver::Implicit, |receiver| {
             Receiver::Explicit(self.lower_node(&receiver))
         });
-        let arguments = raw_arguments
-            .iter()
-            .flat_map(|argument| self.lower_argument(argument))
-            .collect();
+        let mut arguments = Vec::new();
+        let mut argument_groups = Vec::with_capacity(raw_arguments.len());
+        let mut argument_spans = Vec::with_capacity(raw_arguments.len());
+        for argument in &raw_arguments {
+            arguments.extend(self.lower_argument(argument));
+            argument_groups.push(arguments.len());
+            argument_spans.push(self.span(argument));
+        }
         let block = self.lower_block_argument(call.block());
         self.lower_call_parts(
             node,
             receiver,
             Name::new(name),
             arguments,
+            argument_groups,
+            argument_spans,
             block,
             call.is_safe_navigation(),
         )
@@ -999,13 +1009,25 @@ impl<'src> Lowerer<'src> {
         let span = self.span(node);
         self.lowered_call_spans
             .insert((span.start as usize, span.end as usize));
-        let arguments = self.lower_arguments(arguments);
+        let raw_arguments = arguments.map_or_else(Vec::new, |arguments| {
+            arguments.arguments().into_iter().collect::<Vec<_>>()
+        });
+        let mut lowered_arguments = Vec::new();
+        let mut argument_groups = Vec::with_capacity(raw_arguments.len());
+        let mut argument_spans = Vec::with_capacity(raw_arguments.len());
+        for argument in &raw_arguments {
+            lowered_arguments.extend(self.lower_argument(argument));
+            argument_groups.push(lowered_arguments.len());
+            argument_spans.push(self.span(argument));
+        }
         let block = self.lower_block_argument(block);
         self.lower_call_parts(
             node,
             receiver,
             Name::new(name),
-            arguments,
+            lowered_arguments,
+            argument_groups,
+            argument_spans,
             block,
             safe_navigation,
         )
@@ -1017,6 +1039,8 @@ impl<'src> Lowerer<'src> {
         receiver: Receiver,
         name: Name,
         arguments: Vec<Argument>,
+        argument_groups: Vec<usize>,
+        argument_spans: Vec<Span>,
         block: Option<super::BlockArgument>,
         safe_navigation: bool,
     ) -> ExprId {
@@ -1029,6 +1053,8 @@ impl<'src> Lowerer<'src> {
                 receiver,
                 name,
                 arguments,
+                argument_groups,
+                argument_spans,
                 block,
                 safe_navigation,
                 span,

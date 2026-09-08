@@ -264,6 +264,13 @@ pub struct Call {
     pub receiver: Receiver,
     pub name: Name,
     pub arguments: Vec<Argument>,
+    /// Exclusive ends of the flattened [`arguments`] vector for each
+    /// top-level Ruby argument. Keyword hashes lower into several semantic
+    /// arguments but remain one source-level group.
+    pub argument_groups: Vec<usize>,
+    /// Source spans of the top-level Ruby arguments, aligned with
+    /// [`argument_groups`].
+    pub argument_spans: Vec<Span>,
     pub block: Option<BlockArgument>,
     pub safe_navigation: bool,
     pub span: Span,

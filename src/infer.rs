@@ -3706,6 +3706,8 @@ impl<'src> Analyzer<'src> {
                 receiver,
                 name: hir::Name::new(name),
                 arguments,
+                argument_groups: Vec::new(),
+                argument_spans: Vec::new(),
                 block: None,
                 safe_navigation: false,
                 span: hir::Span::new(

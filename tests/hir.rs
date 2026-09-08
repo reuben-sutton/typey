@@ -33,6 +33,16 @@ fn lowers_calls_with_owned_spans_and_argument_shape() {
             Argument::KeywordSplat(_)
         ]
     ));
+    assert_eq!(call.1.argument_groups, vec![1, 2, 4]);
+    assert_eq!(call.1.argument_spans.len(), 3);
+    assert_eq!(
+        call.1
+            .argument_spans
+            .iter()
+            .map(|span| &source[span.start as usize..span.end as usize])
+            .collect::<Vec<_>>(),
+        vec!["1", "*values", "flag: 2, **options"]
+    );
     assert!(matches!(
         call.1.block,
         Some(typey::hir::BlockArgument::Passed(_))
