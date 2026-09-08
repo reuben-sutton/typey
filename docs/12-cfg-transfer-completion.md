@@ -126,6 +126,9 @@ The first modularization steps are now in place:
   shapes, source sites, and closure identities come from owned CFG/HIR data;
   `HirCallView` remains only as the recursive evaluator's compatibility
   adapter; and
+* the `BodyTransfer` call path now consumes only `OwnedCallInput` and owned
+  argument shapes. Parser argument materialization and builtin fallback remain
+  isolated in the recursive `transfer_cfg_call` bridge; and
 * `MakeClosure` transfers from its owned `ClosureId` and closure span, so
   closure creation no longer performs a source-span lookup;
 * ordinary `while`/`until` bodies now pass CFG preflight, including local

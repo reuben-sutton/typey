@@ -1,7 +1,7 @@
 use super::cfg_state::{BlockState, BodyContext};
 use super::{
-    ivar_refinement_key, Analyzer, CallSite, Environment, Eval, Flow, FlowKind, HirCallView,
-    OutcomeTypes, OwnedCallInput, SharedKey, SourceSite, UntypedOrigin,
+    ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, OutcomeTypes,
+    OwnedCallInput, SharedKey, SourceSite, UntypedOrigin,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
@@ -636,9 +636,8 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         }
     }
 
-    fn transfer_call<'call_node>(
+    fn transfer_call(
         analyzer: &mut Analyzer<'src>,
-        node: Option<&Node<'call_node>>,
         input: OwnedCallInput,
         values: &[Option<Type>],
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
@@ -652,40 +651,18 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 _ => None,
             });
         let call_arguments = if let Some(call) = call {
-            if let Some(node) = node {
-                analyzer.cfg_call_arguments(
+            analyzer
+                .cfg_owned_hir_call_arguments(
                     &input,
                     &call,
-                    node,
                     values,
                     fixed_array_elements,
                     environment,
                 )?
-            } else {
-                analyzer
-                    .cfg_owned_hir_call_arguments(
-                        &input,
-                        &call,
-                        values,
-                        fixed_array_elements,
-                        environment,
-                    )?
-                    .into_call_arguments()
-            }
+                .into_call_arguments()
         } else {
             analyzer.cfg_owned_call_arguments(&input, values, fixed_array_elements)?
         };
-
-        let receiver_node = node
-            .and_then(|node| node.as_call_node())
-            .and_then(|call| call.receiver());
-        let block_node = node
-            .and_then(|node| node.as_call_node())
-            .and_then(|call| call.block())
-            .or_else(|| {
-                node.and_then(Node::as_super_node)
-                    .and_then(|super_node| super_node.block())
-            });
         let receiver_type = match &input.receiver {
             cfg::ReceiverOperand::Implicit => environment.self_type.clone(),
             cfg::ReceiverOperand::Value(value) => {
@@ -694,11 +671,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => {
                 environment.self_type.clone()
             }
-        };
-        let site = CallSite {
-            argument_nodes: &call_arguments.argument_nodes,
-            argument_types: &call_arguments.argument_types,
-            block: block_node.as_ref(),
         };
         let has_block = input.block.is_some();
         let (type_, untyped_origin) = if matches!(input.receiver, cfg::ReceiverOperand::Yield) {
@@ -713,7 +685,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             {
                 let block_return_type = analyzer.cfg_block_return_type(
                     &input,
-                    block_node.as_ref(),
+                    None,
                     &key,
                     &signature,
                     &call_arguments,
@@ -748,7 +720,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             {
                 let block_return_type = analyzer.cfg_block_return_type(
                     &input,
-                    block_node.as_ref(),
+                    None,
                     &key,
                     &signature,
                     &call_arguments,
@@ -772,18 +744,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     .unwrap_or(UntypedOrigin::InferredMethod);
                 (type_, origin)
             } else {
-                let Some(node) = node else {
-                    return None;
-                };
-                let type_ = analyzer.eval_global_call(
-                    node,
-                    input.name.as_str(),
-                    &call_arguments.argument_nodes,
-                    &call_arguments.argument_types,
-                    None,
-                    environment,
-                );
-                (type_, UntypedOrigin::FallbackCall)
+                return None;
             }
         } else {
             let dispatch_receiver = if input.safe_navigation {
@@ -805,7 +766,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 (Type::Nil, UntypedOrigin::FallbackCall)
             } else {
                 let key = analyzer.receiver_method_key(
-                    receiver_node.as_ref(),
+                    None,
                     &dispatch_receiver,
                     input.name.as_str(),
                     environment,
@@ -818,7 +779,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     {
                         let block_return_type = analyzer.cfg_block_return_type(
                             &input,
-                            block_node.as_ref(),
+                            None,
                             &key,
                             &signature,
                             &call_arguments,
@@ -849,38 +810,10 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                             .unwrap_or(UntypedOrigin::InferredMethod);
                         (type_, origin)
                     } else {
-                        if node.is_none() {
-                            return None;
-                        }
-                        let type_ = analyzer.eval_method_call(
-                            &dispatch_receiver,
-                            input.name.as_str(),
-                            &site,
-                            environment,
-                        );
-                        let origin = if dispatch_receiver.contains_any() {
-                            UntypedOrigin::Propagated
-                        } else {
-                            UntypedOrigin::FallbackCall
-                        };
-                        (type_, origin)
-                    }
-                } else {
-                    if node.is_none() {
                         return None;
                     }
-                    let type_ = analyzer.eval_method_call(
-                        &dispatch_receiver,
-                        input.name.as_str(),
-                        &site,
-                        environment,
-                    );
-                    let origin = if dispatch_receiver.contains_any() {
-                        UntypedOrigin::Propagated
-                    } else {
-                        UntypedOrigin::FallbackCall
-                    };
-                    (type_, origin)
+                } else {
+                    return None;
                 }
             }
         };
@@ -1197,7 +1130,6 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 cfg::OperationKind::Call { .. } => {
                     let result = Self::transfer_call(
                         self.analyzer,
-                        None::<&Node<'static>>,
                         OwnedCallInput::from_operation(operation).ok_or_else(|| {
                             format!("missing owned call input at {:?}", operation.span)
                         })?,
