@@ -163,6 +163,9 @@ The first modularization steps are now in place:
   live in `infer/cfg_transfer/legacy.rs`; the adapter now owns their parser
   bridge, synthetic transfer states, graph constructors, and compatibility
   worklists as one boundary.
+* complete owned-body transfer now lives in `infer/cfg_transfer/body.rs`,
+  leaving the parent module to coordinate body entry, value/assignment bridges,
+  and fallback telemetry while the block worklist owns operation semantics.
 * the owned-body eligibility walk now lives in `infer/cfg_transfer/preflight.rs`;
   it is a parser-free HIR capability check separate from transfer state and
   inference results.
