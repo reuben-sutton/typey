@@ -50,6 +50,9 @@ recursive evaluator remains the compatibility baseline.
   now transfer receiver and argument values through CFG state before invoking
   the existing inference-side signature and dispatch machinery; unsupported
   call shapes still use the recursive compatibility path.
+* `20baa11` extended complete-body transfer to non-splat array and hash
+  construction. Splat wrappers remain an explicit fallback until their source
+  spans are represented in CFG operands.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -70,9 +73,9 @@ writes, attribute setters, loop/rescue fixtures, safe navigation, branches,
 compound assignments, source identity, and a complete straight-line method
 body. The default checker remains at baseline performance because CFG
 construction is not yet enabled by default. In three matched local release
-runs, Spoom took 1.72–1.73s with `--cfg` and 1.70–1.79s on the legacy path;
+runs, Spoom took 1.71–1.72s with `--cfg` and 1.70–1.72s on the legacy path;
 both paths produced the same three classified diagnostics. The CFG body host
-transferred 431 methods and 60,900 calls, with 157 legacy body fallbacks. An
+transferred 517 methods and 60,190 calls, with 157 legacy body fallbacks. An
 initial slower result was traced to rebuilding the program-wide HIR expression
 index once per method; the body host now uses the index-free builder, and the
 remaining run-to-run difference is negligible.
