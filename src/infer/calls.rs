@@ -1004,17 +1004,6 @@ impl<'src> Analyzer<'src> {
                     .into_iter()
                     .filter_map(|instance| Self::named_type_name(&instance))
                     .collect::<Vec<_>>();
-                let owners = if owners.is_empty()
-                    && !matches!(
-                        &receiver_type,
-                        Type::Named(name, _) if name_matches(name, "Class") || name_matches(name, "Module")
-                    ) {
-                    Self::named_type_name(&receiver_type)
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                } else {
-                    owners
-                };
                 let mut constructed = Type::Never;
                 for owner in owners {
                     let candidate_receiver = Self::class_object_type(&owner);

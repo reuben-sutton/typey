@@ -126,11 +126,7 @@ impl<'src> Analyzer<'src> {
     /// declares its own singleton `new`. Keep that nominal identity in the
     /// owned CFG call path just as the recursive evaluator does.
     pub(super) fn default_class_constructor_type(&self, receiver: &Type, fallback: Type) -> Type {
-        let instance = if let Some(instance) = Self::class_object_instance_type(receiver) {
-            instance
-        } else if let Type::Named(owner, arguments) = receiver {
-            Type::Named(owner.clone(), arguments.clone())
-        } else {
+        let Some(instance) = Self::class_object_instance_type(receiver) else {
             return fallback;
         };
         let Some(owner) = Self::named_type_name(&instance) else {
@@ -1066,15 +1062,9 @@ impl<'src> Analyzer<'src> {
                     .and_then(Self::class_object_owner)
                     .is_some_and(|receiver_owner| receiver_owner == *owner)
             });
-        let attached_class = match (
-            attached_class_context,
-            self.substitution_context
-                .as_ref()
-                .map(|context| context.name.as_str()),
-        ) {
-            (Some(owner), Some("<class-body>" | "<singleton-body>")) => Type::named(owner),
-            (Some(owner), _) => Type::AttachedClassOf(owner.to_owned()),
-            (None, _) => self.attached_class_type(receiver_type),
+        let attached_class = match attached_class_context {
+            Some(owner) => Type::AttachedClassOf(owner.to_owned()),
+            None => self.attached_class_type(receiver_type),
         };
         if let Type::BoundProc {
             receiver,

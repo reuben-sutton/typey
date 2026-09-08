@@ -7282,6 +7282,11 @@ fn transfers_passed_dynamic_singleton_method_body_with_bound_receiver() {
 }
 
 #[test]
+fn preserves_instance_new_overrides() {
+    check_fixture("tests/fixtures/instance_new_override.rb");
+}
+
+#[test]
 fn does_not_treat_concern_class_methods_as_module_instances() {
     check_fixture("tests/fixtures/concern_class_methods_self.rb");
 }

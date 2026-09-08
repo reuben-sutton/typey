@@ -66,7 +66,6 @@ impl<'src> Analyzer<'src> {
 mod tests {
     use super::super::cfg_state::BlockState;
     use super::super::{Environment, Flow, FlowKind};
-    use super::*;
     use crate::types::Type;
 
     fn environment(name: &str, type_: Type) -> Environment {
