@@ -3,35 +3,10 @@
 use super::super::{ivar_refinement_key, Analyzer, Environment, Eval, SharedKey, SourceSite};
 use super::cfg_global_refinement_key;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
-use crate::prism;
 use crate::types::Type;
-use ruby_prism::Node;
 
 impl<'src> Analyzer<'src> {
-    /// Transfer value-producing HIR operations whose semantics do not depend
-    /// on a method dispatch. The Prism node is retained only for source
-    /// recording and inline assertions; the operation kind and read place
-    /// come from owned HIR.
-    pub(in crate::infer) fn eval_cfg_value_dispatch<'node>(
-        &mut self,
-        node: &Node<'node>,
-        environment: &mut Environment,
-    ) -> Option<Eval> {
-        let expression = self.hir_value_expression_for_node(node)?;
-        if !Self::owned_value_tree_supported(&self.hir_program, expression) {
-            return None;
-        }
-        self.cfg_transfer_values = self.cfg_transfer_values.saturating_add(1);
-        Some(self.eval_owned_value(expression, environment))
-    }
-
-    fn hir_value_expression_for_node(&self, node: &Node<'_>) -> Option<hir::ExprId> {
-        let span = prism::span(node);
-        let expression_id = self.hir_value_ids.get(&span)?;
-        Some(*expression_id)
-    }
-
-    pub(super) fn owned_value_tree_supported(
+    pub(in crate::infer) fn owned_value_tree_supported(
         program: &hir::Program,
         expression: hir::ExprId,
     ) -> bool {
@@ -58,7 +33,7 @@ impl<'src> Analyzer<'src> {
         }
     }
 
-    pub(super) fn eval_owned_value(
+    pub(in crate::infer) fn eval_owned_value(
         &mut self,
         expression: hir::ExprId,
         environment: &mut Environment,

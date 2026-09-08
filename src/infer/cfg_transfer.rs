@@ -2,7 +2,6 @@ use super::{Analyzer, SourceSite};
 use crate::prism;
 use ruby_prism::Node;
 
-mod assignment;
 mod body;
 mod patterns;
 mod preflight;
