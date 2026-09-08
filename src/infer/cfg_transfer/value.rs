@@ -284,6 +284,11 @@ impl<'src> Analyzer<'src> {
             return;
         };
         match kind {
+            hir::ExprKind::Sequence(expressions) => {
+                if let Some(last) = expressions.last() {
+                    self.narrow_cfg_predicate(*last, environment, truthy);
+                }
+            }
             hir::ExprKind::Read(Read::Local(local)) => {
                 self.narrow_cfg_local(local, environment, truthy)
             }
@@ -297,6 +302,26 @@ impl<'src> Analyzer<'src> {
                 };
                 environment.bind(ivar_refinement_key(&name), narrowed);
             }
+            hir::ExprKind::Assign { target, .. } => match target {
+                hir::AssignTarget::Local(local) => {
+                    self.narrow_cfg_local(local, environment, truthy);
+                }
+                hir::AssignTarget::InstanceVariable(name) => {
+                    let name = name.as_str().to_owned();
+                    let current = self.ivar_type(environment, &name);
+                    let narrowed = if truthy {
+                        current.meet(&current.truthy_part())
+                    } else {
+                        current.meet(&current.falsy_part())
+                    };
+                    environment.bind(ivar_refinement_key(&name), narrowed);
+                }
+                hir::AssignTarget::ClassVariable(_)
+                | hir::AssignTarget::Global(_)
+                | hir::AssignTarget::Constant(_)
+                | hir::AssignTarget::Attribute { .. }
+                | hir::AssignTarget::Index { .. } => {}
+            },
             hir::ExprKind::Call(call) => {
                 if call.name.as_str() == "!" {
                     if let hir::Receiver::Explicit(receiver) = call.receiver {

@@ -257,6 +257,23 @@ fn preserves_struct_alias_identity_in_cfg_constructor_calls() {
 }
 
 #[test]
+fn narrows_loop_assignment_targets_in_cfg_predicates() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_while_assignment_narrowing.rb")
+        .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_union_callable_calls_without_recursive_fallback() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_callable_union.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());

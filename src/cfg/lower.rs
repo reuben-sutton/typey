@@ -1244,6 +1244,19 @@ impl<'program> Builder<'program> {
         let condition_flow = self.lower_expr(loop_expr.condition, condition);
         if condition_flow.reachable {
             let condition_value = condition_flow.value.expect("loop condition value");
+            let (truthy, falsy) = match loop_expr.kind {
+                LoopKind::Until => (normal_exit, body),
+                LoopKind::While | LoopKind::For => (body, normal_exit),
+            };
+            self.cfg.conditionals.push(Conditional {
+                expression,
+                condition: loop_expr.condition,
+                then_body: loop_expr.body.unwrap_or(expression),
+                else_body: None,
+                truthy,
+                falsy,
+                join: exit,
+            });
             match loop_expr.kind {
                 LoopKind::Until => {
                     self.branch(condition_flow.block, condition_value, normal_exit, body)
