@@ -31,6 +31,11 @@ recursive evaluator remains the compatibility baseline.
   writes remain explicit compatibility bridges.
 * `4dcb8bc` moved collection construction into owned transfer, and `31c89ea`
   made the CFG conditional scheduler use the generic transfer worklist.
+* `63f7e81` moved `while`/`until` loop headers, back-edges, exits,
+  `break`, and `next` through the same worklist. `for`, rescue, and ensure
+  remain separate migration boundaries.
+* `38d2072` replaced the transfer queue's ordered tree with a deterministic
+  min-heap and in-queue bitset; the block visit order is unchanged.
 * `dfe6009` removed avoidable CFG-index work. Index-only lowering no longer
   builds the full expression span map or clones call names, while full graph
   construction retains expression identity for structural consumers.

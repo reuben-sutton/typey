@@ -29,13 +29,17 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
   block worklist. The temporary host still delegates branch-body expression
   semantics to the existing evaluator, but scheduling, reachability, and the
   join now belong to the transfer layer.
+* `63f7e81` connected `while`/`until` transfer to the worklist, including
+  loop-carried environments and consumed `break`/`next` outcomes.
+* `38d2072` optimized the deterministic queue without changing its ordering
+  or convergence contract.
 
 ## Next boundary
 
 The analyzer still uses its recursive evaluator for compound/dynamic operation
-semantics and for branch-body expressions; `BlockState` is not yet driven by
-the generic worklist for complete bodies. The next implementation should add
-`BodyContext` and a body transfer host that adapts the owned CFG to
-`BlockTransfer`, then move closures and ordinary calls. The recursive path
-must remain available for differential checks until each operation and
-terminator has an equivalent transfer.
+semantics, `for`, rescue/ensure, and branch/body expression adapters;
+`BlockState` is not yet driven by the generic worklist for complete bodies.
+The next implementation should add `BodyContext` and a body transfer host
+that adapts the owned CFG to `BlockTransfer`, then move closures and ordinary
+calls. The recursive path must remain available for differential checks until
+each operation and terminator has an equivalent transfer.
