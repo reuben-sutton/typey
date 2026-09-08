@@ -4,7 +4,7 @@
 //! answers only whether a body can be represented by the current owned CFG
 //! contract; it does not infer a type or decide whether a program is valid.
 
-use super::*;
+use crate::hir::{self, ArrayElement, ExprKind, HashElement};
 use std::collections::HashSet;
 
 pub(super) fn body_can_transfer(program: &hir::Program, body: hir::BodyId) -> bool {

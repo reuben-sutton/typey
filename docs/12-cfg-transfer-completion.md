@@ -166,6 +166,9 @@ The first modularization steps are now in place:
 * complete owned-body transfer now lives in `infer/cfg_transfer/body.rs`,
   leaving the parent module to coordinate body entry, value/assignment bridges,
   and fallback telemetry while the block worklist owns operation semantics.
+* owned value construction, reads, literals, and predicate narrowing now live
+  in `infer/cfg_transfer/value.rs`; `patterns.rs` and `preflight.rs` use
+  explicit imports instead of inheriting the coordinator's namespace.
 * the owned-body eligibility walk now lives in `infer/cfg_transfer/preflight.rs`;
   it is a parser-free HIR capability check separate from transfer state and
   inference results.

@@ -1,6 +1,10 @@
 //! Owned CFG pattern reachability and value narrowing.
 
-use super::*;
+use super::super::cfg_state::BlockState;
+use super::super::{ivar_refinement_key, Analyzer};
+use crate::cfg;
+use crate::hir::{self, ExprKind, Literal, Read};
+use crate::types::Type;
 
 pub(super) fn narrow_pattern_value(
     analyzer: &Analyzer<'_>,
