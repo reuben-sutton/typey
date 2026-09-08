@@ -7044,6 +7044,44 @@ fn traverses_direct_define_method_bodies() {
         "dynamic method body was not traversed: {:?}",
         result.types
     );
+    let cfg_result = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(
+        cfg_result
+            .types
+            .iter()
+            .any(|inferred| inferred.start == start && inferred.is_send),
+        "CFG dynamic method body was not traversed: {:?}",
+        cfg_result.types
+    );
+}
+
+#[test]
+fn transfers_inline_dynamic_method_bodies_through_cfg() {
+    let path = "tests/fixtures/cfg_dynamic_define_method.rb";
+    let source = std::fs::read_to_string(path).unwrap();
+    check_fixture(path);
+    let result = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    let start = source.rfind("\"ok\".upcase").expect("dynamic body send");
+    assert!(
+        result
+            .types
+            .iter()
+            .any(|inferred| inferred.start == start && inferred.is_send),
+        "CFG dynamic method body send was not recorded: {:?}",
+        result.types
+    );
 }
 
 #[test]

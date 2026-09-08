@@ -59,14 +59,9 @@ fn expr_can_transfer(
         ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => true,
         ExprKind::Call(call) => {
             let block_supported = call.block.as_ref().is_none_or(|block| match block {
-                hir::BlockArgument::Inline(closure) => {
-                    !matches!(
-                        call.name.as_str(),
-                        "define_method" | "define_singleton_method"
-                    ) && program
-                        .closure(*closure)
-                        .is_some_and(|closure| body_can_transfer(program, closure.body))
-                }
+                hir::BlockArgument::Inline(closure) => program
+                    .closure(*closure)
+                    .is_some_and(|closure| body_can_transfer(program, closure.body)),
                 hir::BlockArgument::Passed(value) => {
                     expr_can_transfer(program, *value, visiting, loop_depth, context)
                 }

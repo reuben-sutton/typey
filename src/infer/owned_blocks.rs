@@ -25,16 +25,6 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Option<Eval> {
         let key = self.resolve_method_key(key)?;
-        if matches!(
-            key.name.as_str(),
-            "define_method" | "define_singleton_method"
-        ) {
-            // These APIs consume the block as a future method body. Their
-            // receiver and parameter contract is not an ordinary callback
-            // contract, so keep the migration boundary transactional.
-            return None;
-        }
-
         let mut bindings = self.infer_type_parameter_bindings(signature, arguments, None);
         bindings.extend(self.infer_generic_member_bindings(
             signature,
@@ -87,6 +77,11 @@ impl<'src> Analyzer<'src> {
             .get(&key)
             .is_some_and(|state| state.binds_block_to_receiver);
         let bound_receiver = class_new_receiver
+            .or_else(|| match key.name.as_str() {
+                "define_method" => Self::class_object_instance_type(receiver_type),
+                "define_singleton_method" if !receiver_type.is_any() => Some(receiver_type.clone()),
+                _ => None,
+            })
             .or_else(|| self.active_support_test_block_receiver(&key, Some(receiver_type)))
             .or_else(|| {
                 block_signature
