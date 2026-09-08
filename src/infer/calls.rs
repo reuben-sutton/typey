@@ -27,6 +27,23 @@ impl<'src> Analyzer<'src> {
     }
 
     pub(super) fn static_type_value(&self, node: &Node<'_>) -> bool {
+        let source_text = prism::text(self.source, node);
+        let source = source_text.trim();
+        if matches!(
+            source,
+            "T.untyped"
+                | "::T.untyped"
+                | "T.anything"
+                | "::T.anything"
+                | "T.self_type"
+                | "::T.self_type"
+                | "T.noreturn"
+                | "::T.noreturn"
+                | "T.attached_class"
+                | "::T.attached_class"
+        ) {
+            return true;
+        }
         let Some(call) = node.as_call_node() else {
             return false;
         };
@@ -82,6 +99,21 @@ impl<'src> Analyzer<'src> {
             );
         }
         false
+    }
+
+    /// Recognize a syntactic Sorbet type expression even when it is malformed
+    /// and therefore cannot be a valid static type value yet. This distinction
+    /// matters for `T.class_of.foo`: Sorbet reports the missing `class_of`
+    /// argument, but does not turn the follow-on `.foo` into an application
+    /// missing-method diagnostic.
+    pub(super) fn type_expression_value(&self, node: &Node<'_>) -> bool {
+        let source = prism::text(self.source, node);
+        let source = source.trim();
+        self.static_type_value(node)
+            || source == "T.class_of"
+            || source == "::T.class_of"
+            || source.starts_with("T.class_of(")
+            || source.starts_with("::T.class_of(")
     }
 
     pub(super) fn static_type_description(&self, node: &Node<'_>) -> String {
@@ -182,6 +214,9 @@ impl<'src> Analyzer<'src> {
         let static_type_receiver = receiver_node
             .as_ref()
             .is_some_and(|receiver| self.static_type_value(receiver));
+        let type_expression_receiver = receiver_node
+            .as_ref()
+            .is_some_and(|receiver| self.type_expression_value(receiver));
         if static_type_receiver
             && !matches!(
                 name.as_str(),
@@ -541,6 +576,7 @@ impl<'src> Analyzer<'src> {
                             untyped_origin = Some(UntypedOrigin::FallbackCall);
                         }
                         if type_.is_any()
+                            && !type_expression_receiver
                             && !environment
                                 .method_key
                                 .as_ref()
@@ -582,6 +618,7 @@ impl<'src> Analyzer<'src> {
                         untyped_origin = Some(UntypedOrigin::FallbackCall);
                     }
                     if type_.is_any()
+                        && !type_expression_receiver
                         && !environment
                             .method_key
                             .as_ref()
@@ -632,6 +669,7 @@ impl<'src> Analyzer<'src> {
                         );
                     }
                     if type_.is_any()
+                        && !type_expression_receiver
                         && !environment
                             .method_key
                             .as_ref()
@@ -936,7 +974,7 @@ impl<'src> Analyzer<'src> {
                                 UntypedOrigin::FallbackCall
                             });
                         }
-                        if type_.is_any() {
+                        if type_.is_any() && !type_expression_receiver {
                             self.report_missing_method_if_needed(
                                 node,
                                 &dispatch_receiver_type,
@@ -964,7 +1002,7 @@ impl<'src> Analyzer<'src> {
                         UntypedOrigin::FallbackCall
                     });
                 }
-                if type_.is_any() {
+                if type_.is_any() && !type_expression_receiver {
                     self.report_missing_method_if_needed(
                         node,
                         &dispatch_receiver_type,

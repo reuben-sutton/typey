@@ -1950,6 +1950,25 @@ fn reports_generic_block_argument_contracts_without_leaking_bindings() {
 }
 
 #[test]
+fn models_metatype_calls_and_continues_after_top_level_noreturn() {
+    check_fixture("tests/fixtures/metatype_calls.rb");
+}
+
+#[test]
+fn preserves_metatype_diagnostics_through_cfg_transfer() {
+    let source = std::fs::read_to_string("tests/fixtures/metatype_calls.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+}
+
+#[test]
 fn models_string_shellescape() {
     let result = check_fixture("tests/fixtures/string_shellescape.rb");
     assert!(

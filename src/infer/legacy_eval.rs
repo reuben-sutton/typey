@@ -19,13 +19,19 @@ impl<'src> Analyzer<'src> {
                         "This expression appears after an unconditional return",
                     );
                 }
-                // Sorbet still traverses dead syntax for source/type
-                // accounting, but does not report ordinary missing-method
-                // or contract errors from a path that cannot execute.
-                let previous_suppression = self.suppress_diagnostics;
-                self.suppress_diagnostics = true;
-                let _ = self.eval_node(&child, environment);
-                self.suppress_diagnostics = previous_suppression;
+                // Sorbet still traverses dead method/closure syntax for
+                // source/type accounting, but does not report ordinary
+                // missing-method or contract errors from a path that cannot
+                // execute. Top-level expressions remain independently
+                // reportable after a `T.noreturn` expression.
+                if report_unreachable {
+                    let previous_suppression = self.suppress_diagnostics;
+                    self.suppress_diagnostics = true;
+                    let _ = self.eval_node(&child, environment);
+                    self.suppress_diagnostics = previous_suppression;
+                } else {
+                    let _ = self.eval_node(&child, environment);
+                }
                 continue;
             }
             let result = self.eval_node(&child, environment);
