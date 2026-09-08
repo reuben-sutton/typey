@@ -148,6 +148,22 @@ fn expr_can_transfer(
                     | hir::Argument::Forwarded => false,
                 })
         }
+        ExprKind::Array(elements) => elements.iter().all(|element| {
+            match element {
+                ArrayElement::Value(value) => expr_can_transfer(program, *value, visiting),
+                // The splat wrapper has its own source span and is not yet
+                // represented by an owned CFG operand.
+                ArrayElement::Splat(_) => false,
+            }
+        }),
+        ExprKind::Hash(elements) => elements.iter().all(|element| match element {
+            HashElement::Pair { key, value } => {
+                expr_can_transfer(program, *key, visiting)
+                    && expr_can_transfer(program, *value, visiting)
+            }
+            // See the array-splat boundary above.
+            HashElement::Splat(_) => false,
+        }),
         ExprKind::Assign {
             target,
             value,
@@ -488,6 +504,93 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         result.type_ = type_;
         Some(result)
     }
+
+    fn transfer_array(
+        analyzer: &mut Analyzer<'src>,
+        node: &Node<'node>,
+        elements: &[cfg::ArrayOperand],
+        values: &[Option<Type>],
+        environment: &mut Environment,
+    ) -> Option<Type> {
+        let mut element_types = Vec::with_capacity(elements.len());
+        let mut fixed_length = true;
+        let mut element = Type::Never;
+        for operand in elements {
+            let (value, splat) = match operand {
+                cfg::ArrayOperand::Value(value) => (value, false),
+                cfg::ArrayOperand::Splat(value) => (value, true),
+            };
+            let type_ = values.get(value.0 as usize).cloned().flatten()?;
+            let type_ = if splat {
+                fixed_length = false;
+                analyzer.array_element_type(&type_)
+            } else {
+                type_
+            };
+            element_types.push(type_.clone());
+            element = element.join(&type_);
+        }
+        let element = if element.is_never() {
+            if analyzer.preserve_literal_tuples {
+                Type::Never
+            } else {
+                Type::Any
+            }
+        } else {
+            element
+        };
+        let inferred = if fixed_length
+            && analyzer.preserve_literal_tuples
+            && analyzer.literal_tuple_depth == 0
+        {
+            Type::Tuple(element_types)
+        } else {
+            Type::Array(Box::new(element))
+        };
+        Some(analyzer.apply_inline_assertion_in_environment(node, inferred, environment))
+    }
+
+    fn transfer_hash(
+        analyzer: &mut Analyzer<'src>,
+        node: &Node<'node>,
+        elements: &[cfg::HashOperand],
+        values: &[Option<Type>],
+        environment: &mut Environment,
+    ) -> Option<Type> {
+        let mut key = Type::Never;
+        let mut value = Type::Never;
+        for element in elements {
+            match element {
+                cfg::HashOperand::Pair {
+                    key: key_id,
+                    value: value_id,
+                } => {
+                    key = key.join(&values.get(key_id.0 as usize).cloned().flatten()?);
+                    value = value.join(&values.get(value_id.0 as usize).cloned().flatten()?);
+                }
+                cfg::HashOperand::Splat(value_id) => {
+                    match values.get(value_id.0 as usize).cloned().flatten()? {
+                        Type::Hash(splat_key, splat_value) => {
+                            key = key.join(&splat_key);
+                            value = value.join(&splat_value);
+                        }
+                        Type::Any => {
+                            key = Type::Any;
+                            value = Type::Any;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let key = if key.is_never() { Type::Any } else { key };
+        let value = if value.is_never() { Type::Any } else { value };
+        Some(analyzer.apply_inline_assertion_in_environment(
+            node,
+            Type::Hash(Box::new(key), Box::new(value)),
+            environment,
+        ))
+    }
 }
 
 impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src, 'node> {
@@ -547,6 +650,22 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     next.flow = next.flow.union(result.flow.without(FlowKind::Normal));
                     result.normal_type.ok_or(())?
                 }
+                cfg::OperationKind::BuildArray { elements } => Self::transfer_array(
+                    self.analyzer,
+                    node,
+                    elements,
+                    &next.values,
+                    &mut next.environment,
+                )
+                .ok_or(())?,
+                cfg::OperationKind::BuildHash { elements } => Self::transfer_hash(
+                    self.analyzer,
+                    node,
+                    elements,
+                    &next.values,
+                    &mut next.environment,
+                )
+                .ok_or(())?,
                 _ => return Err(()),
             };
             if let Some(result) = operation.result {
@@ -972,6 +1091,8 @@ impl<'src> Analyzer<'src> {
                             | cfg::OperationKind::ReadSpecial { .. }
                             | cfg::OperationKind::Write { .. }
                             | cfg::OperationKind::Call { .. }
+                            | cfg::OperationKind::BuildArray { .. }
+                            | cfg::OperationKind::BuildHash { .. }
                     ) && !nodes
                         .nodes
                         .contains_key(&(operation.span.start as usize, operation.span.end as usize))
@@ -984,6 +1105,8 @@ impl<'src> Analyzer<'src> {
                             | cfg::OperationKind::ReadSpecial { .. }
                             | cfg::OperationKind::Write { .. }
                             | cfg::OperationKind::Call { .. }
+                            | cfg::OperationKind::BuildArray { .. }
+                            | cfg::OperationKind::BuildHash { .. }
                     )
                 })
                 || matches!(
