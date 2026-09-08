@@ -15,10 +15,12 @@ transfer spec described. Typey now has:
 * CFG transfer for literals, reads, direct writes, ordinary calls, arrays,
   hashes, positional splats, ordinary conditionals, and loop regions; and
 * an opt-in differential path which falls back to the recursive evaluator
-  before publishing a partial result.
+  before publishing a partial result; and
+* transferred rescue, ensure, and retry regions with explicit raised-state
+  routing and owned join-value recording.
 
-The current local gates are 15 CFG tests, 10 HIR tests, 332 checker tests, and
-161 conformance tests passing. The
+The current local gates are 18 CFG tests, 10 HIR tests, 335 checker tests, and
+163 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has two semantic bridges: it
 looks up Prism nodes by source span and it reconstructs call argument shapes
@@ -94,7 +96,15 @@ The first modularization steps are now in place:
   receives an `OwnedCallInput` containing the call identity and CFG operands;
   and
 * CFG argument materialization is isolated to that adapter, so the transfer
-  host no longer reconstructs call shape directly from `CallNode` children.
+  host no longer reconstructs call shape directly from `CallNode` children;
+* rescue matching routes raised states through unwind edges, while matched
+  handlers consume the pending exception and unmatched exceptions continue to
+  the outer handler;
+* ensure regions have explicit entry metadata and an `EnsureComplete`
+  terminator, so normal and raised outcomes execute the ensure body before
+  continuing or re-raising; and
+* retry is lowered to the protected body entry, and synthesized calls such as
+  compound-assignment sends use owned CFG operands even without a HIR `Call`.
 
 The remaining bridges are deliberate and measurable: legacy dispatch still
 needs parser nodes for exact argument diagnostics and builtin hooks, and the
@@ -103,7 +113,9 @@ those requires moving their diagnostic and block contracts to owned source
 sites/closure IDs rather than weakening the checker. CFG fallback telemetry now
 distinguishes unsupported operations, unsupported edges, and legacy bridges;
 the latter two categories are wired for the exceptional-control-flow work but
-are not yet populated by the migrated ordinary-body path.
+are not yet populated by the migrated ordinary-body path. Non-local `return`,
+`break`, and `next` outcomes still need explicit pending-outcome routing through
+ensure regions.
 
 ## Design
 
@@ -246,7 +258,8 @@ because its Prism node was not found.
    owned operands.
 3. Convert dynamic/logical/compound writes and closure/block transfer.
 4. Unify conditional, loop, and `for` state transfer on owned expression IDs.
-5. Implement rescue, retry, ensure, unwind, and non-local outcomes.
+5. Implement rescue, retry, and ensure unwind routing. Non-local `return`,
+   `break`, and `next` outcomes remain the next control-flow slice.
 6. Delete `SpanNodeIndex` from CFG transfer and make `HirCallView` recursive
    only.
 7. Run CFG by default behind a temporary opt-out, then remove the opt-out once
