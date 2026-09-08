@@ -100,6 +100,9 @@ The first modularization steps are now in place:
 * `infer/shared_state.rs` owns inferred ivar, constant, class-variable, and
   global storage, including shared-read tracking and the lookup rules used by
   both recursive and CFG evaluation;
+* `infer/predicate_flow.rs` owns predicate reachability, path-sensitive
+  narrowing, predicate aliases, safe-navigation refinements, and flow
+  environment joins shared by legacy and CFG transfer;
 * `infer/legacy_eval.rs` owns the recursive Prism evaluator's expression and
   assignment dispatch, leaving the main inference host responsible for
   orchestration and shared state rather than syntax dispatch;
