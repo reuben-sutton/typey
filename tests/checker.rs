@@ -103,6 +103,22 @@ fn compiles_cfg_bodies_without_changing_checker_results() {
 }
 
 #[test]
+fn transfers_hir_predicate_refinements_without_parser_walks() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_hir_predicate.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_cfg_conditionals_without_changing_flow_results() {
     let source = std::fs::read_to_string("tests/fixtures/flow_outcomes.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());
