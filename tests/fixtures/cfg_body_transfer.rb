@@ -22,6 +22,14 @@ class CfgBodyTransfer
     mapping["new"] = 2
     mapping["new"]
   end
+
+  def logical_write
+    value = 1
+    value &&= 2
+    other = nil
+    other &&= 3
+    [value, other]
+  end
 end
 
 CfgBodyTransfer.new.value

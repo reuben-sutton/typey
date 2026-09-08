@@ -170,12 +170,21 @@ fn expr_can_transfer(
             operator,
             ..
         } => {
+            let direct_target = matches!(
+                target,
+                hir::AssignTarget::Local(_)
+                    | hir::AssignTarget::InstanceVariable(_)
+                    | hir::AssignTarget::ClassVariable(_)
+                    | hir::AssignTarget::Global(_)
+                    | hir::AssignTarget::Constant(_)
+            );
+            let logical_target = matches!(target, hir::AssignTarget::Local(_));
             let target_supported = match target {
                 hir::AssignTarget::Local(_)
                 | hir::AssignTarget::InstanceVariable(_)
                 | hir::AssignTarget::ClassVariable(_)
                 | hir::AssignTarget::Global(_)
-                | hir::AssignTarget::Constant(_) => true,
+                | hir::AssignTarget::Constant(_) => direct_target,
                 hir::AssignTarget::Attribute { receiver, .. } => {
                     expr_can_transfer(program, *receiver, visiting)
                 }
@@ -196,9 +205,16 @@ fn expr_can_transfer(
                 }
             };
             matches!(
-                operator,
-                hir::AssignOperator::Set | hir::AssignOperator::Binary(_)
-            ) && target_supported
+                (operator, target_supported),
+                (
+                    hir::AssignOperator::Set | hir::AssignOperator::Binary(_),
+                    true
+                ) | (hir::AssignOperator::And | hir::AssignOperator::Or, true)
+            ) && (logical_target
+                || matches!(
+                    operator,
+                    hir::AssignOperator::Set | hir::AssignOperator::Binary(_)
+                ))
                 && expr_can_transfer(program, *value, visiting)
         }
         ExprKind::Sequence(expressions) => expressions
@@ -611,6 +627,27 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             environment,
         ))
     }
+
+    fn pattern_reachability(pattern: &cfg::Pattern, source: &Type) -> Option<(bool, bool, Type)> {
+        let (truthy, falsy) = match pattern {
+            cfg::Pattern::Truthy => (
+                !source.truthy_part().is_never(),
+                !source.falsy_part().is_never(),
+            ),
+            cfg::Pattern::Nil => (
+                !source.meet(&Type::Nil).is_never(),
+                !source.without(&Type::Nil).is_never(),
+            ),
+            cfg::Pattern::Case { .. } => return None,
+        };
+        let test_type = match (truthy, falsy) {
+            (true, true) => Type::union([Type::True, Type::False]),
+            (true, false) => Type::True,
+            (false, true) => Type::False,
+            (false, false) => Type::Never,
+        };
+        Some((truthy, falsy, test_type))
+    }
 }
 
 impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src, 'node> {
@@ -686,12 +723,19 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     &mut next.environment,
                 )
                 .ok_or(())?,
+                cfg::OperationKind::PatternTest { value, pattern } => {
+                    let source = next.value(*value).ok_or(())?;
+                    let (_, _, type_) = Self::pattern_reachability(pattern, &source).ok_or(())?;
+                    type_
+                }
                 _ => return Err(()),
             };
             if let Some(result) = operation.result {
                 next.set_value(result, type_.clone());
             }
-            self.analyzer.record(node, type_);
+            if !matches!(operation.kind, cfg::OperationKind::PatternTest { .. }) {
+                self.analyzer.record(node, type_);
+            }
         }
 
         let edge = |target, state| cfg::transfer::TransferEdge { target, state };
@@ -713,7 +757,32 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                 Ok(Vec::new())
             }
             cfg::Terminator::Unreachable => Ok(Vec::new()),
-            cfg::Terminator::Branch { .. } | cfg::Terminator::Raise(_) => Err(()),
+            cfg::Terminator::Branch {
+                condition,
+                truthy,
+                falsy,
+            } => {
+                let operation = block
+                    .operations
+                    .iter()
+                    .find(|operation| operation.result == Some(*condition))
+                    .ok_or(())?;
+                let cfg::OperationKind::PatternTest { value, pattern } = &operation.kind else {
+                    return Err(());
+                };
+                let source = next.value(*value).ok_or(())?;
+                let (truthy_reachable, falsy_reachable, _) =
+                    Self::pattern_reachability(pattern, &source).ok_or(())?;
+                let mut edges = Vec::with_capacity(2);
+                if truthy_reachable {
+                    edges.push(edge(*truthy, next.clone()));
+                }
+                if falsy_reachable {
+                    edges.push(edge(*falsy, next));
+                }
+                Ok(edges)
+            }
+            cfg::Terminator::Raise(_) => Err(()),
         }
     }
 
@@ -1113,6 +1182,7 @@ impl<'src> Analyzer<'src> {
                             | cfg::OperationKind::Call { .. }
                             | cfg::OperationKind::BuildArray { .. }
                             | cfg::OperationKind::BuildHash { .. }
+                            | cfg::OperationKind::PatternTest { .. }
                     ) && !nodes
                         .nodes
                         .contains_key(&(operation.span.start as usize, operation.span.end as usize))
@@ -1127,12 +1197,10 @@ impl<'src> Analyzer<'src> {
                             | cfg::OperationKind::Call { .. }
                             | cfg::OperationKind::BuildArray { .. }
                             | cfg::OperationKind::BuildHash { .. }
+                            | cfg::OperationKind::PatternTest { .. }
                     )
                 })
-                || matches!(
-                    block.terminator,
-                    cfg::Terminator::Branch { .. } | cfg::Terminator::Raise(_)
-                )
+                || matches!(block.terminator, cfg::Terminator::Raise(_))
         }) {
             return None;
         }
