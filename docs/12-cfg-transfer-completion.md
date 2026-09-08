@@ -160,12 +160,9 @@ The first modularization steps are now in place:
   bodies, captured locals, bound receivers, and generic return contracts;
   `define_method` remains an explicit future-method bridge.
 * parser-backed conditional, `while`/`until`, and `for` CFG entry points now
-  live in `infer/cfg_transfer/legacy.rs`; the owned transfer module retains
-  their reusable synthetic state machines without owning their Prism-node
-  dispatch.
-* the legacy adapter now also owns those synthetic transfer states and graph
-  constructors, so the parent transfer module no longer mixes parser bridges
-  with their compatibility worklists.
+  live in `infer/cfg_transfer/legacy.rs`; the adapter now owns their parser
+  bridge, synthetic transfer states, graph constructors, and compatibility
+  worklists as one boundary.
 * the owned-body eligibility walk now lives in `infer/cfg_transfer/preflight.rs`;
   it is a parser-free HIR capability check separate from transfer state and
   inference results.
