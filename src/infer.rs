@@ -1379,11 +1379,14 @@ impl<'node> HirCallView<'node> {
     }
 
     fn receiver(&self) -> Option<Node<'node>> {
-        self.prism_call.receiver()
+        match self.call.receiver {
+            hir::Receiver::Explicit(_) => self.prism_call.receiver(),
+            hir::Receiver::Implicit | hir::Receiver::Super | hir::Receiver::Yield => None,
+        }
     }
 
     fn block(&self) -> Option<Node<'node>> {
-        self.prism_call.block()
+        self.call.block.as_ref().and(self.prism_call.block())
     }
 
     fn is_safe_navigation(&self) -> bool {
@@ -1454,21 +1457,27 @@ fn hir_call_argument_inputs<'node>(
     arguments: &[hir::Argument],
     prism_arguments: Option<ArgumentsNode<'node>>,
 ) -> Vec<CallArgumentInput<'node>> {
-    let raw = prism_call_argument_inputs(prism_arguments);
+    let mut raw = prism_call_argument_inputs(prism_arguments).into_iter();
+    let mut result = Vec::with_capacity(arguments.len());
     let mut hir_index = 0;
-    let mut result = Vec::with_capacity(raw.len());
-    for input in raw {
-        match input {
-            CallArgumentInput::KeywordHash { node, entries } => {
-                let mut entries = entries.into_iter();
+    while hir_index < arguments.len() {
+        match &arguments[hir_index] {
+            hir::Argument::Keyword { .. } | hir::Argument::KeywordSplat(_) => {
+                let (node, raw_entries) = match raw.next() {
+                    Some(CallArgumentInput::KeywordHash { node, entries }) => (node, entries),
+                    Some(_) | None => {
+                        panic!("HIR keyword arguments did not match Prism argument bridge")
+                    }
+                };
+                let mut raw_entries = raw_entries.into_iter();
                 let mut hir_entries = Vec::new();
                 while let Some(argument) = arguments.get(hir_index) {
                     match argument {
                         hir::Argument::Keyword { name, .. } => {
                             let Some(KeywordArgumentInput::Pair { key, value, .. }) =
-                                entries.next()
+                                raw_entries.next()
                             else {
-                                break;
+                                panic!("HIR keyword argument has no Prism child bridge");
                             };
                             hir_entries.push(KeywordArgumentInput::Pair {
                                 key,
@@ -1478,17 +1487,11 @@ fn hir_call_argument_inputs<'node>(
                             hir_index += 1;
                         }
                         hir::Argument::KeywordSplat(_) => {
-                            let Some(KeywordArgumentInput::Splat(value)) = entries.next() else {
-                                break;
+                            let Some(KeywordArgumentInput::Splat(value)) = raw_entries.next()
+                            else {
+                                panic!("HIR keyword splat has no Prism child bridge");
                             };
                             hir_entries.push(KeywordArgumentInput::Splat(value));
-                            hir_index += 1;
-                        }
-                        hir::Argument::Forwarded => {
-                            let Some(KeywordArgumentInput::Forwarded) = entries.next() else {
-                                break;
-                            };
-                            hir_entries.push(KeywordArgumentInput::Forwarded);
                             hir_index += 1;
                         }
                         _ => break,
@@ -1499,30 +1502,62 @@ fn hir_call_argument_inputs<'node>(
                     entries: hir_entries,
                 });
             }
-            CallArgumentInput::Forwarded { node } => {
-                if matches!(arguments.get(hir_index), Some(hir::Argument::Forwarded)) {
+            hir::Argument::Positional(_) => match raw.next() {
+                Some(CallArgumentInput::Positional { node }) => {
+                    result.push(CallArgumentInput::Positional { node });
                     hir_index += 1;
                 }
-                result.push(CallArgumentInput::Forwarded { node });
-            }
-            CallArgumentInput::Splat { node, expression } => {
-                if matches!(arguments.get(hir_index), Some(hir::Argument::Splat(_))) {
+                Some(_) | None => {
+                    panic!("HIR positional argument did not match Prism argument bridge")
+                }
+            },
+            hir::Argument::Splat(_) => match raw.next() {
+                Some(CallArgumentInput::Splat { node, expression }) => {
+                    result.push(CallArgumentInput::Splat { node, expression });
                     hir_index += 1;
                 }
-                result.push(CallArgumentInput::Splat { node, expression });
-            }
-            CallArgumentInput::Positional { node } => {
-                if matches!(arguments.get(hir_index), Some(hir::Argument::Positional(_))) {
+                Some(_) | None => panic!("HIR splat did not match Prism argument bridge"),
+            },
+            hir::Argument::Forwarded => match raw.next() {
+                Some(CallArgumentInput::Forwarded { node }) => {
+                    result.push(CallArgumentInput::Forwarded { node });
                     hir_index += 1;
                 }
-                result.push(CallArgumentInput::Positional { node });
-            }
+                Some(_) | None => panic!("HIR forwarding did not match Prism argument bridge"),
+            },
         }
     }
+    assert!(
+        raw.next().is_none(),
+        "Prism argument bridge contains a shape not represented by HIR"
+    );
     result
 }
 
 impl<'src> Analyzer<'src> {
+    fn hir_call_for_node(&self, node: &Node<'_>) -> Option<&hir::Call> {
+        let span = prism::span(node);
+        if let Some(expression_id) = self.hir_call_ids.get(&span) {
+            if let Some(expression) = self.hir_program.expression(*expression_id) {
+                if let hir::ExprKind::Call(call) = &expression.kind {
+                    return Some(call);
+                }
+            }
+        }
+        self.hir_program
+            .expressions
+            .iter()
+            .find_map(|expression| {
+                let expression_span =
+                    (expression.span.start as usize, expression.span.end as usize);
+                (expression_span == span).then_some(&expression.kind)
+            })
+            .and_then(|kind| match kind {
+                hir::ExprKind::Call(call) => Some(call),
+                _ => None,
+            })
+    }
+
     fn hir_call_view<'node>(
         &self,
         node: &Node<'_>,
@@ -2683,13 +2718,14 @@ impl<'src> Analyzer<'src> {
         &mut self,
         receiver_node: Option<&Node<'node>>,
         arguments: Option<ruby_prism::ArgumentsNode<'node>>,
+        hir_arguments: &[hir::Argument],
         environment: &mut Environment,
     ) -> IndexAccess<'node> {
         let receiver_result = receiver_node.as_ref().map_or_else(
             || Eval::value(Type::Object),
             |receiver| self.eval_node(receiver, environment),
         );
-        let argument_inputs = prism_call_argument_inputs(arguments);
+        let argument_inputs = hir_call_argument_inputs(hir_arguments, arguments);
         let evaluated = self.evaluate_call_arguments(argument_inputs, environment);
         let receiver_type = receiver_result.normal_type.clone().unwrap_or(Type::Never);
         IndexAccess {
@@ -2709,11 +2745,17 @@ impl<'src> Analyzer<'src> {
         node: &Node<'node>,
         receiver_node: Option<Node<'node>>,
         arguments: Option<ruby_prism::ArgumentsNode<'node>>,
+        hir_arguments: &[hir::Argument],
         value_node: Node<'node>,
         kind: IndexAssignmentKind,
         environment: &mut Environment,
     ) -> Eval {
-        let access = self.eval_index_access(receiver_node.as_ref(), arguments, environment);
+        let access = self.eval_index_access(
+            receiver_node.as_ref(),
+            arguments,
+            hir_arguments,
+            environment,
+        );
         let current = receiver_node
             .as_ref()
             .and_then(|receiver| {
@@ -3408,7 +3450,11 @@ impl<'src> Analyzer<'src> {
             return Eval::continued(self.record(node, type_));
         }
         if let Some(yield_node) = node.as_yield_node() {
-            let argument_inputs = prism_call_argument_inputs(yield_node.arguments());
+            let hir_call = self
+                .hir_call_for_node(node)
+                .expect("every yield must have an owned HIR call shape");
+            let argument_inputs =
+                hir_call_argument_inputs(&hir_call.arguments, yield_node.arguments());
             let evaluated = self.evaluate_call_arguments(argument_inputs, environment);
             let arguments = evaluated.arguments;
             let argument_types = arguments.argument_types.clone();
@@ -3469,8 +3515,13 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(super_node) = node.as_super_node() {
             let block = super_node.block();
+            let hir_call = self
+                .hir_call_for_node(node)
+                .cloned()
+                .expect("every super call must have an owned HIR call shape");
             let actual = self.eval_super(
                 node,
+                Some(&hir_call),
                 super_node.arguments(),
                 None,
                 block.as_ref(),
@@ -3486,8 +3537,18 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(super_node) = node.as_forwarding_super_node() {
             let block = super_node.block().map(|block| block.as_node());
-            let actual =
-                self.eval_super(node, None, Some(&super_node), block.as_ref(), environment);
+            let hir_call = self
+                .hir_call_for_node(node)
+                .cloned()
+                .expect("every forwarding super call must have an owned HIR call shape");
+            let actual = self.eval_super(
+                node,
+                Some(&hir_call),
+                None,
+                Some(&super_node),
+                block.as_ref(),
+                environment,
+            );
             let type_ = self.apply_inline_assertion(node, actual);
             let type_ = self.record(node, type_);
             if self.super_terminates(environment) {
@@ -3698,6 +3759,7 @@ impl<'src> Analyzer<'src> {
                         node,
                         receiver,
                         arguments,
+                        &hir_arguments,
                         value_node,
                         kind,
                         environment,
@@ -5364,6 +5426,7 @@ impl<'src> Analyzer<'src> {
     fn eval_super<'node>(
         &mut self,
         node: &Node<'node>,
+        hir_call: Option<&hir::Call>,
         arguments: Option<ruby_prism::ArgumentsNode<'node>>,
         forwarding: Option<&ruby_prism::ForwardingSuperNode<'node>>,
         block: Option<&Node<'node>>,
@@ -5397,7 +5460,12 @@ impl<'src> Analyzer<'src> {
                 forwards_arguments: true,
             }
         } else {
-            self.evaluate_call_arguments(prism_call_argument_inputs(arguments), environment)
+            let argument_inputs = if let Some(call) = hir_call {
+                hir_call_argument_inputs(&call.arguments, arguments)
+            } else {
+                prism_call_argument_inputs(arguments)
+            };
+            self.evaluate_call_arguments(argument_inputs, environment)
                 .arguments
         };
         let Some(target) = target else {

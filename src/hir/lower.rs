@@ -231,6 +231,12 @@ impl<'src> Lowerer<'src> {
                 .is_some_and(|call| call.is_attribute_write())
     }
 
+    fn is_special_call_node(node: &Node<'_>) -> bool {
+        node.as_yield_node().is_some()
+            || node.as_super_node().is_some()
+            || node.as_forwarding_super_node().is_some()
+    }
+
     fn lower_node(&mut self, node: &Node<'_>) -> ExprId {
         if let Some(program) = node.as_program_node() {
             return self.lower_node(&program.statements().as_node());
@@ -978,6 +984,9 @@ impl<'src> Lowerer<'src> {
         block: Option<Node<'_>>,
         safe_navigation: bool,
     ) -> ExprId {
+        let span = self.span(node);
+        self.lowered_call_spans
+            .insert((span.start as usize, span.end as usize));
         let arguments = self.lower_arguments(arguments);
         let block = self.lower_block_argument(block);
         self.lower_call_parts(
@@ -1000,6 +1009,8 @@ impl<'src> Lowerer<'src> {
         safe_navigation: bool,
     ) -> ExprId {
         let span = self.span(node);
+        self.lowered_call_spans
+            .insert((span.start as usize, span.end as usize));
         self.push_expr(
             node,
             ExprKind::Call(super::Call {
@@ -1425,10 +1436,15 @@ struct NestedExpressionLowerer<'lower, 'src> {
 
 impl<'pr, 'lower, 'src> Visit<'pr> for NestedExpressionLowerer<'lower, 'src> {
     fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
-        if Lowerer::is_assignment_node(&node) {
+        if Lowerer::is_assignment_node(&node) || Lowerer::is_special_call_node(&node) {
             let span = node.location();
             let key = (span.start_offset(), span.end_offset());
-            if self.lowerer.lowered_assignment_spans.insert(key) {
+            let should_lower = if Lowerer::is_assignment_node(&node) {
+                self.lowerer.lowered_assignment_spans.insert(key)
+            } else {
+                self.lowerer.lowered_call_spans.insert(key)
+            };
+            if should_lower {
                 self.lowerer.lower_node(&node);
             }
         }

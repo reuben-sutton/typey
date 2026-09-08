@@ -264,3 +264,22 @@ end
         .count();
     assert_eq!(assignments, 3);
 }
+
+#[test]
+fn lowers_yield_inside_a_conditional_body() {
+    let program = expressions(
+        r#"def try
+  if block.arity == 0
+    yield self
+  end
+end
+"#,
+    );
+    assert!(
+        program.expressions.iter().any(|expression| {
+            matches!(&expression.kind, ExprKind::Call(call) if call.name.as_str() == "yield")
+        }),
+        "{:#?}",
+        program.expressions
+    );
+}
