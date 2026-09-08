@@ -24,6 +24,7 @@ mod dispatch;
 mod environment;
 mod fixpoint;
 mod flow;
+mod keys;
 mod legacy_bridge;
 mod legacy_eval;
 mod method_lookup;
@@ -49,6 +50,9 @@ pub use environment::Environment;
 use environment::PredicateAlias;
 use fixpoint::FixpointState;
 use flow::{Eval, Flow, FlowKind, OutcomeTypes};
+use keys::{
+    ivar_refinement_key, name_matches, nominal_name, ClassVarKey, IvarKey, MethodKey, SharedKey,
+};
 use method_state::MethodState;
 use method_types::{
     apply_parameter_shape, optional_proc_type, proc_parts, proc_receiver, ParameterShape,
@@ -56,42 +60,6 @@ use method_types::{
 use source::SourceSite;
 
 const DEBUG_NODE_INTERVAL: usize = 1_000;
-
-fn ivar_refinement_key(name: &str) -> String {
-    format!("\u{1}ivar:{name}")
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct MethodKey {
-    owner: Option<String>,
-    name: String,
-    singleton: bool,
-}
-
-fn name_matches(name: &str, bare: &str) -> bool {
-    name == bare || name == format!("T::{bare}")
-}
-
-fn nominal_name(name: &str) -> &str {
-    name.strip_prefix("T::").unwrap_or(name)
-}
-
-impl MethodKey {
-    fn top_level(name: impl Into<String>) -> Self {
-        Self {
-            owner: None,
-            name: name.into(),
-            singleton: false,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct IvarKey {
-    owner: String,
-    singleton: bool,
-    name: String,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AccessorKind {
@@ -119,21 +87,6 @@ fn attribute_writer_signature(signature: &MethodSig) -> MethodSig {
     writer.params = vec![signature.return_type.clone()];
     writer.required_params = 1;
     writer
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct ClassVarKey {
-    owner: String,
-    name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum SharedKey {
-    Ivar(IvarKey),
-    Constant(String),
-    ClassVar(ClassVarKey),
-    Global(String),
-    StructField(String, String),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

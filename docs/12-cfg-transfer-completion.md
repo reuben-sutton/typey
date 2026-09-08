@@ -87,6 +87,9 @@ The first modularization steps are now in place:
 * `infer/cfg_state.rs` owns CFG block state, body context, value joins, and
   pending exception state, leaving `infer/cfg_transfer.rs` focused on operation
   and terminator semantics;
+* `infer/keys.rs` owns parser-independent method, storage, and shared-read
+  identity keys used across declaration, lookup, fixpoint, and environment
+  layers;
 * `infer/method_types.rs` owns parser parameter-shape adaptation, proc/block
   decomposition, overload merging, and callable arity narrowing;
 * `infer/method_state.rs` owns the evolving inferred method summary used by
