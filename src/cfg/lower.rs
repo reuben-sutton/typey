@@ -12,6 +12,7 @@ use crate::hir::{
     self, Argument, AssignOperator, AssignTarget, BeginExpr, BodyId, ExprId, ExprKind, LoopExpr,
     LoopKind, Program, Read, Span,
 };
+use std::collections::HashMap;
 
 /// Build a CFG for one already-lowered HIR body.
 #[must_use]
@@ -58,6 +59,7 @@ struct Builder<'program> {
     next_value: u32,
     loops: Vec<LoopContext>,
     rescues: Vec<RescueContext>,
+    expressions_by_span: HashMap<(u32, u32), ExprId>,
 }
 
 impl<'program> Builder<'program> {
@@ -74,6 +76,17 @@ impl<'program> Builder<'program> {
             next_value: 0,
             loops: Vec::new(),
             rescues: Vec::new(),
+            expressions_by_span: program
+                .expressions
+                .iter()
+                .enumerate()
+                .map(|(index, expression)| {
+                    (
+                        (expression.span.start, expression.span.end),
+                        ExprId(index as u32),
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -147,6 +160,10 @@ impl<'program> Builder<'program> {
             .operations
             .push(Operation {
                 span,
+                expression: self
+                    .expressions_by_span
+                    .get(&(span.start, span.end))
+                    .copied(),
                 result: value,
                 kind,
             });

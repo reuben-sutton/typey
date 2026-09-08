@@ -31,6 +31,10 @@ fn lowers_calls_left_to_right_without_flattening_argument_shapes() {
             _ => None,
         })
         .expect("first call operation");
+    assert!(operations(&graph).iter().any(|operation| {
+        matches!(&operation.kind, OperationKind::Call { name, .. } if name.as_str() == "first")
+            && operation.expression.is_some()
+    }));
     assert!(matches!(call.0, typey::cfg::ReceiverOperand::Value(_)));
     assert!(matches!(
         call.1.as_slice(),

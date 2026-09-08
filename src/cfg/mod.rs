@@ -69,6 +69,10 @@ pub struct BlockParameter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Operation {
     pub span: Span,
+    /// The HIR expression whose evaluation produced this operation, when the
+    /// operation corresponds to a source expression rather than a synthetic
+    /// join/seed operation.
+    pub expression: Option<ExprId>,
     pub result: Option<ValueId>,
     pub kind: OperationKind,
 }
