@@ -414,6 +414,81 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    /// Evaluate a callback whose contract comes from a parser-free structural
+    /// model rather than an RBI declaration. Collection methods are the main
+    /// user of this path: their generic block contract is known even when the
+    /// core RBI has no usable method signature.
+    pub(super) fn cfg_owned_block_return_type(
+        &mut self,
+        input: &OwnedCallInput,
+        expected_parameters: &[Type],
+        expected_return: &Type,
+        values: &[Option<Type>],
+        environment: &mut super::Environment,
+    ) -> Option<Eval> {
+        let block_site = self.cfg_passed_block_site(input).unwrap_or(input.site);
+        let expected = Type::Proc(
+            expected_parameters.to_vec(),
+            Box::new(expected_return.clone()),
+        );
+        match input.block.as_ref()? {
+            cfg::BlockOperand::Inline(closure) => self.transfer_owned_closure_body(
+                *closure,
+                expected_parameters,
+                Some(expected_return),
+                None,
+                environment,
+            ),
+            cfg::BlockOperand::Passed(value) => {
+                let actual = values.get(value.0 as usize).cloned().flatten()?;
+                if actual.is_nil() {
+                    // `&nil` is Ruby's spelling for omitting a block.
+                    return None;
+                }
+                if let Some(name) = self.cfg_passed_symbol_name(input) {
+                    return Some(Eval::value(self.eval_symbol_passed_block_named(
+                        None,
+                        block_site,
+                        &name,
+                        &expected,
+                        environment,
+                    )));
+                }
+                let signature = Self::passed_block_signature(&actual)?;
+                if !Self::passed_block_is_assignable(self, &signature, &expected) {
+                    self.error_at(
+                        block_site,
+                        format!(
+                            "Expected `{}` but found `{}` for block argument",
+                            Self::block_type_description(&expected),
+                            Self::block_type_description(&signature),
+                        ),
+                    );
+                }
+                let result = proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
+                Some(Eval::value(result))
+            }
+        }
+    }
+
+    fn cfg_passed_block_site(&self, input: &OwnedCallInput) -> Option<SourceSite> {
+        let expression = input
+            .expression
+            .and_then(|expression| self.program.hir_program.expression(expression))?;
+        let hir::ExprKind::Call(call) = &expression.kind else {
+            return None;
+        };
+        let hir::BlockArgument::Passed(block) = call.block.as_ref()? else {
+            return None;
+        };
+        let expression = self.program.hir_program.expression(*block)?;
+        let mut start = expression.span.start as usize;
+        if start > 0 && self.program.source.get(start - 1) == Some(&b'&') {
+            start -= 1;
+        }
+        Some(SourceSite::new(start, expression.span.end as usize))
+    }
+
     fn cfg_passed_symbol_name(&self, input: &OwnedCallInput) -> Option<String> {
         let expression = input
             .expression

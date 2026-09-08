@@ -1037,7 +1037,11 @@ impl<'src> Analyzer<'src> {
         arguments
     }
 
-    fn passed_block_is_assignable(analyzer: &Analyzer<'_>, actual: &Type, expected: &Type) -> bool {
+    pub(super) fn passed_block_is_assignable(
+        analyzer: &Analyzer<'_>,
+        actual: &Type,
+        expected: &Type,
+    ) -> bool {
         let Some((expected_parameters, expected_return)) = proc_parts(expected) else {
             return analyzer.is_assignable(actual, expected);
         };

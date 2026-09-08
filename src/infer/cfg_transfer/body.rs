@@ -411,9 +411,29 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                             .then_some(UntypedOrigin::DeclaredSignature)
                             .unwrap_or(UntypedOrigin::InferredMethod);
                         (type_, origin)
+                    } else if let Some((type_, callback)) =
+                        super::collections::transfer_collection_call(
+                            analyzer,
+                            &input,
+                            &dispatch_receiver,
+                            values,
+                            environment,
+                        )
+                    {
+                        block_result = callback;
+                        (type_, UntypedOrigin::FallbackCall)
                     } else {
                         return None;
                     }
+                } else if let Some((type_, callback)) = super::collections::transfer_collection_call(
+                    analyzer,
+                    &input,
+                    &dispatch_receiver,
+                    values,
+                    environment,
+                ) {
+                    block_result = callback;
+                    (type_, UntypedOrigin::FallbackCall)
                 } else {
                     return None;
                 }

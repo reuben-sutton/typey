@@ -237,7 +237,7 @@ impl<'src> Analyzer<'src> {
         Some(block_result)
     }
 
-    fn transfer_owned_closure_body(
+    pub(super) fn transfer_owned_closure_body(
         &mut self,
         closure_id: hir::ClosureId,
         expected: &[Type],

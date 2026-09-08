@@ -1945,6 +1945,24 @@ fn preserves_symbol_block_diagnostics_through_cfg_transfer() {
 }
 
 #[test]
+fn preserves_passed_block_contract_diagnostics_through_cfg_transfer() {
+    let path = "tests/fixtures/passed_block_contract.rb";
+    let expected = check_fixture(path);
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(baseline.diagnostics, expected.diagnostics);
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn reports_generic_block_argument_contracts_without_leaking_bindings() {
     check_fixture("tests/fixtures/generic_block_argument.rb");
 }

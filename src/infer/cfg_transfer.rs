@@ -2,6 +2,7 @@ use super::{Analyzer, SourceSite};
 
 mod body;
 mod calls;
+mod collections;
 mod patterns;
 mod preflight;
 mod value;
