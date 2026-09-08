@@ -456,6 +456,20 @@ impl<'pr> Visit<'pr> for LocalWriteCollector {
     }
 }
 
+struct SourceNodeIndex<'pr> {
+    nodes: HashMap<(usize, usize), Node<'pr>>,
+}
+
+impl<'pr> Visit<'pr> for SourceNodeIndex<'pr> {
+    fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
+        self.nodes.entry(prism::span(&node)).or_insert(node);
+    }
+
+    fn visit_leaf_node_enter(&mut self, node: Node<'pr>) {
+        self.nodes.entry(prism::span(&node)).or_insert(node);
+    }
+}
+
 /// How much file-mode metadata the checker should use. Typey is intentionally
 /// permissive for untyped Ruby, while explicit annotations remain checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1309,6 +1323,13 @@ pub(crate) fn check_with_policies(
             annotations.assertions.len()
         );
     }
+    let source_nodes = config.enable_cfg.then(|| {
+        let mut index = SourceNodeIndex {
+            nodes: HashMap::new(),
+        };
+        index.visit(&root);
+        index.nodes
+    });
     let analyzer = Analyzer {
         source: bytes,
         hir_program,
@@ -1316,6 +1337,7 @@ pub(crate) fn check_with_policies(
         cfg_call_spans,
         cfg_write_spans,
         cfg_call_names,
+        source_nodes,
         hir_call_ids,
         hir_assignment_ids,
         line_map: prism::LineMap::new(bytes),
@@ -1375,6 +1397,7 @@ struct Analyzer<'src> {
     cfg_call_spans: HashSet<(usize, usize)>,
     cfg_write_spans: HashSet<(usize, usize)>,
     cfg_call_names: HashMap<(usize, usize), Vec<String>>,
+    source_nodes: Option<HashMap<(usize, usize), Node<'src>>>,
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
     line_map: prism::LineMap,
@@ -1652,6 +1675,10 @@ impl<'src> Analyzer<'src> {
         self.cfg_call_spans.contains(&span) || self.cfg_write_spans.contains(&span)
     }
 
+    fn source_node_for_span(&self, span: (usize, usize)) -> Option<&Node<'src>> {
+        self.source_nodes.as_ref()?.get(&span)
+    }
+
     fn report_cfg_fallback(&self, node: &Node<'_>, kind: &str) {
         if self.config.debug {
             eprintln!(
@@ -1673,6 +1700,7 @@ impl<'src> Analyzer<'src> {
         // machinery can evaluate child expressions until the owned value
         // evaluator lands.
         debug_assert!(self.cfg_call_name_matches(node, &call.name()));
+        debug_assert!(self.source_node_for_span(prism::span(node)).is_some());
         self.eval_call_result(node, &call, environment)
     }
 
@@ -1685,6 +1713,7 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         self.cfg_transfer_assignments = self.cfg_transfer_assignments.saturating_add(1);
+        debug_assert!(self.source_node_for_span(prism::span(node)).is_some());
         self.eval_hir_assignment(node, target, value, operator, environment)
     }
 
