@@ -21,12 +21,14 @@ mod declarations;
 mod dispatch;
 mod fixpoint;
 mod flow;
+mod source;
 mod type_resolution;
 mod type_system;
 
 use declarations::{DeclarationState, MethodRegistrar};
 use fixpoint::FixpointState;
 use flow::{Eval, Flow, FlowKind, OutcomeTypes};
+use source::SourceSite;
 
 const DEBUG_NODE_INTERVAL: usize = 1_000;
 
@@ -2611,14 +2613,12 @@ impl<'src> Analyzer<'src> {
         } else {
             None
         };
-        self.types.push(InferredType {
-            start,
-            end,
-            type_: type_.clone(),
+        self.record_at(
+            SourceSite::new(start, end),
+            type_,
+            self.report && Self::is_send_node(node),
             untyped_origin,
-            is_send: self.report && Self::is_send_node(node),
-        });
-        type_
+        )
     }
 
     fn deduplicate_types(types: Vec<InferredType>) -> Vec<InferredType> {
@@ -2649,13 +2649,7 @@ impl<'src> Analyzer<'src> {
             return;
         }
         let (start, end) = prism::span(node);
-        self.diagnostics.push(Diagnostic::error_with_line_map(
-            self.source,
-            &self.line_map,
-            message,
-            start,
-            end,
-        ));
+        self.error_at(SourceSite::new(start, end), message);
     }
 
     fn note<'node>(&mut self, node: &Node<'node>, message: impl Into<String>) {
@@ -2663,13 +2657,7 @@ impl<'src> Analyzer<'src> {
             return;
         }
         let (start, end) = prism::span(node);
-        self.diagnostics.push(Diagnostic::note_with_line_map(
-            self.source,
-            &self.line_map,
-            message,
-            start,
-            end,
-        ));
+        self.note_at(SourceSite::new(start, end), message);
     }
 
     fn eval_compound_assignment<'node>(

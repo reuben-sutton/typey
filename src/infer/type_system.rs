@@ -1,6 +1,6 @@
 use super::{
     name_matches, nominal_name, prism, proc_parts, proc_receiver, trim_ascii_whitespace, Analyzer,
-    Environment,
+    Environment, SourceSite,
 };
 use crate::signature::{self, AssertionKind, MethodSig};
 use crate::types::Type;
@@ -27,6 +27,12 @@ impl<'src> Analyzer<'src> {
             } else {
                 self.error(node, format!("Expected `{expected}`, but found `{actual}`"));
             }
+        }
+    }
+
+    pub(crate) fn check_assignable_at(&mut self, site: SourceSite, actual: &Type, expected: &Type) {
+        if !self.is_assignable(actual, expected) {
+            self.error_at(site, format!("Expected `{expected}`, but found `{actual}`"));
         }
     }
 
@@ -929,14 +935,91 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    pub(crate) fn apply_inline_assertion_at(&mut self, site: SourceSite, actual: Type) -> Type {
+        if self.defer_inline_assertions {
+            return actual;
+        }
+        let Some(assertion) = self.inline_assertion_for_site(site) else {
+            return actual;
+        };
+        let expected = self.resolve_type_names(&assertion.type_, None);
+        match assertion.kind {
+            AssertionKind::Let => {
+                self.check_assignable_at(site, &actual, &expected);
+                expected
+            }
+            AssertionKind::Cast => expected,
+            AssertionKind::SelfAs => actual,
+            AssertionKind::Must => {
+                if actual.is_nil() {
+                    self.error_at(site, "Expected a non-nil value");
+                }
+                actual.without(&Type::Nil)
+            }
+            AssertionKind::Unsafe => Type::Any,
+            AssertionKind::Absurd => {
+                if !actual.is_never() {
+                    self.error_at(site, format!("Expected `T.noreturn`, but found `{actual}`"));
+                }
+                Type::Never
+            }
+        }
+    }
+
+    pub(crate) fn apply_inline_assertion_in_environment_at(
+        &mut self,
+        site: SourceSite,
+        actual: Type,
+        environment: &Environment,
+    ) -> Type {
+        if self.defer_inline_assertions {
+            return actual;
+        }
+        let Some(assertion) = self.inline_assertion_for_site(site) else {
+            return actual;
+        };
+        let owner = self.lexical_owner(environment);
+        let expected = self.resolve_shadowed_builtin_types(&assertion.type_, owner.as_deref());
+        match assertion.kind {
+            AssertionKind::Let => {
+                self.check_assignable_at(site, &actual, &expected);
+                expected
+            }
+            AssertionKind::Cast => expected,
+            AssertionKind::SelfAs => actual,
+            AssertionKind::Must => {
+                if actual.is_nil() {
+                    self.error_at(site, "Expected a non-nil value");
+                }
+                actual.without(&Type::Nil)
+            }
+            AssertionKind::Unsafe => Type::Any,
+            AssertionKind::Absurd => {
+                if !actual.is_never() {
+                    self.error_at(site, format!("Expected `T.noreturn`, but found `{actual}`"));
+                }
+                Type::Never
+            }
+        }
+    }
+
     pub(crate) fn inline_assertion_for_node<'node>(
         &self,
         node: &Node<'node>,
     ) -> Option<crate::signature::InlineAssertion> {
+        let (start, end) = prism::span(node);
+        self.inline_assertion_for_site(SourceSite::new(start, end))
+    }
+
+    pub(crate) fn inline_assertion_for_site(
+        &self,
+        site: SourceSite,
+    ) -> Option<crate::signature::InlineAssertion> {
         if !self.has_inline_assertions {
             return None;
         }
-        let (start, end) = prism::span(node);
+        let start = site.start;
+        let end = site.end;
         let start_line = self.line_map.line_number(start);
         let end_line = self.line_map.line_number(end.saturating_sub(1));
         if let Some(assertion) = [start_line, end_line]

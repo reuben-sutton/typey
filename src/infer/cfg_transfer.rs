@@ -1,6 +1,6 @@
 use super::{
     ivar_refinement_key, Analyzer, CallArguments, CallSite, Environment, Eval, Flow, FlowKind,
-    HirCallView, KeywordArgument, MethodKey, OutcomeTypes, SharedKey, Strictness,
+    HirCallView, KeywordArgument, MethodKey, OutcomeTypes, SharedKey, SourceSite, Strictness,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
@@ -380,7 +380,7 @@ fn loop_graph() -> &'static cfg::Cfg {
 impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
     fn transfer_write(
         analyzer: &mut Analyzer<'src>,
-        node: &Node<'node>,
+        site: SourceSite,
         place: &cfg::Place,
         actual: Type,
         environment: &mut Environment,
@@ -392,30 +392,30 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                     .local_name(*local)
                     .map_or_else(String::new, |name| name.as_str().to_owned());
                 let type_ =
-                    analyzer.apply_inline_assertion_in_environment(node, actual, environment);
+                    analyzer.apply_inline_assertion_in_environment_at(site, actual, environment);
                 environment.bind(name, type_.clone());
                 type_
             }
             cfg::Place::InstanceVariable(name) => {
                 let name = name.as_str().to_owned();
                 let type_ =
-                    analyzer.apply_inline_assertion_in_environment(node, actual, environment);
+                    analyzer.apply_inline_assertion_in_environment_at(site, actual, environment);
                 analyzer.observe_ivar(environment, name.clone(), &type_, false);
                 environment.bind(ivar_refinement_key(&name), type_.clone());
                 type_
             }
             cfg::Place::ClassVariable(name) => {
-                let type_ = analyzer.apply_inline_assertion(node, actual);
+                let type_ = analyzer.apply_inline_assertion_at(site, actual);
                 analyzer.observe_class_var(environment, name.as_str().to_owned(), &type_);
                 type_
             }
             cfg::Place::Global(name) => {
-                let type_ = analyzer.apply_inline_assertion(node, actual);
+                let type_ = analyzer.apply_inline_assertion_at(site, actual);
                 analyzer.observe_global(name.as_str().to_owned(), &type_);
                 type_
             }
             cfg::Place::Constant(path) => {
-                let type_ = analyzer.apply_inline_assertion(node, actual);
+                let type_ = analyzer.apply_inline_assertion_at(site, actual);
                 analyzer.observe_constant(environment, path.as_str().to_owned(), &type_);
                 type_
             }
@@ -631,7 +631,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
 
     fn transfer_array(
         analyzer: &mut Analyzer<'src>,
-        node: &Node<'node>,
+        site: SourceSite,
         elements: &[cfg::ArrayOperand],
         values: &[Option<Type>],
         preserve_fixed_shape: bool,
@@ -672,12 +672,12 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         } else {
             Type::Array(Box::new(element))
         };
-        Some(analyzer.apply_inline_assertion_in_environment(node, inferred, environment))
+        Some(analyzer.apply_inline_assertion_in_environment_at(site, inferred, environment))
     }
 
     fn transfer_hash(
         analyzer: &mut Analyzer<'src>,
-        node: &Node<'node>,
+        site: SourceSite,
         elements: &[cfg::HashOperand],
         values: &[Option<Type>],
         environment: &mut Environment,
@@ -710,8 +710,8 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         }
         let key = if key.is_never() { Type::Any } else { key };
         let value = if value.is_never() { Type::Any } else { value };
-        Some(analyzer.apply_inline_assertion_in_environment(
-            node,
+        Some(analyzer.apply_inline_assertion_in_environment_at(
+            site,
             Type::Hash(Box::new(key), Box::new(value)),
             environment,
         ))
@@ -784,13 +784,16 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
         let mut next = state.clone();
         let nodes = self.nodes;
         for operation in &block.operations {
-            let node = nodes
-                .nodes
-                .get(&(operation.span.start as usize, operation.span.end as usize))
-                .ok_or(())?;
+            let site = SourceSite::from_span(operation.span, operation.expression);
             let type_ = match &operation.kind {
-                cfg::OperationKind::Const { value } => Analyzer::cfg_literal_type(value),
+                cfg::OperationKind::Const { value } => self
+                    .analyzer
+                    .apply_inline_assertion_at(site, Analyzer::cfg_literal_type(value)),
                 cfg::OperationKind::Read { place } => {
+                    let node = nodes
+                        .nodes
+                        .get(&(operation.span.start as usize, operation.span.end as usize))
+                        .ok_or(())?;
                     let read = match place {
                         cfg::Place::Local(local) => Read::Local(*local),
                         cfg::Place::InstanceVariable(name) => Read::InstanceVariable(name.clone()),
@@ -802,14 +805,22 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                         .transfer_cfg_read(node, read, &mut next.environment)
                 }
                 cfg::OperationKind::ReadSpecial { read } => {
+                    let node = nodes
+                        .nodes
+                        .get(&(operation.span.start as usize, operation.span.end as usize))
+                        .ok_or(())?;
                     self.analyzer
                         .transfer_cfg_read(node, read.clone(), &mut next.environment)
                 }
                 cfg::OperationKind::Write { place, value } => {
                     let actual = next.value(*value).ok_or(())?;
-                    Self::transfer_write(self.analyzer, node, place, actual, &mut next.environment)
+                    Self::transfer_write(self.analyzer, site, place, actual, &mut next.environment)
                 }
                 cfg::OperationKind::Call { .. } => {
+                    let node = nodes
+                        .nodes
+                        .get(&(operation.span.start as usize, operation.span.end as usize))
+                        .ok_or(())?;
                     let result = Self::transfer_call(
                         self.analyzer,
                         node,
@@ -829,7 +840,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                 }
                 cfg::OperationKind::BuildArray { elements } => Self::transfer_array(
                     self.analyzer,
-                    node,
+                    site,
                     elements,
                     &next.values,
                     operation
@@ -840,7 +851,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                 .ok_or(())?,
                 cfg::OperationKind::BuildHash { elements } => Self::transfer_hash(
                     self.analyzer,
-                    node,
+                    site,
                     elements,
                     &next.values,
                     &mut next.environment,
@@ -857,7 +868,15 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                 next.set_value(result, type_.clone());
             }
             if !matches!(operation.kind, cfg::OperationKind::PatternTest { .. }) {
-                self.analyzer.record(node, type_);
+                if matches!(operation.kind, cfg::OperationKind::Call { .. }) {
+                    let node = nodes
+                        .nodes
+                        .get(&(operation.span.start as usize, operation.span.end as usize))
+                        .ok_or(())?;
+                    self.analyzer.record(node, type_);
+                } else {
+                    self.analyzer.record_at(site, type_, false, None);
+                }
             }
         }
 
