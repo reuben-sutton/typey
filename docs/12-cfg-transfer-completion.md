@@ -103,8 +103,8 @@ The first modularization steps are now in place:
 * `MakeClosure` now transfers from its owned `ClosureId` and closure span;
   nested CFG bodies reuse the containing body's semantic node index, so
   closure creation no longer performs a source-span lookup;
-* ordinary `while`/`until` bodies now pass CFG preflight, including valueless
-  `break` and `next`; value-carrying non-local outcomes remain explicitly
+* ordinary `while`/`until` bodies now pass CFG preflight, including local
+  value-carrying `break` and `next`; non-local block outcomes remain explicitly
   deferred until the outcome state records their enclosing-expression type;
 * Prism `case` nodes now lower into owned `CaseExpr`/`CaseArm` HIR and transfer
   through the generic CFG path; ordinary value comparisons retain both match
@@ -114,6 +114,9 @@ The first modularization steps are now in place:
   terminal return values and environments, and record enclosing conditional
   expressions on return paths; non-local returns from ordinary blocks remain
   deferred until outcome routing is explicit;
+* CFG conditional transfer preserves both predicate edges for inferred local
+  variables, matching the recursive evaluator's gradual-flow treatment even
+  when a current method summary contains a concrete argument type;
 * rescue matching routes raised states through unwind edges, while matched
   handlers consume the pending exception and unmatched exceptions continue to
   the outer handler;
