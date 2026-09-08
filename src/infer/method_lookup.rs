@@ -359,4 +359,35 @@ impl<'src> Analyzer<'src> {
             singleton,
         })
     }
+
+    pub(super) fn super_method_key(&self, current: &MethodKey) -> Option<MethodKey> {
+        let owner = current.owner.as_ref()?;
+        let mut candidates = Vec::new();
+        self.append_method_candidates(
+            owner,
+            &current.name,
+            current.singleton,
+            &mut BTreeSet::new(),
+            &mut candidates,
+        );
+        let mut after_current = false;
+        let mut visited = BTreeSet::new();
+        for candidate in candidates {
+            if !after_current {
+                if candidate.owner.as_ref() == Some(owner) {
+                    after_current = true;
+                }
+                continue;
+            }
+            if self.declarations.methods.contains_key(&candidate) {
+                return Some(candidate);
+            }
+            if self.declarations.aliases.contains_key(&candidate) {
+                if let Some(resolved) = self.resolve_method_key_inner(&candidate, &mut visited) {
+                    return Some(resolved);
+                }
+            }
+        }
+        None
+    }
 }
