@@ -283,3 +283,20 @@ end
         program.expressions
     );
 }
+
+#[test]
+fn preserves_positional_hash_arguments_that_prism_labels_as_keyword_hashes() {
+    let program = expressions("receiver(\"key\" => 1)");
+    let call = program
+        .expressions
+        .iter()
+        .find_map(|expression| match &expression.kind {
+            ExprKind::Call(call) if call.name.as_str() == "receiver" => Some(call),
+            _ => None,
+        })
+        .expect("receiver call");
+    assert!(matches!(
+        call.arguments.as_slice(),
+        [Argument::Positional(_)]
+    ));
+}

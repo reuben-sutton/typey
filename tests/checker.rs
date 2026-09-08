@@ -82,6 +82,11 @@ fn routes_assignment_forms_through_owned_hir_targets() {
 }
 
 #[test]
+fn preserves_positional_hash_argument_shape_through_hir_calls() {
+    check_fixture("tests/fixtures/positional_hash_argument.rb");
+}
+
+#[test]
 fn reports_malformed_sorbet_proc_signatures() {
     check_fixture("tests/fixtures/malformed_bound_proc_signature.rb");
 }

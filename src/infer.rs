@@ -1453,6 +1453,15 @@ fn prism_argument_inputs_from_nodes<'node>(
         .collect()
 }
 
+fn call_argument_input_kind<'node>(input: &CallArgumentInput<'node>) -> &'static str {
+    match input {
+        CallArgumentInput::Forwarded { .. } => "forwarded",
+        CallArgumentInput::Positional { .. } => "positional",
+        CallArgumentInput::Splat { .. } => "splat",
+        CallArgumentInput::KeywordHash { .. } => "keyword hash",
+    }
+}
+
 fn hir_call_argument_inputs<'node>(
     arguments: &[hir::Argument],
     prism_arguments: Option<ArgumentsNode<'node>>,
@@ -1507,9 +1516,25 @@ fn hir_call_argument_inputs<'node>(
                     result.push(CallArgumentInput::Positional { node });
                     hir_index += 1;
                 }
-                Some(_) | None => {
-                    panic!("HIR positional argument did not match Prism argument bridge")
+                Some(CallArgumentInput::KeywordHash { node, .. }) => {
+                    // Prism uses the keyword-hash node for brace-less hash
+                    // arguments too. The HIR lowerer has already decided
+                    // whether that syntax is a keyword group or a positional
+                    // hash; preserve the HIR decision here.
+                    result.push(CallArgumentInput::Positional { node });
+                    hir_index += 1;
                 }
+                Some(input) => panic!(
+                    "HIR positional argument did not match Prism argument bridge: raw {} at {:?}, HIR {arguments:?}",
+                    call_argument_input_kind(&input),
+                    prism::span(match &input {
+                        CallArgumentInput::Forwarded { node }
+                        | CallArgumentInput::Positional { node }
+                        | CallArgumentInput::Splat { node, .. }
+                        | CallArgumentInput::KeywordHash { node, .. } => node,
+                    }),
+                ),
+                None => panic!("HIR positional argument has no Prism child bridge: HIR {arguments:?}"),
             },
             hir::Argument::Splat(_) => match raw.next() {
                 Some(CallArgumentInput::Splat { node, expression }) => {
