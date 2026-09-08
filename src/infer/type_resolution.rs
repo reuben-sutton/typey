@@ -1,4 +1,4 @@
-use super::{name_matches, optional_proc_type, proc_parts, Analyzer, CallArguments};
+use super::{name_matches, optional_proc_type, proc_parts, Analyzer, CallArguments, MethodKey};
 use crate::signature::{self, MethodSig};
 use crate::types::Type;
 use std::collections::{BTreeMap, BTreeSet};
@@ -118,6 +118,37 @@ impl<'src> Analyzer<'src> {
                 Box::new(arguments[1].clone()),
             ),
             _ => Type::Named(name.clone(), arguments),
+        }
+    }
+
+    /// `Class#new` is generic in the core RBI, but an ordinary class object
+    /// constructs an instance of the class it represents unless that class
+    /// declares its own singleton `new`. Keep that nominal identity in the
+    /// owned CFG call path just as the recursive evaluator does.
+    pub(super) fn default_class_constructor_type(&self, receiver: &Type, fallback: Type) -> Type {
+        let instance = if let Some(instance) = Self::class_object_instance_type(receiver) {
+            instance
+        } else if let Type::Named(owner, arguments) = receiver {
+            Type::Named(owner.clone(), arguments.clone())
+        } else {
+            return fallback;
+        };
+        let Some(owner) = Self::named_type_name(&instance) else {
+            return fallback;
+        };
+        let has_explicit_new = Self::class_object_instance_type(receiver).is_some_and(|_| {
+            let key = MethodKey {
+                owner: Some(owner.clone()),
+                name: "new".to_owned(),
+                singleton: true,
+            };
+            self.resolve_method_key(&key)
+                .is_some_and(|resolved| resolved.owner.as_deref() == Some(owner.as_str()))
+        });
+        if has_explicit_new {
+            fallback
+        } else {
+            instance
         }
     }
 

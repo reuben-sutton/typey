@@ -371,10 +371,9 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                             block_return_type.as_ref(),
                         );
                         block_result = callback_result;
-                        let type_ = if input.name.as_str() == "new"
-                            && Analyzer::class_object_instance_type(&dispatch_receiver).is_some()
-                        {
-                            analyzer.instantiate_generic_class(type_)
+                        let type_ = if input.name.as_str() == "new" {
+                            let type_ = analyzer.instantiate_generic_class(type_);
+                            analyzer.default_class_constructor_type(&dispatch_receiver, type_)
                         } else {
                             type_
                         };
