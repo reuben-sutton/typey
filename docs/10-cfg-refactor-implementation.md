@@ -46,6 +46,10 @@ recursive evaluator remains the compatibility baseline.
   run entirely through owned HIR CFG operations and the generic transfer
   scheduler. The host preflights unsupported operations and falls back before
   recording any partial result.
+* `ceae0ea` extended that host to ordinary positional calls. Complete bodies
+  now transfer receiver and argument values through CFG state before invoking
+  the existing inference-side signature and dispatch machinery; unsupported
+  call shapes still use the recursive compatibility path.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -65,12 +69,13 @@ CFG-enabled checker regressions cover ordinary calls, local and instance
 writes, attribute setters, loop/rescue fixtures, safe navigation, branches,
 compound assignments, source identity, and a complete straight-line method
 body. The default checker remains at baseline performance because CFG
-construction is not yet enabled by default. In a matched local release run,
-Spoom took about 1.71s on the legacy path and 1.74s with `--cfg`; both paths
-produced the same three classified diagnostics. The body host itself transferred
-31 methods in that run. An initial slower result was traced to rebuilding the
-program-wide HIR expression index once per method; the body host now uses the
-index-free builder, and the residual difference is within run-to-run noise.
+construction is not yet enabled by default. In three matched local release
+runs, Spoom took 1.72–1.73s with `--cfg` and 1.70–1.79s on the legacy path;
+both paths produced the same three classified diagnostics. The CFG body host
+transferred 431 methods and 60,900 calls, with 157 legacy body fallbacks. An
+initial slower result was traced to rebuilding the program-wide HIR expression
+index once per method; the body host now uses the index-free builder, and the
+remaining run-to-run difference is negligible.
 
 ## Remaining migration boundary
 
@@ -83,9 +88,8 @@ that are orphaned under unsupported syntax.
 
 The next stages are therefore:
 
-1. transfer rescue, `retry`, and ensure edges;
-2. move ordinary calls, compound writes, and complete branch bodies onto the
-   body worklist without Prism child-node adapters;
+1. transfer the remaining call shapes and compound/dynamic writes;
+2. transfer rescue, `retry`, ensure edges, and complete branch bodies;
 3. compare diagnostics, inferred types, flow outcomes, send metrics, and
    untyped provenance against the recursive path;
 4. remove the opt-in switch and legacy path only after those comparisons are

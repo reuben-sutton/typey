@@ -40,14 +40,26 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
   CFG operations, with method environments and recorded source types updated
   only after a successful preflight. Unsupported bodies continue through the
   recursive evaluator.
+* `ceae0ea` extended the complete-body adapter to ordinary calls with implicit
+  or explicit receivers and positional arguments. Receiver and argument types
+  now come from `BlockState` value IDs, while existing signature dispatch,
+  generic-class construction, dependency tracking, and call diagnostics are
+  reused at the inference boundary. Calls with keywords, splats, blocks, safe
+  navigation, `super`, or `yield` still fall back before partial results are
+  recorded.
 
 ## Next boundary
 
 The analyzer still uses its recursive evaluator for compound/dynamic operation
 semantics, rescue/ensure, and branch/body expression adapters. Complete-body
-transfer is deliberately narrow: it does not yet interpret calls, collection
-splats, closures, branches, or abrupt terminators inside a body. The next
-implementation should move ordinary call operations and their child values
-onto `BlockState`, then add rescue/ensure edges. The recursive path must remain
-available for differential checks until each operation and terminator has an
-equivalent transfer.
+transfer is deliberately narrow: it does not yet interpret keyword/splat/block
+calls, safe navigation, `super`, `yield`, closures, or abrupt terminators
+inside a body. The next implementation boundaries are the remaining call
+shapes and compound/dynamic writes, followed by complete branch bodies and
+rescue/ensure edges. The recursive path must remain available for differential
+checks until each operation and terminator has an equivalent transfer.
+
+The current call adapter is also an explicit bridge: it uses CFG-owned value
+IDs for evaluation order and types, but still obtains Prism call nodes for
+source recording and the existing dispatch helpers. That bridge should shrink
+as call argument metadata and dispatch inputs become owned HIR data.
