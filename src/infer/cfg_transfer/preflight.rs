@@ -13,10 +13,32 @@ struct ControlContext {
     allow_block_outcomes: bool,
 }
 
-pub(super) fn body_can_transfer(program: &hir::Program, body_id: hir::BodyId) -> bool {
-    let Some(body) = program.body(body_id) else {
-        return false;
-    };
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PreflightFailure {
+    pub(super) span: hir::Span,
+    pub(super) reason: String,
+}
+
+fn failure(
+    program: &hir::Program,
+    expression: hir::ExprId,
+    reason: &'static str,
+) -> PreflightFailure {
+    let span = program.expression(expression).map_or_else(
+        || hir::Span::new(hir::FileId(0), 0, 0),
+        |expression| expression.span,
+    );
+    PreflightFailure {
+        span,
+        reason: reason.to_owned(),
+    }
+}
+
+pub(super) fn body_transfer_failure(
+    program: &hir::Program,
+    body_id: hir::BodyId,
+) -> Option<PreflightFailure> {
+    let body = program.body(body_id)?;
     let mut visiting = HashSet::new();
     let context = ControlContext {
         allow_return: body_allows_return(program, body),
@@ -28,7 +50,7 @@ pub(super) fn body_can_transfer(program: &hir::Program, body_id: hir::BodyId) ->
                     .is_some_and(|closure| closure.kind == hir::ClosureKind::Block)
         ),
     };
-    expr_can_transfer(program, body.root, &mut visiting, 0, context)
+    expr_transfer_failure(program, body.root, &mut visiting, 0, context).err()
 }
 
 fn body_allows_return(program: &hir::Program, body: &hir::Body) -> bool {
@@ -42,185 +64,277 @@ fn body_allows_return(program: &hir::Program, body: &hir::Body) -> bool {
     }
 }
 
-fn expr_can_transfer(
+fn expr_transfer_failure(
     program: &hir::Program,
     expression: hir::ExprId,
     visiting: &mut HashSet<hir::ExprId>,
     loop_depth: usize,
     context: ControlContext,
-) -> bool {
+) -> Result<(), PreflightFailure> {
     if !visiting.insert(expression) {
-        return false;
+        return Err(failure(program, expression, "cyclic HIR expression"));
     }
     let Some(expr) = program.expression(expression) else {
-        return false;
+        visiting.remove(&expression);
+        return Err(failure(program, expression, "missing HIR expression"));
     };
-    let supported = match &expr.kind {
-        ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => true,
+    let result = match &expr.kind {
+        ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => Ok(()),
         ExprKind::Call(call) => {
-            let block_supported = call.block.as_ref().is_none_or(|block| match block {
-                hir::BlockArgument::Inline(closure) => program
-                    .closure(*closure)
-                    .is_some_and(|closure| body_can_transfer(program, closure.body)),
-                hir::BlockArgument::Passed(value) => {
-                    expr_can_transfer(program, *value, visiting, loop_depth, context)
+            if let Some(block) = &call.block {
+                match block {
+                    hir::BlockArgument::Inline(closure) => {
+                        let Some(closure) = program.closure(*closure) else {
+                            return Err(failure(program, expression, "missing inline closure"));
+                        };
+                        if let Some(failure) = body_transfer_failure(program, closure.body) {
+                            return Err(failure);
+                        }
+                    }
+                    hir::BlockArgument::Passed(value) => {
+                        expr_transfer_failure(program, *value, visiting, loop_depth, context)?;
+                    }
                 }
-            });
-            block_supported
-                && match &call.receiver {
-                    hir::Receiver::Implicit
-                    | hir::Receiver::Explicit(_)
-                    | hir::Receiver::Super
-                    | hir::Receiver::Yield => true,
+            }
+            if let hir::Receiver::Explicit(receiver) = &call.receiver {
+                expr_transfer_failure(program, *receiver, visiting, loop_depth, context)?;
+            }
+            for argument in &call.arguments {
+                match argument {
+                    hir::Argument::Positional(value)
+                    | hir::Argument::Splat(value)
+                    | hir::Argument::Keyword { value, .. }
+                    | hir::Argument::KeywordSplat(value) => {
+                        expr_transfer_failure(program, *value, visiting, loop_depth, context)?;
+                    }
+                    hir::Argument::Forwarded => {}
                 }
-                && match &call.receiver {
-                    hir::Receiver::Explicit(receiver) => {
-                        expr_can_transfer(program, *receiver, visiting, loop_depth, context)
-                    }
-                    _ => true,
-                }
-                && call.arguments.iter().all(|argument| match argument {
-                    hir::Argument::Positional(value) | hir::Argument::Splat(value) => {
-                        expr_can_transfer(program, *value, visiting, loop_depth, context)
-                    }
-                    hir::Argument::Keyword { value, .. } => {
-                        expr_can_transfer(program, *value, visiting, loop_depth, context)
-                    }
-                    hir::Argument::KeywordSplat(value) => {
-                        expr_can_transfer(program, *value, visiting, loop_depth, context)
-                    }
-                    hir::Argument::Forwarded => true,
-                })
+            }
+            Ok(())
         }
-        ExprKind::Array(elements) => elements.iter().all(|element| match element {
-            ArrayElement::Value(value) => {
-                expr_can_transfer(program, *value, visiting, loop_depth, context)
+        ExprKind::Array(elements) => {
+            for element in elements {
+                let value = match element {
+                    ArrayElement::Value(value) | ArrayElement::Splat { value, .. } => value,
+                };
+                expr_transfer_failure(program, *value, visiting, loop_depth, context)?;
             }
-            ArrayElement::Splat { value, .. } => {
-                expr_can_transfer(program, *value, visiting, loop_depth, context)
+            Ok(())
+        }
+        ExprKind::Hash(elements) => {
+            for element in elements {
+                match element {
+                    HashElement::Pair { key, value } => {
+                        expr_transfer_failure(program, *key, visiting, loop_depth, context)?;
+                        expr_transfer_failure(program, *value, visiting, loop_depth, context)?;
+                    }
+                    HashElement::Splat { value, .. } => {
+                        expr_transfer_failure(program, *value, visiting, loop_depth, context)?;
+                    }
+                }
             }
-        }),
-        ExprKind::Hash(elements) => elements.iter().all(|element| match element {
-            HashElement::Pair { key, value } => {
-                expr_can_transfer(program, *key, visiting, loop_depth, context)
-                    && expr_can_transfer(program, *value, visiting, loop_depth, context)
+            Ok(())
+        }
+        ExprKind::Closure(closure) => {
+            let Some(closure) = program.closure(*closure) else {
+                return Err(failure(program, expression, "missing closure"));
+            };
+            if let Some(failure) = body_transfer_failure(program, closure.body) {
+                Err(failure)
+            } else {
+                Ok(())
             }
-            HashElement::Splat { value, .. } => {
-                expr_can_transfer(program, *value, visiting, loop_depth, context)
-            }
-        }),
-        ExprKind::Closure(closure) => program
-            .closure(*closure)
-            .is_some_and(|closure| body_can_transfer(program, closure.body)),
+        }
         ExprKind::Begin(begin) => {
-            begin
-                .body
-                .is_none_or(|body| expr_can_transfer(program, body, visiting, loop_depth, context))
-                && begin.else_body.is_none_or(|body| {
-                    expr_can_transfer(program, body, visiting, loop_depth, context)
-                })
-                && begin.rescue.iter().all(|clause| {
-                    clause.exceptions.iter().all(|exception| {
-                        expr_can_transfer(program, *exception, visiting, loop_depth, context)
-                    }) && clause.body.is_none_or(|body| {
-                        expr_can_transfer(program, body, visiting, loop_depth, context)
-                    })
-                })
-                && begin.ensure.is_none_or(|ensure| {
-                    expr_can_transfer(program, ensure, visiting, loop_depth, context)
-                })
+            if let Some(body) = begin.body {
+                expr_transfer_failure(program, body, visiting, loop_depth, context)?;
+            }
+            if let Some(body) = begin.else_body {
+                expr_transfer_failure(program, body, visiting, loop_depth, context)?;
+            }
+            for clause in &begin.rescue {
+                for exception in &clause.exceptions {
+                    expr_transfer_failure(program, *exception, visiting, loop_depth, context)?;
+                }
+                if let Some(body) = clause.body {
+                    expr_transfer_failure(program, body, visiting, loop_depth, context)?;
+                }
+            }
+            if let Some(ensure) = begin.ensure {
+                expr_transfer_failure(program, ensure, visiting, loop_depth, context)?;
+            }
+            Ok(())
         }
         ExprKind::Assign { target, value, .. } => {
-            let target_supported = match target {
+            match target {
                 hir::AssignTarget::Local(_)
                 | hir::AssignTarget::InstanceVariable(_)
                 | hir::AssignTarget::ClassVariable(_)
                 | hir::AssignTarget::Global(_)
-                | hir::AssignTarget::Constant(_) => true,
+                | hir::AssignTarget::Constant(_) => {}
                 hir::AssignTarget::Attribute { receiver, .. } => {
-                    expr_can_transfer(program, *receiver, visiting, loop_depth, context)
+                    expr_transfer_failure(program, *receiver, visiting, loop_depth, context)?;
                 }
                 hir::AssignTarget::Index {
                     receiver,
                     arguments,
                 } => {
-                    expr_can_transfer(program, *receiver, visiting, loop_depth, context)
-                        && arguments.iter().all(|argument| match argument {
+                    expr_transfer_failure(program, *receiver, visiting, loop_depth, context)?;
+                    for argument in arguments {
+                        match argument {
+                            hir::Argument::Forwarded => {
+                                return Err(failure(
+                                    program,
+                                    expression,
+                                    "forwarded index-assignment operand",
+                                ));
+                            }
                             hir::Argument::Positional(value)
                             | hir::Argument::Splat(value)
-                            | hir::Argument::KeywordSplat(value)
-                            | hir::Argument::Keyword { value, .. } => {
-                                expr_can_transfer(program, *value, visiting, loop_depth, context)
+                            | hir::Argument::Keyword { value, .. }
+                            | hir::Argument::KeywordSplat(value) => {
+                                expr_transfer_failure(
+                                    program, *value, visiting, loop_depth, context,
+                                )?;
                             }
-                            // A synthesized `[]=` call has no surrounding
-                            // method-call shape from which forwarded values
-                            // can be recovered.
-                            hir::Argument::Forwarded => false,
-                        })
+                        }
+                    }
                 }
-            };
-            target_supported && expr_can_transfer(program, *value, visiting, loop_depth, context)
+            }
+            expr_transfer_failure(program, *value, visiting, loop_depth, context)
         }
-        ExprKind::Sequence(expressions) => expressions.iter().all(|expression| {
-            expr_can_transfer(program, *expression, visiting, loop_depth, context)
-        }),
-        ExprKind::Retry => true,
+        ExprKind::Sequence(expressions) => {
+            for expression in expressions {
+                expr_transfer_failure(program, *expression, visiting, loop_depth, context)?;
+            }
+            Ok(())
+        }
+        ExprKind::Retry => Ok(()),
         ExprKind::Loop(loop_expr) => {
-            let target_supported = match loop_expr.kind {
-                hir::LoopKind::For => loop_expr.index.as_ref().is_some_and(|target| {
-                    matches!(
-                        target,
-                        hir::AssignTarget::Local(_)
-                            | hir::AssignTarget::InstanceVariable(_)
-                            | hir::AssignTarget::ClassVariable(_)
-                            | hir::AssignTarget::Global(_)
-                            | hir::AssignTarget::Constant(_)
-                    )
-                }),
-                hir::LoopKind::While | hir::LoopKind::Until => loop_expr.index.is_none(),
-            };
-            target_supported
-                && expr_can_transfer(program, loop_expr.condition, visiting, loop_depth, context)
-                && loop_expr.body.is_none_or(|body| {
-                    expr_can_transfer(program, body, visiting, loop_depth + 1, context)
-                })
+            match loop_expr.kind {
+                hir::LoopKind::For => {
+                    if !loop_expr.index.as_ref().is_some_and(|target| {
+                        matches!(
+                            target,
+                            hir::AssignTarget::Local(_)
+                                | hir::AssignTarget::InstanceVariable(_)
+                                | hir::AssignTarget::ClassVariable(_)
+                                | hir::AssignTarget::Global(_)
+                                | hir::AssignTarget::Constant(_)
+                        )
+                    }) {
+                        return Err(failure(program, expression, "unsupported for-loop target"));
+                    }
+                }
+                hir::LoopKind::While | hir::LoopKind::Until => {
+                    if loop_expr.index.is_some() {
+                        return Err(failure(
+                            program,
+                            expression,
+                            "while/until loop has an assignment target",
+                        ));
+                    }
+                }
+            }
+            expr_transfer_failure(program, loop_expr.condition, visiting, loop_depth, context)?;
+            if let Some(body) = loop_expr.body {
+                expr_transfer_failure(program, body, visiting, loop_depth + 1, context)?;
+            }
+            Ok(())
         }
         ExprKind::Case(case) => {
-            case.scrutinee.is_none_or(|scrutinee| {
-                expr_can_transfer(program, scrutinee, visiting, loop_depth, context)
-            }) && case.arms.iter().all(|arm| {
-                arm.conditions.iter().all(|condition| {
-                    expr_can_transfer(program, *condition, visiting, loop_depth, context)
-                }) && expr_can_transfer(program, arm.body, visiting, loop_depth, context)
-            }) && case.else_body.is_none_or(|else_body| {
-                expr_can_transfer(program, else_body, visiting, loop_depth, context)
-            })
+            if let Some(scrutinee) = case.scrutinee {
+                expr_transfer_failure(program, scrutinee, visiting, loop_depth, context)?;
+            }
+            for arm in &case.arms {
+                for condition in &arm.conditions {
+                    expr_transfer_failure(program, *condition, visiting, loop_depth, context)?;
+                }
+                expr_transfer_failure(program, arm.body, visiting, loop_depth, context)?;
+            }
+            if let Some(else_body) = case.else_body {
+                expr_transfer_failure(program, else_body, visiting, loop_depth, context)?;
+            }
+            Ok(())
         }
         ExprKind::Return(value) => {
-            context.allow_return
-                && value.is_none_or(|value| {
-                    expr_can_transfer(program, value, visiting, loop_depth, context)
-                })
+            if !context.allow_return {
+                return Err(failure(
+                    program,
+                    expression,
+                    "return is not valid in this body",
+                ));
+            }
+            if let Some(value) = value {
+                expr_transfer_failure(program, *value, visiting, loop_depth, context)?;
+            }
+            Ok(())
         }
         ExprKind::Break(value) | ExprKind::Next(value) => {
-            (loop_depth > 0 || context.allow_block_outcomes)
-                && value.is_none_or(|value| {
-                    expr_can_transfer(program, value, visiting, loop_depth, context)
-                })
+            if loop_depth == 0 && !context.allow_block_outcomes {
+                return Err(failure(
+                    program,
+                    expression,
+                    "break/next is not valid outside a loop or block",
+                ));
+            }
+            if let Some(value) = value {
+                expr_transfer_failure(program, *value, visiting, loop_depth, context)?;
+            }
+            Ok(())
         }
         ExprKind::If {
             condition,
             then_body,
             else_body,
         } => {
-            expr_can_transfer(program, *condition, visiting, loop_depth, context)
-                && expr_can_transfer(program, *then_body, visiting, loop_depth, context)
-                && else_body.is_none_or(|else_body| {
-                    expr_can_transfer(program, else_body, visiting, loop_depth, context)
-                })
+            expr_transfer_failure(program, *condition, visiting, loop_depth, context)?;
+            expr_transfer_failure(program, *then_body, visiting, loop_depth, context)?;
+            if let Some(else_body) = else_body {
+                expr_transfer_failure(program, *else_body, visiting, loop_depth, context)?;
+            }
+            Ok(())
         }
-        _ => false,
+        ExprKind::Definition(_) => Err(failure(
+            program,
+            expression,
+            "declaration expression is handled outside owned body transfer",
+        )),
+        ExprKind::Unsupported(unsupported) => {
+            let span = expr.span;
+            Err(PreflightFailure {
+                span,
+                reason: format!(
+                    "unsupported HIR parent `{}` is not represented by owned CFG transfer",
+                    unsupported.kind.as_str()
+                ),
+            })
+        }
     };
     visiting.remove(&expression);
-    supported
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_the_owned_span_and_reason_for_unsupported_hir() {
+        let program = hir::lower(hir::FileId(3), b"defined?(value)");
+        let body = program.root.expect("root body");
+        let failure = body_transfer_failure(&program, body).expect("unsupported expression");
+        let expression = program.body(body).expect("body").root;
+
+        assert_eq!(failure.span, program.expression(expression).unwrap().span);
+        assert!(failure.reason.contains("unsupported HIR parent"));
+    }
+
+    #[test]
+    fn supported_owned_expression_has_no_preflight_failure() {
+        let program = hir::lower(hir::FileId(3), b"1 + 2");
+        let body = program.root.expect("root body");
+
+        assert_eq!(body_transfer_failure(&program, body), None);
+    }
 }

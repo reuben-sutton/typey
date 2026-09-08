@@ -108,11 +108,13 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
         record_result: bool,
     ) -> Option<Eval> {
-        if !preflight::body_can_transfer(&self.program.hir_program, body_id) {
-            self.record_cfg_fallback_at(
-                body_site,
+        if let Some(failure) = preflight::body_transfer_failure(&self.program.hir_program, body_id)
+        {
+            self.record_cfg_fallback_detail_at(
+                SourceSite::from_span(failure.span, None),
                 "body",
                 super::CfgFallbackKind::UnsupportedOperation,
+                Some(failure.reason.as_str()),
             );
             return None;
         }
