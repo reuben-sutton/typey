@@ -366,6 +366,8 @@ pub struct LoopExpr {
     pub kind: LoopKind,
     pub condition: ExprId,
     pub body: Option<ExprId>,
+    /// The assignment target for `for`; absent for `while` and `until`.
+    pub index: Option<AssignTarget>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

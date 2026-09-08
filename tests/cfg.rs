@@ -387,7 +387,7 @@ fn closes_returning_blocks_without_lowering_following_sequence_into_them() {
 
 #[test]
 fn records_unsupported_handoffs_without_hiding_nested_operations() {
-    let graph = cfg("for item in values\n  item.to_s\nend");
+    let graph = cfg("for (left, right) in values\n  left.to_s\nend");
     assert!(!graph.unsupported_spans.is_empty());
     assert!(operations(&graph).iter().any(|operation| {
         matches!(&operation.kind, OperationKind::Call { name, .. } if name.as_str() == "to_s")

@@ -291,8 +291,8 @@ end
 #[test]
 fn keeps_executable_children_owned_by_unsupported_parents() {
     let program = expressions(
-        r#"for item in values
-  item.to_s
+        r#"for (left, right) in values
+  left.to_s
 end
 "#,
     );

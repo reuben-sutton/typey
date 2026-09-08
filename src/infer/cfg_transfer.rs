@@ -327,6 +327,30 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         }
     }
 
+    fn transfer_for_target(
+        analyzer: &mut Analyzer<'src>,
+        site: SourceSite,
+        target: &hir::AssignTarget,
+        element_type: Type,
+        environment: &mut Environment,
+    ) -> Option<Type> {
+        let place = match target {
+            hir::AssignTarget::Local(local) => cfg::Place::Local(*local),
+            hir::AssignTarget::InstanceVariable(name) => cfg::Place::InstanceVariable(name.clone()),
+            hir::AssignTarget::ClassVariable(name) => cfg::Place::ClassVariable(name.clone()),
+            hir::AssignTarget::Global(name) => cfg::Place::Global(name.clone()),
+            hir::AssignTarget::Constant(path) => cfg::Place::Constant(path.clone()),
+            hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. } => return None,
+        };
+        Some(Self::transfer_write(
+            analyzer,
+            site,
+            &place,
+            element_type,
+            environment,
+        ))
+    }
+
     fn transfer_call(
         analyzer: &mut Analyzer<'src>,
         input: OwnedCallInput,
@@ -644,6 +668,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 !source.meet(&Type::Nil).is_never(),
                 !source.without(&Type::Nil).is_never(),
             ),
+            cfg::Pattern::Iteration => (true, true),
             cfg::Pattern::Case {
                 condition: condition_id,
                 expression,
@@ -818,6 +843,20 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         .ok_or_else(|| format!("missing write operand {:?}", value))?;
                     Self::transfer_write(self.analyzer, site, place, actual, &mut next.environment)
                 }
+                cfg::OperationKind::BindForTarget { collection, target } => {
+                    let collection_type = next.value(*collection).ok_or_else(|| {
+                        format!("missing for collection operand {:?}", collection)
+                    })?;
+                    let element_type = self.analyzer.array_element_type(&collection_type);
+                    Self::transfer_for_target(
+                        self.analyzer,
+                        site,
+                        target,
+                        element_type,
+                        &mut next.environment,
+                    )
+                    .ok_or_else(|| format!("unsupported for target at {:?}", operation.span))?
+                }
                 cfg::OperationKind::Call { .. } => {
                     let result = Self::transfer_call(
                         self.analyzer,
@@ -908,7 +947,9 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
             if !self.suppress_internal_assignment_record(operation)
                 && !matches!(
                     operation.kind,
-                    cfg::OperationKind::PatternTest { .. } | cfg::OperationKind::Record { .. }
+                    cfg::OperationKind::PatternTest { .. }
+                        | cfg::OperationKind::Record { .. }
+                        | cfg::OperationKind::BindForTarget { .. }
                 )
             {
                 if matches!(operation.kind, cfg::OperationKind::Call { .. }) {
@@ -1608,6 +1649,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::BuildHash { .. }
                         | cfg::OperationKind::Record { .. }
                         | cfg::OperationKind::PatternTest { .. }
+                        | cfg::OperationKind::BindForTarget { .. }
                 )
             })
         }) {

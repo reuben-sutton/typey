@@ -28,6 +28,7 @@ pub(super) fn narrow_pattern_value(
                 source.falsy_part()
             }
         }
+        cfg::Pattern::Iteration => source,
         cfg::Pattern::Case {
             condition,
             expression,

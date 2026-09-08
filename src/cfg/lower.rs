@@ -1172,6 +1172,19 @@ impl<'program> Builder<'program> {
         span: Span,
         loop_expr: LoopExpr,
     ) -> Flow {
+        if loop_expr.kind == LoopKind::For {
+            let index = loop_expr
+                .index
+                .expect("for loops have an owned assignment target");
+            return self.lower_for_loop(
+                expression,
+                block,
+                span,
+                loop_expr.condition,
+                loop_expr.body,
+                index,
+            );
+        }
         let header = self.new_block_like(block);
         let condition = self.new_block_like(header);
         let body = self.new_block_like(header);
@@ -1255,6 +1268,117 @@ impl<'program> Builder<'program> {
             normal_exit,
             exit,
             vec![normal.expect("loop exit produces a value")],
+        );
+        self.normal(expression, exit, Some(exit_value))
+    }
+
+    fn lower_for_loop(
+        &mut self,
+        expression: ExprId,
+        block: BlockId,
+        span: Span,
+        collection: ExprId,
+        body_expression: Option<ExprId>,
+        index: AssignTarget,
+    ) -> Flow {
+        let collection_flow = self.lower_expr(collection, block);
+        if !collection_flow.reachable {
+            return self.abrupt(expression, collection_flow.block);
+        }
+        let collection_value = collection_flow.value.expect("for collection value");
+        let header = self.new_block_like(collection_flow.block);
+        let body = self.new_block_like(header);
+        let normal_exit = self.new_block_like(header);
+        let exit = self.new_block_like(header);
+        let exit_value = self.add_parameter(exit);
+        // `next` carries its expression value into this parameter, while the
+        // collection itself remains an immutable CFG value captured by the
+        // loop body.
+        let _next_value = self.add_parameter(header);
+        let seed = self.emit(
+            collection_flow.block,
+            span,
+            OperationKind::Const {
+                value: hir::Literal::Nil,
+            },
+            true,
+        );
+        self.jump(
+            collection_flow.block,
+            header,
+            vec![seed.expect("for loop header seed produces a value")],
+        );
+        let iteration = self.emit(
+            header,
+            span,
+            OperationKind::PatternTest {
+                value: collection_value,
+                pattern: Pattern::Iteration,
+            },
+            true,
+        );
+        self.branch(
+            header,
+            iteration.expect("for iteration test produces a value"),
+            body,
+            normal_exit,
+        );
+
+        self.loops.push(LoopContext {
+            break_target: exit,
+            next_target: header,
+        });
+        let _ = self.emit(
+            body,
+            span,
+            OperationKind::BindForTarget {
+                collection: collection_value,
+                target: index,
+            },
+            false,
+        );
+        let body_flow = match body_expression {
+            Some(body_expression) => self.lower_expr(body_expression, body),
+            None => {
+                let nil = self.emit(
+                    body,
+                    span,
+                    OperationKind::Const {
+                        value: hir::Literal::Nil,
+                    },
+                    true,
+                );
+                self.normal(expression, body, nil)
+            }
+        };
+        self.loops.pop();
+        if body_flow.reachable {
+            let seed = self.emit(
+                body_flow.block,
+                span,
+                OperationKind::Const {
+                    value: hir::Literal::Nil,
+                },
+                true,
+            );
+            self.jump(
+                body_flow.block,
+                header,
+                vec![seed.expect("for loop back-edge seed produces a value")],
+            );
+        }
+        let normal = self.emit(
+            normal_exit,
+            span,
+            OperationKind::Const {
+                value: hir::Literal::Nil,
+            },
+            true,
+        );
+        self.jump(
+            normal_exit,
+            exit,
+            vec![normal.expect("for loop exit produces a value")],
         );
         self.normal(expression, exit, Some(exit_value))
     }

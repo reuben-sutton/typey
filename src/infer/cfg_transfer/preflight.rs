@@ -161,15 +161,30 @@ fn expr_can_transfer(
         }),
         ExprKind::Retry => true,
         ExprKind::Loop(loop_expr) => {
-            expr_can_transfer(
-                program,
-                loop_expr.condition,
-                visiting,
-                loop_depth,
-                local_return,
-            ) && loop_expr.body.is_none_or(|body| {
-                expr_can_transfer(program, body, visiting, loop_depth + 1, local_return)
-            })
+            let target_supported = match loop_expr.kind {
+                hir::LoopKind::For => loop_expr.index.as_ref().is_some_and(|target| {
+                    matches!(
+                        target,
+                        hir::AssignTarget::Local(_)
+                            | hir::AssignTarget::InstanceVariable(_)
+                            | hir::AssignTarget::ClassVariable(_)
+                            | hir::AssignTarget::Global(_)
+                            | hir::AssignTarget::Constant(_)
+                    )
+                }),
+                hir::LoopKind::While | hir::LoopKind::Until => loop_expr.index.is_none(),
+            };
+            target_supported
+                && expr_can_transfer(
+                    program,
+                    loop_expr.condition,
+                    visiting,
+                    loop_depth,
+                    local_return,
+                )
+                && loop_expr.body.is_none_or(|body| {
+                    expr_can_transfer(program, body, visiting, loop_depth + 1, local_return)
+                })
         }
         ExprKind::Case(case) => {
             case.scrutinee.is_none_or(|scrutinee| {

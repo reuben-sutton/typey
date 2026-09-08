@@ -134,6 +134,9 @@ The first modularization steps are now in place:
 * ordinary `while`/`until` bodies now pass CFG preflight, including local
   value-carrying `break` and `next`; non-local block outcomes remain explicitly
   deferred until the outcome state records their enclosing-expression type;
+* simple `for` loops now lower collection iteration and target binding into
+  owned CFG operations, preserving the zero-iteration path; unsupported
+  multi-target forms remain explicit preflight fallbacks;
 * Prism `case` nodes now lower into owned `CaseExpr`/`CaseArm` HIR and transfer
   through the generic CFG path; ordinary value comparisons retain both match
   and no-match paths, while class, `nil`, `true`, and `false` cases perform

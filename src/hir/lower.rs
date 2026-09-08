@@ -686,6 +686,24 @@ impl<'src> Lowerer<'src> {
         if node.as_retry_node().is_some() {
             return self.push_expr(node, ExprKind::Retry);
         }
+        if let Some(for_node) = node.as_for_node() {
+            let Some(index) = self.lower_for_target(&for_node.index()) else {
+                return self.unsupported(node);
+            };
+            let condition = self.lower_node(&for_node.collection());
+            let body = for_node
+                .statements()
+                .map(|body| self.lower_node(&body.as_node()));
+            return self.push_expr(
+                node,
+                ExprKind::Loop(LoopExpr {
+                    kind: LoopKind::For,
+                    condition,
+                    body,
+                    index: Some(index),
+                }),
+            );
+        }
         if let Some(while_node) = node.as_while_node() {
             let condition = self.lower_node(&while_node.predicate());
             let body = while_node
@@ -697,6 +715,7 @@ impl<'src> Lowerer<'src> {
                     kind: LoopKind::While,
                     condition,
                     body,
+                    index: None,
                 }),
             );
         }
@@ -711,6 +730,7 @@ impl<'src> Lowerer<'src> {
                     kind: LoopKind::Until,
                     condition,
                     body,
+                    index: None,
                 }),
             );
         }
@@ -819,6 +839,45 @@ impl<'src> Lowerer<'src> {
         }
 
         self.unsupported(node)
+    }
+
+    fn lower_for_target(&mut self, node: &Node<'_>) -> Option<AssignTarget> {
+        if let Some(target) = node.as_local_variable_target_node() {
+            return Some(AssignTarget::Local(
+                self.local(&prism::constant_name(target.name())),
+            ));
+        }
+        if let Some(write) = node.as_local_variable_write_node() {
+            return Some(AssignTarget::Local(
+                self.local(&prism::constant_name(write.name())),
+            ));
+        }
+        if let Some(target) = node.as_instance_variable_target_node() {
+            return Some(AssignTarget::InstanceVariable(Name::new(
+                prism::constant_name(target.name()),
+            )));
+        }
+        if let Some(target) = node.as_class_variable_target_node() {
+            return Some(AssignTarget::ClassVariable(Name::new(
+                prism::constant_name(target.name()),
+            )));
+        }
+        if let Some(target) = node.as_global_variable_target_node() {
+            return Some(AssignTarget::Global(Name::new(prism::constant_name(
+                target.name(),
+            ))));
+        }
+        if let Some(target) = node.as_constant_target_node() {
+            return Some(AssignTarget::Constant(ConstantPath::new(
+                prism::constant_name(target.name()),
+            )));
+        }
+        if let Some(target) = node.as_constant_path_target_node() {
+            return Some(AssignTarget::Constant(ConstantPath::new(
+                self.text(&target.as_node()),
+            )));
+        }
+        None
     }
 
     fn lower_case(&mut self, node: &Node<'_>, case_node: &ruby_prism::CaseNode<'_>) -> ExprId {

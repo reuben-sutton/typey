@@ -144,6 +144,12 @@ pub enum OperationKind {
         value: ValueId,
         pattern: Pattern,
     },
+    /// Bind one iteration element to an owned `for` target before the loop
+    /// body executes.
+    BindForTarget {
+        collection: ValueId,
+        target: hir::AssignTarget,
+    },
     /// Transitional handoff for HIR variants that do not have a CFG lowering
     /// yet. It has a source span and an explicit result, but no concrete
     /// interpretation.
@@ -200,6 +206,9 @@ pub enum HashOperand {
 pub enum Pattern {
     Truthy,
     Nil,
+    /// A collection iteration has both a zero-iteration and a body path,
+    /// even when the collection's Ruby truthiness is known.
+    Iteration,
     Case {
         condition: ValueId,
         expression: ExprId,
