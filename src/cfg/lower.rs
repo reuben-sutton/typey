@@ -129,6 +129,7 @@ struct Builder<'program> {
     loops: Vec<LoopContext>,
     rescues: Vec<RescueContext>,
     retain_expression_values: bool,
+    current_expression: Option<ExprId>,
 }
 
 impl<'program> Builder<'program> {
@@ -156,6 +157,7 @@ impl<'program> Builder<'program> {
             loops: Vec::new(),
             rescues: Vec::new(),
             retain_expression_values,
+            current_expression: None,
         }
     }
 
@@ -229,8 +231,10 @@ impl<'program> Builder<'program> {
             .operations
             .push(Operation {
                 span,
-                expression: self.expressions_by_span.and_then(|expressions_by_span| {
-                    expressions_by_span.get(&(span.start, span.end)).copied()
+                expression: self.current_expression.or_else(|| {
+                    self.expressions_by_span.and_then(|expressions_by_span| {
+                        expressions_by_span.get(&(span.start, span.end)).copied()
+                    })
                 }),
                 result: value,
                 kind,
@@ -312,7 +316,8 @@ impl<'program> Builder<'program> {
             .unwrap_or_else(|| panic!("HIR expression {:?} does not exist", expression));
         let span = expr.span;
         let kind = expr.kind.clone();
-        match kind {
+        let previous_expression = self.current_expression.replace(expression);
+        let flow = match kind {
             ExprKind::Nil => self.lower_literal(expression, block, span, hir::Literal::Nil),
             ExprKind::Literal(literal) => self.lower_literal(expression, block, span, literal),
             ExprKind::Read(read) => self.lower_read(expression, block, span, read),
@@ -373,7 +378,9 @@ impl<'program> Builder<'program> {
                 }
                 flow
             }
-        }
+        };
+        self.current_expression = previous_expression;
+        flow
     }
 
     fn lower_literal(

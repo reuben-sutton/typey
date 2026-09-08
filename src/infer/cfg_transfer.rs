@@ -51,6 +51,10 @@ pub(super) struct BlockState {
     values: Vec<Option<Type>>,
     environment: Environment,
     flow: Flow,
+    /// The exception currently being routed through an unwind edge. A
+    /// rescue handler consumes this fact on its matching branch; an
+    /// unmatched branch keeps it until the next handler or outer unwind.
+    pending_exception: Option<Type>,
 }
 
 impl BlockState {
@@ -59,6 +63,7 @@ impl BlockState {
             values,
             environment,
             flow,
+            pending_exception: None,
         }
     }
 
@@ -79,10 +84,16 @@ impl BlockState {
                 },
             )
             .collect();
+        let pending_exception = match (&self.pending_exception, &other.pending_exception) {
+            (Some(left), Some(right)) => Some(left.join(right)),
+            (Some(exception), None) | (None, Some(exception)) => Some(exception.clone()),
+            (None, None) => None,
+        };
         Self {
             values,
             environment,
             flow: self.flow.union(other.flow),
+            pending_exception,
         }
     }
 
@@ -96,6 +107,19 @@ impl BlockState {
             self.values.resize(index + 1, None);
         }
         self.values[index] = Some(type_);
+    }
+
+    fn route_exception(&mut self, exception: Type) {
+        self.pending_exception = Some(exception);
+        self.flow = Flow::abrupt(FlowKind::Raise);
+    }
+
+    fn handle_exception(&mut self) {
+        self.pending_exception = None;
+        self.flow = self.flow.without(FlowKind::Raise);
+        if self.flow.is_empty() {
+            self.flow = Flow::normal();
+        }
     }
 }
 
@@ -206,12 +230,22 @@ fn expr_can_transfer(
             .closure(*closure)
             .and_then(|closure| program.body(closure.body))
             .is_some_and(|body| expr_can_transfer(program, body.root, visiting)),
-        ExprKind::Begin(begin)
-            if begin.rescue.is_empty() && begin.else_body.is_none() && begin.ensure.is_none() =>
-        {
+        ExprKind::Begin(begin) if begin.ensure.is_none() => {
             begin
                 .body
                 .is_none_or(|body| expr_can_transfer(program, body, visiting))
+                && begin
+                    .else_body
+                    .is_none_or(|body| expr_can_transfer(program, body, visiting))
+                && begin.rescue.iter().all(|clause| {
+                    clause
+                        .exceptions
+                        .iter()
+                        .all(|exception| expr_can_transfer(program, *exception, visiting))
+                        && clause
+                            .body
+                            .is_none_or(|body| expr_can_transfer(program, body, visiting))
+                })
         }
         ExprKind::Assign {
             target,
@@ -324,6 +358,7 @@ struct ForTransfer<'analyzer, 'src, 'node, 'nodes> {
 }
 
 fn narrow_pattern_value(
+    analyzer: &Analyzer<'_>,
     state: &mut BlockState,
     value: cfg::ValueId,
     pattern: &cfg::Pattern,
@@ -347,7 +382,15 @@ fn narrow_pattern_value(
                 source.falsy_part()
             }
         }
-        cfg::Pattern::Case { .. } => return,
+        cfg::Pattern::Case { condition, .. } => {
+            let condition = state.value(*condition).unwrap_or(Type::Any);
+            let expected = Analyzer::class_object_value_type(&condition).unwrap_or(condition);
+            if truthy {
+                analyzer.meet_predicate_type(&source, &expected)
+            } else {
+                source.without(&expected)
+            }
+        }
     };
     state.set_value(value, narrowed);
 }
@@ -507,7 +550,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             }
         }
         let body_result =
-            analyzer.eval_cfg_body(closure_node, body_id, &mut closure_environment)?;
+            analyzer.eval_cfg_body(closure_node, body_id, &mut closure_environment, false)?;
         Some(Type::Proc(signature.params, Box::new(body_result.type_)))
     }
 
@@ -894,7 +937,12 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         ))
     }
 
-    fn pattern_reachability(pattern: &cfg::Pattern, source: &Type) -> Option<(bool, bool, Type)> {
+    fn pattern_reachability(
+        &self,
+        pattern: &cfg::Pattern,
+        source: &Type,
+        state: &BlockState,
+    ) -> Option<(bool, bool, Type)> {
         let (truthy, falsy) = match pattern {
             cfg::Pattern::Truthy => (
                 !source.truthy_part().is_never(),
@@ -904,7 +952,11 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 !source.meet(&Type::Nil).is_never(),
                 !source.without(&Type::Nil).is_never(),
             ),
-            cfg::Pattern::Case { .. } => return None,
+            cfg::Pattern::Case { condition, .. } => {
+                let condition = state.value(*condition).unwrap_or(Type::Any);
+                let expected = Analyzer::class_object_value_type(&condition).unwrap_or(condition);
+                self.case_match_reachability(source, &expected)
+            }
         };
         let test_type = match (truthy, falsy) {
             (true, true) => Type::union([Type::True, Type::False]),
@@ -913,6 +965,32 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             (false, false) => Type::Never,
         };
         Some((truthy, falsy, test_type))
+    }
+
+    fn case_match_reachability(&self, source: &Type, expected: &Type) -> (bool, bool) {
+        if source.is_any() || expected.is_any() {
+            return (true, true);
+        }
+        if let Type::Union(members) = source {
+            return members
+                .iter()
+                .fold((false, false), |(truthy, falsy), member| {
+                    let (member_truthy, member_falsy) =
+                        self.case_match_reachability(member, expected);
+                    (truthy || member_truthy, falsy || member_falsy)
+                });
+        }
+        if self.analyzer.is_assignable(source, expected) {
+            (true, false)
+        } else if self.analyzer.is_assignable(expected, source)
+            || !self
+                .analyzer
+                .definitely_disjoint_class_types(source, expected)
+        {
+            (true, true)
+        } else {
+            (false, true)
+        }
     }
 
     fn truthiness_reachability(source: &Type) -> (bool, bool) {
@@ -937,11 +1015,34 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         self.analyzer
             .narrow_cfg_predicate(conditional.condition, environment, truthy);
     }
+
+    fn exception_edge(
+        &self,
+        graph: &cfg::Cfg,
+        block: &cfg::BasicBlock,
+        mut state: BlockState,
+        exception: Type,
+    ) -> Option<cfg::transfer::TransferEdge<BlockState>> {
+        let target = block.unwind?;
+        let target_block = graph.block(target)?;
+        if let Some(parameter) = target_block.parameters.first() {
+            state.set_value(parameter.value, exception.clone());
+        }
+        state.route_exception(exception);
+        Some(cfg::transfer::TransferEdge { target, state })
+    }
+
+    fn is_rescue_entry(graph: &cfg::Cfg, block: cfg::BlockId) -> bool {
+        graph
+            .blocks
+            .iter()
+            .any(|candidate| candidate.unwind == Some(block))
+    }
 }
 
 impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src, 'node> {
     type State = BlockState;
-    type Error = ();
+    type Error = String;
 
     fn transfer_block(
         &mut self,
@@ -952,6 +1053,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
         debug_assert_eq!(graph.body, self.context.body);
         let _strictness = self.context.strictness;
         let mut next = state.clone();
+        let mut exception_edges = Vec::new();
         let nodes = self.nodes;
         for operation in &block.operations {
             let site = SourceSite::from_span(operation.span, operation.expression);
@@ -975,30 +1077,54 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                         .transfer_cfg_read_at(site, read.clone(), &mut next.environment)
                 }
                 cfg::OperationKind::Write { place, value } => {
-                    let actual = next.value(*value).ok_or(())?;
+                    let actual = next
+                        .value(*value)
+                        .ok_or_else(|| format!("missing write operand {:?}", value))?;
                     Self::transfer_write(self.analyzer, site, place, actual, &mut next.environment)
                 }
                 cfg::OperationKind::Call { .. } => {
                     let node = nodes
                         .nodes
                         .get(&(operation.span.start as usize, operation.span.end as usize))
-                        .ok_or(())?;
+                        .ok_or_else(|| {
+                            format!("missing call Prism node at {:?}", operation.span)
+                        })?;
                     let result = Self::transfer_call(
                         self.analyzer,
                         node,
-                        OwnedCallInput::from_operation(operation).ok_or(())?,
+                        OwnedCallInput::from_operation(operation).ok_or_else(|| {
+                            format!("missing owned call input at {:?}", operation.span)
+                        })?,
                         &next.values,
                         &self.fixed_array_elements,
                         &mut next.environment,
                     )
-                    .ok_or(())?;
-                    self.abrupt = self.abrupt.join(&result.abrupt);
+                    .ok_or_else(|| format!("call transfer failed at {:?}", operation.span))?;
+                    if result.flow.contains(FlowKind::Raise) {
+                        let exception = if result.abrupt.raise_type.is_never() {
+                            Type::named("StandardError")
+                        } else {
+                            result.abrupt.raise_type.clone()
+                        };
+                        if let Some(edge) =
+                            self.exception_edge(graph, block, next.clone(), exception.clone())
+                        {
+                            exception_edges.push(edge);
+                        } else {
+                            self.abrupt = self
+                                .abrupt
+                                .join(&OutcomeTypes::for_kind(FlowKind::Raise, exception));
+                            self.terminal_flow =
+                                self.terminal_flow.union(Flow::abrupt(FlowKind::Raise));
+                        }
+                    }
                     if !result.flow.contains(FlowKind::Normal) {
                         self.analyzer.record(node, result.type_.clone());
-                        return Ok(Vec::new());
+                        return Ok(exception_edges);
                     }
-                    next.flow = next.flow.union(result.flow.without(FlowKind::Normal));
-                    result.normal_type.ok_or(())?
+                    result.normal_type.ok_or_else(|| {
+                        format!("call has no normal result at {:?}", operation.span)
+                    })?
                 }
                 cfg::OperationKind::BuildArray { elements } => Self::transfer_array(
                     self.analyzer,
@@ -1010,7 +1136,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                         .is_some_and(|result| self.fixed_array_elements.contains_key(&result)),
                     &mut next.environment,
                 )
-                .ok_or(())?,
+                .ok_or_else(|| format!("array transfer failed at {:?}", operation.span))?,
                 cfg::OperationKind::BuildHash { elements } => Self::transfer_hash(
                     self.analyzer,
                     site,
@@ -1018,32 +1144,35 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     &next.values,
                     &mut next.environment,
                 )
-                .ok_or(())?,
+                .ok_or_else(|| format!("hash transfer failed at {:?}", operation.span))?,
                 cfg::OperationKind::PatternTest { value, pattern } => {
-                    let source = next.value(*value).ok_or(())?;
-                    let (_, _, type_) = Self::pattern_reachability(pattern, &source).ok_or(())?;
+                    let source = next
+                        .value(*value)
+                        .ok_or_else(|| format!("missing pattern operand {:?}", value))?;
+                    let (_, _, type_) = self
+                        .pattern_reachability(pattern, &source, &next)
+                        .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
                     type_
                 }
                 cfg::OperationKind::MakeClosure { closure } => {
                     let node = nodes
                         .nodes
                         .get(&(operation.span.start as usize, operation.span.end as usize))
-                        .ok_or(())?;
+                        .ok_or_else(|| {
+                            format!("missing call Prism node at {:?}", operation.span)
+                        })?;
                     Self::transfer_closure(self.analyzer, *closure, node, &next.environment)
-                        .ok_or(())?
+                        .ok_or_else(|| format!("closure transfer failed at {:?}", operation.span))?
                 }
-                _ => return Err(()),
+                _ => return Err(format!("unsupported CFG operation at {:?}", operation.span)),
             };
             if let Some(result) = operation.result {
                 next.set_value(result, type_.clone());
             }
             if !matches!(operation.kind, cfg::OperationKind::PatternTest { .. }) {
                 if matches!(operation.kind, cfg::OperationKind::Call { .. }) {
-                    let node = nodes
-                        .nodes
-                        .get(&(operation.span.start as usize, operation.span.end as usize))
-                        .ok_or(())?;
-                    self.analyzer.record(node, type_);
+                    self.analyzer
+                        .record_at(site, type_, self.analyzer.report, None);
                 } else {
                     self.analyzer.record_at(site, type_, false, None);
                 }
@@ -1053,9 +1182,16 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
         let edge = |target, state| cfg::transfer::TransferEdge { target, state };
         match &block.terminator {
             cfg::Terminator::Jump { target, arguments } => {
-                let target_block = graph.block(*target).ok_or(())?;
+                if next.pending_exception.is_some() && Self::is_rescue_entry(graph, block.id) {
+                    next.handle_exception();
+                }
+                let target_block = graph
+                    .block(*target)
+                    .ok_or_else(|| format!("missing jump target {:?}", target))?;
                 for (parameter, argument) in target_block.parameters.iter().zip(arguments) {
-                    let type_ = next.value(*argument).ok_or(())?;
+                    let type_ = next
+                        .value(*argument)
+                        .ok_or_else(|| format!("missing jump operand {:?}", argument))?;
                     next.set_value(parameter.value, type_);
                 }
                 Ok(vec![edge(*target, next)])
@@ -1091,10 +1227,13 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                             _ => None,
                         });
                 let (source_id, pattern) = pattern.unwrap_or((None, None));
-                let source = next.value(source_id.unwrap_or(*condition)).ok_or(())?;
+                let source = next
+                    .value(source_id.unwrap_or(*condition))
+                    .ok_or_else(|| format!("missing branch operand {:?}", condition))?;
                 let (truthy_reachable, falsy_reachable) = if let Some(pattern) = pattern {
-                    let (truthy, falsy, _) =
-                        Self::pattern_reachability(pattern, &source).ok_or(())?;
+                    let (truthy, falsy, _) = self
+                        .pattern_reachability(pattern, &source, &next)
+                        .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
                     (truthy, falsy)
                 } else {
                     Self::truthiness_reachability(&source)
@@ -1110,12 +1249,13 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                             &mut state.environment,
                         );
                     } else if let Some(source_id) = source_id {
-                        narrow_pattern_value(
-                            &mut state,
-                            source_id,
-                            pattern.expect("pattern was present"),
-                            true,
-                        );
+                        let pattern = pattern.expect("pattern was present");
+                        narrow_pattern_value(self.analyzer, &mut state, source_id, pattern, true);
+                        if state.pending_exception.is_some()
+                            && matches!(pattern, cfg::Pattern::Case { .. })
+                        {
+                            state.handle_exception();
+                        }
                     }
                     edges.push(edge(*truthy, state));
                 }
@@ -1129,18 +1269,27 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                             &mut state.environment,
                         );
                     } else if let Some(source_id) = source_id {
-                        narrow_pattern_value(
-                            &mut state,
-                            source_id,
-                            pattern.expect("pattern was present"),
-                            false,
-                        );
+                        let pattern = pattern.expect("pattern was present");
+                        narrow_pattern_value(self.analyzer, &mut state, source_id, pattern, false);
                     }
                     edges.push(edge(*falsy, state));
                 }
                 Ok(edges)
             }
-            cfg::Terminator::Raise(_) => Err(()),
+            cfg::Terminator::Raise(value) => {
+                let exception = next
+                    .value(*value)
+                    .unwrap_or_else(|| Type::named("StandardError"));
+                if let Some(edge) = self.exception_edge(graph, block, next, exception.clone()) {
+                    exception_edges.push(edge);
+                } else {
+                    self.abrupt = self
+                        .abrupt
+                        .join(&OutcomeTypes::for_kind(FlowKind::Raise, exception));
+                    self.terminal_flow = self.terminal_flow.union(Flow::abrupt(FlowKind::Raise));
+                }
+                Ok(exception_edges)
+            }
         }
     }
 
@@ -1517,6 +1666,7 @@ impl<'src> Analyzer<'src> {
         body_node: &Node<'node>,
         body_id: hir::BodyId,
         environment: &mut Environment,
+        record_result: bool,
     ) -> Option<Eval> {
         if !body_can_transfer(&self.hir_program, body_id) {
             return None;
@@ -1566,38 +1716,35 @@ impl<'src> Analyzer<'src> {
         let mut nodes = SpanNodeIndex::default();
         nodes.visit(body_node);
         if graph.blocks.iter().any(|block| {
-            block.unwind.is_some()
-                || block.operations.iter().any(|operation| {
-                    matches!(
-                        operation.kind,
-                        cfg::OperationKind::Const { .. }
-                            | cfg::OperationKind::Read { .. }
-                            | cfg::OperationKind::ReadSpecial { .. }
-                            | cfg::OperationKind::Write { .. }
-                            | cfg::OperationKind::Call { .. }
-                            | cfg::OperationKind::MakeClosure { .. }
-                            | cfg::OperationKind::BuildArray { .. }
-                            | cfg::OperationKind::BuildHash { .. }
-                            | cfg::OperationKind::PatternTest { .. }
-                    ) && !nodes
-                        .nodes
-                        .contains_key(&(operation.span.start as usize, operation.span.end as usize))
-                })
-                || block.operations.iter().any(|operation| {
-                    !matches!(
-                        operation.kind,
-                        cfg::OperationKind::Const { .. }
-                            | cfg::OperationKind::Read { .. }
-                            | cfg::OperationKind::ReadSpecial { .. }
-                            | cfg::OperationKind::Write { .. }
-                            | cfg::OperationKind::Call { .. }
-                            | cfg::OperationKind::MakeClosure { .. }
-                            | cfg::OperationKind::BuildArray { .. }
-                            | cfg::OperationKind::BuildHash { .. }
-                            | cfg::OperationKind::PatternTest { .. }
-                    )
-                })
-                || matches!(block.terminator, cfg::Terminator::Raise(_))
+            block.operations.iter().any(|operation| {
+                matches!(
+                    operation.kind,
+                    cfg::OperationKind::Const { .. }
+                        | cfg::OperationKind::Read { .. }
+                        | cfg::OperationKind::ReadSpecial { .. }
+                        | cfg::OperationKind::Write { .. }
+                        | cfg::OperationKind::Call { .. }
+                        | cfg::OperationKind::MakeClosure { .. }
+                        | cfg::OperationKind::BuildArray { .. }
+                        | cfg::OperationKind::BuildHash { .. }
+                        | cfg::OperationKind::PatternTest { .. }
+                ) && !nodes
+                    .nodes
+                    .contains_key(&(operation.span.start as usize, operation.span.end as usize))
+            }) || block.operations.iter().any(|operation| {
+                !matches!(
+                    operation.kind,
+                    cfg::OperationKind::Const { .. }
+                        | cfg::OperationKind::Read { .. }
+                        | cfg::OperationKind::ReadSpecial { .. }
+                        | cfg::OperationKind::Write { .. }
+                        | cfg::OperationKind::Call { .. }
+                        | cfg::OperationKind::MakeClosure { .. }
+                        | cfg::OperationKind::BuildArray { .. }
+                        | cfg::OperationKind::BuildHash { .. }
+                        | cfg::OperationKind::PatternTest { .. }
+                )
+            })
         }) {
             return None;
         }
@@ -1635,7 +1782,9 @@ impl<'src> Analyzer<'src> {
             abrupt,
             Flow::normal().union(terminal_flow),
         );
-        result.type_ = self.record(body_node, result.type_.clone());
+        if record_result {
+            result.type_ = self.record(body_node, result.type_.clone());
+        }
         Some(result)
     }
 

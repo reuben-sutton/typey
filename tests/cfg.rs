@@ -288,6 +288,28 @@ fn lowers_rescue_and_ensure_with_unwind_and_handler_blocks() {
 }
 
 #[test]
+fn preserves_owned_call_identity_inside_rescue_sequences() {
+    let source = "begin\n  raise \"boom\"\nrescue StandardError\n  \"recovered\"\nend";
+    let program = lower(FileId(3), source.as_bytes());
+    let body = program.root.expect("lowered root body");
+    let graph = build(&program, body);
+    let raise = operations(&graph)
+        .into_iter()
+        .find(|operation| {
+            matches!(
+                &operation.kind,
+                OperationKind::Call { name, .. } if name.as_str() == "raise"
+            )
+        })
+        .expect("raise call operation");
+    let expression = raise.expression.expect("owned call expression");
+    assert!(matches!(
+        program.expression(expression).expect("HIR expression").kind,
+        ExprKind::Call(_)
+    ));
+}
+
+#[test]
 fn lowers_rescue_reference_retry_and_ensure_edges() {
     let graph = cfg(
         "begin\n  risky\nrescue StandardError => error\n  retry\nensure\n  cleanup(error)\nend",
