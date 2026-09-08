@@ -169,6 +169,9 @@ The first modularization steps are now in place:
 * owned value construction, reads, literals, and predicate narrowing now live
   in `infer/cfg_transfer/value.rs`; `patterns.rs` and `preflight.rs` use
   explicit imports instead of inheriting the coordinator's namespace.
+* direct owned storage assignment transfer now lives in
+  `infer/cfg_transfer/assignment.rs`; the coordinator is limited to call
+  bridging, fallback telemetry, and dispatch-level routing.
 * the owned-body eligibility walk now lives in `infer/cfg_transfer/preflight.rs`;
   it is a parser-free HIR capability check separate from transfer state and
   inference results.
