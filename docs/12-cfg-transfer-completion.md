@@ -97,6 +97,9 @@ The first modularization steps are now in place:
 * `infer/method_lookup.rs` owns receiver/implicit method-key construction,
   ancestor and alias lookup, initializer/struct-constructor support, method
   dependencies, and recursive-call widening;
+* `infer/shared_state.rs` owns inferred ivar, constant, class-variable, and
+  global storage, including shared-read tracking and the lookup rules used by
+  both recursive and CFG evaluation;
 * `infer/legacy_eval.rs` owns the recursive Prism evaluator's expression and
   assignment dispatch, leaving the main inference host responsible for
   orchestration and shared state rather than syntax dispatch;
