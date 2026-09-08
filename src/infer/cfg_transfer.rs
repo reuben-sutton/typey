@@ -6,6 +6,7 @@ use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
 use crate::prism;
 use crate::types::Type;
 use ruby_prism::{IfNode, Node};
+use std::sync::OnceLock;
 
 /// The inference-side state at a CFG block boundary.
 ///
@@ -50,6 +51,197 @@ impl BlockState {
             environment,
             flow: self.flow.union(other.flow),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConditionalState {
+    block: BlockState,
+    result: Eval,
+    path_reachable: bool,
+}
+
+struct ConditionalTransfer<'analyzer, 'src, 'node, 'nodes> {
+    analyzer: &'analyzer mut Analyzer<'src>,
+    predicate: &'nodes Node<'node>,
+    then_node: Option<&'nodes Node<'node>>,
+    subsequent: Option<&'nodes Node<'node>>,
+    then_first: Option<&'nodes Node<'node>>,
+    else_first: Option<&'nodes Node<'node>>,
+    then_reachable: bool,
+    else_reachable: bool,
+    report_unreachable: bool,
+}
+
+fn conditional_graph() -> &'static cfg::Cfg {
+    static GRAPH: OnceLock<cfg::Cfg> = OnceLock::new();
+    GRAPH.get_or_init(|| cfg::Cfg {
+        body: hir::BodyId(0),
+        entry: cfg::BlockId(0),
+        blocks: vec![
+            cfg::BasicBlock {
+                id: cfg::BlockId(0),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Branch {
+                    condition: cfg::ValueId(0),
+                    truthy: cfg::BlockId(1),
+                    falsy: cfg::BlockId(2),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(1),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Jump {
+                    target: cfg::BlockId(3),
+                    arguments: Vec::new(),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(2),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Jump {
+                    target: cfg::BlockId(3),
+                    arguments: Vec::new(),
+                },
+                unwind: None,
+            },
+            cfg::BasicBlock {
+                id: cfg::BlockId(3),
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: cfg::Terminator::Return(None),
+                unwind: None,
+            },
+        ],
+        conditionals: Vec::new(),
+        unsupported_spans: Vec::new(),
+        expression_values: Vec::new(),
+    })
+}
+
+impl<'analyzer, 'src, 'node, 'nodes> cfg::transfer::BlockTransfer
+    for ConditionalTransfer<'analyzer, 'src, 'node, 'nodes>
+{
+    type State = ConditionalState;
+    type Error = ();
+
+    fn transfer_block(
+        &mut self,
+        _cfg: &cfg::Cfg,
+        block: &cfg::BasicBlock,
+        state: &Self::State,
+    ) -> Result<Vec<cfg::transfer::TransferEdge<Self::State>>, Self::Error> {
+        let edge = |target, state| cfg::transfer::TransferEdge { target, state };
+        Ok(match block.id {
+            cfg::BlockId(0) => {
+                let mut then_environment = state.block.environment.clone();
+                self.analyzer
+                    .narrow_from_predicate(&self.predicate, &mut then_environment, true);
+                let mut else_environment = state.block.environment.clone();
+                self.analyzer
+                    .narrow_from_predicate(&self.predicate, &mut else_environment, false);
+                vec![
+                    edge(
+                        cfg::BlockId(1),
+                        ConditionalState {
+                            block: BlockState::with_values(
+                                then_environment,
+                                Vec::new(),
+                                Flow::normal(),
+                            ),
+                            result: Eval::unreachable(),
+                            path_reachable: self.then_reachable,
+                        },
+                    ),
+                    edge(
+                        cfg::BlockId(2),
+                        ConditionalState {
+                            block: BlockState::with_values(
+                                else_environment,
+                                Vec::new(),
+                                Flow::normal(),
+                            ),
+                            result: Eval::unreachable(),
+                            path_reachable: self.else_reachable,
+                        },
+                    ),
+                ]
+            }
+            cfg::BlockId(1) => {
+                if !state.path_reachable && self.report_unreachable {
+                    if let Some(first) = self.then_first {
+                        self.analyzer.error(first, "This code is unreachable");
+                    }
+                }
+                let mut environment = state.block.environment.clone();
+                let result = self.then_node.map_or_else(
+                    || Eval::value(Type::Nil),
+                    |then_node| self.analyzer.eval_node(then_node, &mut environment),
+                );
+                let result = if state.path_reachable {
+                    result
+                } else {
+                    Eval::unreachable()
+                };
+                vec![edge(
+                    cfg::BlockId(3),
+                    ConditionalState {
+                        block: BlockState::with_values(environment, Vec::new(), result.flow),
+                        result,
+                        path_reachable: state.path_reachable,
+                    },
+                )]
+            }
+            cfg::BlockId(2) => {
+                if !state.path_reachable && self.report_unreachable {
+                    if let Some(first) = self.else_first {
+                        self.analyzer.error(first, "This code is unreachable");
+                    }
+                }
+                let mut environment = state.block.environment.clone();
+                let result = self.subsequent.map_or_else(
+                    || Eval::value(Type::Nil),
+                    |subsequent| self.analyzer.eval_alternative(subsequent, &mut environment),
+                );
+                let result = if state.path_reachable {
+                    result
+                } else {
+                    Eval::unreachable()
+                };
+                vec![edge(
+                    cfg::BlockId(3),
+                    ConditionalState {
+                        block: BlockState::with_values(environment, Vec::new(), result.flow),
+                        result,
+                        path_reachable: state.path_reachable,
+                    },
+                )]
+            }
+            cfg::BlockId(3) => Vec::new(),
+            _ => Vec::new(),
+        })
+    }
+
+    fn join_state(
+        &mut self,
+        current: Option<&Self::State>,
+        incoming: Self::State,
+    ) -> (Self::State, bool) {
+        let Some(current) = current else {
+            return (incoming, true);
+        };
+        let joined = Self::State {
+            block: current.block.join(&incoming.block),
+            result: Eval::combine(&current.result, &incoming.result),
+            path_reachable: current.path_reachable || incoming.path_reachable,
+        };
+        let changed = joined != *current;
+        (joined, changed)
     }
 }
 
@@ -502,54 +694,41 @@ impl<'src> Analyzer<'src> {
             self.predicate_reachability(predicate, environment, &predicate_type);
         let report_unreachable = self.should_report_unreachable_branch(node)
             && self.predicate_is_precise(predicate, environment);
-
-        let mut then_environment = environment.clone();
-        self.narrow_from_predicate(predicate, &mut then_environment, true);
-        if !then_reachable && report_unreachable {
-            if let Some(statements) = if_node.statements() {
-                if let Some(first) = statements.body().into_iter().next() {
-                    self.error(&first, "This code is unreachable");
-                }
-            }
-        }
-        let then_result = then_node.map_or_else(
-            || Eval::value(Type::Nil),
-            |then_node| self.eval_node(&then_node, &mut then_environment),
-        );
-        let then_result = if then_reachable {
-            then_result
-        } else {
-            Eval::unreachable()
+        let then_first = if_node
+            .statements()
+            .and_then(|statements| statements.body().into_iter().next());
+        let else_first = subsequent.as_ref().and_then(|subsequent| {
+            subsequent
+                .as_else_node()
+                .and_then(|else_clause| else_clause.statements())
+                .and_then(|statements| statements.body().into_iter().next())
+        });
+        let initial = ConditionalState {
+            block: BlockState::with_values(environment.clone(), Vec::new(), Flow::normal()),
+            result: Eval::unreachable(),
+            path_reachable: true,
         };
-
-        let mut else_environment = environment.clone();
-        self.narrow_from_predicate(predicate, &mut else_environment, false);
-        let else_result = if let Some(subsequent) = subsequent {
-            if !else_reachable && report_unreachable {
-                if let Some(else_clause) = subsequent.as_else_node() {
-                    if let Some(statements) = else_clause.statements() {
-                        if let Some(first) = statements.body().into_iter().next() {
-                            self.error(&first, "This code is unreachable");
-                        }
-                    }
-                }
-            }
-            self.eval_alternative(&subsequent, &mut else_environment)
-        } else {
-            Eval::value(Type::Nil)
+        let mut transfer = ConditionalTransfer {
+            analyzer: self,
+            predicate,
+            then_node: then_node.as_ref(),
+            subsequent: subsequent.as_ref(),
+            then_first: then_first.as_ref(),
+            else_first: else_first.as_ref(),
+            then_reachable,
+            else_reachable,
+            report_unreachable,
         };
-        let else_result = if else_reachable {
-            else_result
-        } else {
-            Eval::unreachable()
-        };
-
-        let joined_state =
-            BlockState::with_values(then_environment, Vec::new(), then_result.flow).join(
-                &BlockState::with_values(else_environment, Vec::new(), else_result.flow),
-            );
-        *environment = joined_state.environment;
-        let mut result = Eval::combine(&then_result, &else_result);
+        let worklist = cfg::transfer::run(conditional_graph(), &mut transfer, initial)
+            .expect("the synthetic conditional CFG is valid");
+        drop(transfer);
+        let joined_state = worklist
+            .states
+            .get(cfg::BlockId(3).0 as usize)
+            .and_then(Option::as_ref)
+            .expect("conditional transfer reaches its join block");
+        *environment = joined_state.block.environment.clone();
+        let mut result = joined_state.result.clone();
         let type_ = self.apply_inline_assertion(node, result.type_.clone());
         result.type_ = self.record(node, type_);
         result
