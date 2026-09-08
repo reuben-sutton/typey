@@ -432,12 +432,6 @@ impl<'src> Analyzer<'src> {
                         self.hir_call_ids.len()
                     )
             });
-            if self.config.enable_cfg && self.has_cfg_call_operation(node) {
-                return self.transfer_cfg_call(node, hir_call, environment);
-            }
-            if self.config.enable_cfg {
-                self.record_cfg_fallback(node, "call", CfgFallbackKind::UnsupportedOperation);
-            }
             return self.eval_call_result(node, &hir_call, environment);
         }
         if let Some(multi) = node.as_multi_write_node() {

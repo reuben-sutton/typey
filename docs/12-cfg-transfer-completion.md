@@ -23,11 +23,11 @@ The current local gates are 18 CFG tests, 10 HIR tests, 346 checker tests, and
 173 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has semantic bridges in the
-legacy recursive path: call dispatch still uses Prism children for exact
-diagnostics and builtin hooks, while parser-backed callback contracts and some
-conditional and loop helpers still evaluate child bodies recursively. Ordinary
-inline callbacks now use an owned HIR contract; a body containing an unsupported
-operation or an unmigrated callback shape falls back as a whole.
+legacy recursive path: the recursive evaluator still uses Prism children for
+exact diagnostics and builtin hooks, while parser-backed callback contracts and
+some conditional and loop helpers still evaluate child bodies recursively.
+Ordinary inline callbacks now use an owned HIR contract; a body containing an
+unsupported operation or an unmigrated callback shape falls back as a whole.
 
 The next step is therefore not another scheduler abstraction. It is to make
 CFG transfer an owned-HIR abstract interpreter, complete the remaining control
@@ -233,6 +233,10 @@ The first modularization steps are now in place:
 * the compatibility assignment adapter no longer evaluates an unsupported RHS
   through `eval_node`; it declines the owned assignment path before publishing
   state, leaving the complete assignment to the recursive evaluator.
+* CFG no longer reroutes ordinary calls through a `HirCallView` adapter;
+  `HirCallView` is recursive-only, owned calls increment the CFG transfer
+  counter directly, and migrated CFG runs report zero `legacy_bridge`
+  fallbacks;
 * index assignment preflight now preserves positional, keyword, and splat
   operands for the synthesized `[]=` call; ordinary nominal `[]` sends also
   fall back from callable shorthand to regular receiver dispatch when the
@@ -245,10 +249,10 @@ The first modularization steps are now in place:
   result for flow narrowing without recording an extra internal call type at
   the operand span.
 
-The remaining bridges are deliberate and measurable: the legacy call adapter
-still needs parser nodes for exact argument diagnostics and builtin hooks; the
-specialized conditional/loop helpers still consume parser nodes through the
-dedicated legacy adapter; and
+The remaining bridges are deliberate and measurable: the recursive evaluator's
+call adapter still needs parser nodes for exact argument diagnostics and
+builtin hooks; the specialized conditional/loop helpers still consume parser
+nodes through the dedicated legacy adapter; and
 `define_method`/`define_singleton_method` still require future-method binding
 semantics. Removing those requires moving their diagnostic and block contracts
 to owned source sites rather than weakening the checker. CFG fallback telemetry now

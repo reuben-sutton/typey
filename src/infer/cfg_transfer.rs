@@ -1,5 +1,5 @@
 use super::cfg_state::BlockState;
-use super::{Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, OutcomeTypes, SourceSite};
+use super::{Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, SourceSite};
 use crate::cfg;
 use crate::hir;
 use crate::prism;
@@ -21,6 +21,10 @@ fn cfg_global_refinement_key(name: &str) -> String {
 pub(super) enum CfgFallbackKind {
     UnsupportedOperation,
     UnsupportedEdge,
+    // Retained as an explicit telemetry bucket while the migration is
+    // complete. The owned CFG path must not use it; a future parser bridge
+    // must be visible in the report instead of becoming an unclassified gap.
+    #[allow(dead_code)]
     LegacyBridge,
 }
 
@@ -49,12 +53,6 @@ impl CfgFallbackCounters {
 }
 
 impl<'src> Analyzer<'src> {
-    pub(super) fn has_cfg_call_operation(&self, node: &Node<'_>) -> bool {
-        self.cfg_index
-            .as_ref()
-            .is_some_and(|index| index.has_call(prism::span(node)))
-    }
-
     pub(super) fn has_cfg_assignment_operation(&self, node: &Node<'_>) -> bool {
         let span = prism::span(node);
         self.cfg_index
@@ -88,21 +86,6 @@ impl<'src> Analyzer<'src> {
                 (site.start, site.end)
             );
         }
-    }
-
-    pub(super) fn transfer_cfg_call<'node>(
-        &mut self,
-        node: &Node<'node>,
-        call: HirCallView<'node>,
-        environment: &mut Environment,
-    ) -> Eval {
-        self.cfg_transfer_calls = self.cfg_transfer_calls.saturating_add(1);
-        self.record_cfg_fallback(node, "call", CfgFallbackKind::LegacyBridge);
-        // The CFG supplies the dispatch name and argument-shape operation.
-        // HirCallView retains only Prism child nodes so the existing transfer
-        // machinery can evaluate child expressions until the owned value
-        // evaluator lands.
-        self.eval_call_result(node, &call, environment)
     }
 }
 

@@ -178,6 +178,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
         environment: &mut Environment,
     ) -> Option<Eval> {
+        analyzer.cfg_transfer_calls = analyzer.cfg_transfer_calls.saturating_add(1);
         let call = input
             .expression
             .and_then(|expression| analyzer.hir_program.expression(expression))
