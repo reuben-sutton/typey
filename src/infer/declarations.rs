@@ -1,7 +1,4 @@
-use super::{
-    attribute_writer_signature, AccessorKind, ClassInfo, GenericMember, MethodKey, MethodState,
-    ParameterShape, Visibility,
-};
+use super::{MethodKey, MethodState, ParameterShape};
 use crate::diagnostic::Diagnostic;
 use crate::prism;
 use crate::signature::{self, MethodSig};
@@ -9,6 +6,55 @@ use crate::types::Type;
 use ruby_prism::{CallNode, ClassNode, DefNode, Node, Visit};
 use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashSet};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AccessorKind {
+    Reader,
+    Writer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Visibility {
+    Public,
+    Private,
+    Protected,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct GenericMember {
+    pub(super) index: usize,
+    pub(super) fixed: Option<Type>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct ClassInfo {
+    pub(super) is_module: bool,
+    pub(super) extend_self: bool,
+    pub(super) attached_class_member: Option<usize>,
+    pub(super) superclass: Option<String>,
+    pub(super) struct_fields: Option<Vec<String>>,
+    pub(super) includes: Vec<String>,
+    pub(super) prepends: Vec<String>,
+    pub(super) extends: Vec<String>,
+    pub(super) class_methods: Vec<String>,
+    pub(super) requires_ancestors: Vec<String>,
+    pub(super) type_members: BTreeMap<String, GenericMember>,
+}
+
+pub(super) fn attribute_writer_signature(signature: &MethodSig) -> MethodSig {
+    if !signature.params.is_empty()
+        || !signature.keywords.is_empty()
+        || signature.accepts_rest
+        || signature.block.is_some()
+    {
+        return signature.clone();
+    }
+
+    let mut writer = signature.clone();
+    writer.params = vec![signature.return_type.clone()];
+    writer.required_params = 1;
+    writer
+}
 
 /// Source and RBI declarations owned by the analyzer.
 ///

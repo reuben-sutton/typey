@@ -90,6 +90,9 @@ The first modularization steps are now in place:
 * `infer/keys.rs` owns parser-independent method, storage, and shared-read
   identity keys used across declaration, lookup, fixpoint, and environment
   layers;
+* declaration-only accessor, visibility, class metadata, and generic-member
+  types now live with `infer/declarations.rs` rather than in the analyzer
+  coordinator;
 * `infer/method_types.rs` owns parser parameter-shape adaptation, proc/block
   decomposition, overload merging, and callable arity narrowing;
 * `infer/method_state.rs` owns the evolving inferred method summary used by

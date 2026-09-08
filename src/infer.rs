@@ -45,7 +45,7 @@ use call_types::{
     KeywordArgumentInput, OwnedCallInput,
 };
 use cfg_transfer::{CfgFallbackCounters, CfgFallbackKind};
-use declarations::{DeclarationState, MethodRegistrar};
+use declarations::{AccessorKind, DeclarationState, MethodRegistrar, Visibility};
 pub use environment::Environment;
 use environment::PredicateAlias;
 use fixpoint::FixpointState;
@@ -60,55 +60,6 @@ use method_types::{
 use source::SourceSite;
 
 const DEBUG_NODE_INTERVAL: usize = 1_000;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AccessorKind {
-    Reader,
-    Writer,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Visibility {
-    Public,
-    Private,
-    Protected,
-}
-
-fn attribute_writer_signature(signature: &MethodSig) -> MethodSig {
-    if !signature.params.is_empty()
-        || !signature.keywords.is_empty()
-        || signature.accepts_rest
-        || signature.block.is_some()
-    {
-        return signature.clone();
-    }
-
-    let mut writer = signature.clone();
-    writer.params = vec![signature.return_type.clone()];
-    writer.required_params = 1;
-    writer
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct GenericMember {
-    index: usize,
-    fixed: Option<Type>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct ClassInfo {
-    is_module: bool,
-    extend_self: bool,
-    attached_class_member: Option<usize>,
-    superclass: Option<String>,
-    struct_fields: Option<Vec<String>>,
-    includes: Vec<String>,
-    prepends: Vec<String>,
-    extends: Vec<String>,
-    class_methods: Vec<String>,
-    requires_ancestors: Vec<String>,
-    type_members: BTreeMap<String, GenericMember>,
-}
 
 #[derive(Default)]
 struct LocalWriteCollector {
