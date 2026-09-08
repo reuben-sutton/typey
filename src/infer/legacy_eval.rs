@@ -335,7 +335,7 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(program) = node.as_program_node() {
             if self.config.enable_cfg {
-                if let Some(body_id) = self.hir_body_ids.get(&prism::span(node)).copied() {
+                if let Some(body_id) = self.program.hir_body_ids.get(&prism::span(node)).copied() {
                     if let Some(result) =
                         self.eval_cfg_body_from_prism(node, body_id, environment, true)
                     {
@@ -371,7 +371,7 @@ impl<'src> Analyzer<'src> {
                 environment,
                 &self
                     .constant_reference_name(&class.constant_path())
-                    .unwrap_or_else(|| prism::text(self.source, &class.constant_path())),
+                    .unwrap_or_else(|| prism::text(self.program.source, &class.constant_path())),
             );
             if let Some(superclass) = class.superclass() {
                 // The registrar models dynamic superclasses such as
@@ -404,7 +404,7 @@ impl<'src> Analyzer<'src> {
                 environment,
                 &self
                     .constant_reference_name(&module.constant_path())
-                    .unwrap_or_else(|| prism::text(self.source, &module.constant_path())),
+                    .unwrap_or_else(|| prism::text(self.program.source, &module.constant_path())),
             );
             if let Some(body) = module.body() {
                 let mut module_environment = environment.clone();
@@ -473,9 +473,9 @@ impl<'src> Analyzer<'src> {
                         "every ordinary call must have an owned HIR call shape: {}..{} `{}` (HIR expressions: {}, calls: {})",
                         start,
                         end,
-                        String::from_utf8_lossy(self.source.get(start..end).unwrap_or_default()),
-                        self.hir_program.expressions.len(),
-                        self.hir_call_ids.len()
+                        String::from_utf8_lossy(self.program.source.get(start..end).unwrap_or_default()),
+                        self.program.hir_program.expressions.len(),
+                        self.program.hir_call_ids.len()
                     )
             });
             return self.eval_call_result(node, &hir_call, environment);

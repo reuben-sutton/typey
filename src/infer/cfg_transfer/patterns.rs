@@ -54,7 +54,7 @@ pub(super) fn narrow_pattern_value(
     if let Some(source_place) = source_place {
         match source_place {
             cfg::Place::Local(local) => {
-                if let Some(name) = analyzer.hir_program.local_name(*local) {
+                if let Some(name) = analyzer.program.hir_program.local_name(*local) {
                     state.environment.bind(name.as_str().to_owned(), narrowed);
                 }
             }
@@ -87,7 +87,7 @@ pub(super) fn case_pattern_is_type_test(
     if Analyzer::class_object_value_type(condition).is_some() {
         return true;
     }
-    let Some(expression) = analyzer.hir_program.expression(expression) else {
+    let Some(expression) = analyzer.program.hir_program.expression(expression) else {
         return false;
     };
     match &expression.kind {

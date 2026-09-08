@@ -31,7 +31,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         let Some(hir::Expr {
             kind: hir::ExprKind::Assign { operator, .. },
             ..
-        }) = self.analyzer.hir_program.expression(expression)
+        }) = self.analyzer.program.hir_program.expression(expression)
         else {
             return false;
         };
@@ -48,7 +48,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         outer: &Environment,
     ) -> Option<Type> {
         let (body_id, parameters, span) = {
-            let closure = analyzer.hir_program.closure(closure_id)?;
+            let closure = analyzer.program.hir_program.closure(closure_id)?;
             (closure.body, closure.parameters.clone(), closure.span)
         };
         let signature = Analyzer::inferred_hir_block_signature(&parameters);
@@ -112,6 +112,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         match place {
             cfg::Place::Local(local) => {
                 let name = analyzer
+                    .program
                     .hir_program
                     .local_name(*local)
                     .map_or_else(String::new, |name| name.as_str().to_owned());
@@ -191,7 +192,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         analyzer.cfg_transfer_calls = analyzer.cfg_transfer_calls.saturating_add(1);
         let call = input
             .expression
-            .and_then(|expression| analyzer.hir_program.expression(expression))
+            .and_then(|expression| analyzer.program.hir_program.expression(expression))
             .and_then(|expression| match &expression.kind {
                 hir::ExprKind::Call(call) => Some(call.clone()),
                 _ => None,
@@ -717,10 +718,10 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             .find(|conditional| conditional.truthy == truthy && conditional.falsy == falsy)
             .map(|conditional| conditional.condition);
         if let Some(hir::ExprKind::Read(Read::Local(local))) = condition
-            .and_then(|condition| self.analyzer.hir_program.expression(condition))
+            .and_then(|condition| self.analyzer.program.hir_program.expression(condition))
             .map(|expression| &expression.kind)
         {
-            let Some(name) = self.analyzer.hir_program.local_name(*local) else {
+            let Some(name) = self.analyzer.program.hir_program.local_name(*local) else {
                 return Self::truthiness_reachability(source);
             };
             if state.environment.is_inferred(name.as_str()) {
@@ -811,7 +812,7 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
         record_result: bool,
     ) -> Option<Eval> {
-        if !preflight::body_can_transfer(&self.hir_program, body_id) {
+        if !preflight::body_can_transfer(&self.program.hir_program, body_id) {
             self.record_cfg_fallback_at(
                 body_site,
                 "body",
@@ -822,7 +823,7 @@ impl<'src> Analyzer<'src> {
         // The graph is syntax-only and immutable. It is lowered once when the
         // analyzer is created, then reused across seed, fixpoint, and final
         // passes instead of rebuilding the same body for every method visit.
-        let graph_store = self.cfg_graphs.as_ref()?.clone();
+        let graph_store = self.program.cfg_graphs.as_ref()?.clone();
         let graph = graph_store.get(body_id.0 as usize)?;
         let fixed_array_candidates = graph
             .blocks
@@ -888,9 +889,10 @@ impl<'src> Analyzer<'src> {
             return None;
         }
 
-        let body = self.hir_program.body(body_id)?;
+        let body = self.program.hir_program.body(body_id)?;
         let closure_kind = match &body.owner {
             hir::BodyOwner::Closure(closure) => self
+                .program
                 .hir_program
                 .closure(*closure)
                 .map(|closure| closure.kind),
@@ -1364,7 +1366,8 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         normal.set_value(parameter.value, type_);
                     }
                     if let Some(value) = arguments.first().and_then(|value| normal.value(*value)) {
-                        if let Some(expression) = self.analyzer.hir_program.expression(*expression)
+                        if let Some(expression) =
+                            self.analyzer.program.hir_program.expression(*expression)
                         {
                             self.analyzer.record_at(
                                 SourceSite::from_span(expression.span, None),

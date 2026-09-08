@@ -245,9 +245,9 @@ impl<'src> Analyzer<'src> {
                 let value = assoc.value();
                 let name = String::from_utf8_lossy(key.unescaped());
                 let value = if value.as_integer_node().is_some() {
-                    format!("Integer({})", prism::text(self.source, &value))
+                    format!("Integer({})", prism::text(self.program.source, &value))
                 } else {
-                    prism::text(self.source, &value)
+                    prism::text(self.program.source, &value)
                 };
                 Some(format!("{name}: {value}"))
             })

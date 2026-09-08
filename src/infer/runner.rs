@@ -83,11 +83,15 @@ impl<'src> Analyzer<'src> {
             );
             eprintln!(
                 "[typey] compiled {} HIR bodies into CFG",
-                self.cfg_index.as_ref().map_or(0, cfg::CfgIndex::body_count)
+                self.program
+                    .cfg_index
+                    .as_ref()
+                    .map_or(0, cfg::CfgIndex::body_count)
             );
             eprintln!(
                 "[typey] CFG unsupported handoffs: {}",
-                self.cfg_index
+                self.program
+                    .cfg_index
                     .as_ref()
                     .map_or(0, cfg::CfgIndex::unsupported_count)
             );
@@ -303,7 +307,7 @@ impl<'src> Analyzer<'src> {
                 |owner| format!("{owner}::{}", key.name),
             );
             self.reporting.diagnostics.push(Diagnostic::error(
-                self.source,
+                self.program.source,
                 format!(
                     "Method `{name}` has insufficient inferred type information for strict mode"
                 ),

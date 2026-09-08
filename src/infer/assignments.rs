@@ -83,7 +83,7 @@ impl<'src> Analyzer<'src> {
         operator: hir::AssignOperator,
         environment: &mut Environment,
     ) -> Eval {
-        debug_assert!(self.hir_program.expression(value_id).is_some());
+        debug_assert!(self.program.hir_program.expression(value_id).is_some());
         let value_node = self
             .assignment_value_node(node)
             .expect("lowered assignment must retain its value expression");
@@ -181,6 +181,7 @@ impl<'src> Analyzer<'src> {
             },
             hir::AssignTarget::Local(local) => {
                 let name = self
+                    .program
                     .hir_program
                     .local_name(local)
                     .expect("lowered local target must have a spelling")

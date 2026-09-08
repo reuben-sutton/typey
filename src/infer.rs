@@ -3,7 +3,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::directives::{effective_typed_mode, is_typed_ignore, typed_mode, TypedMode};
 use crate::hir;
 use crate::prism;
-use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
+use crate::signature::{self, AssertionKind, MethodSig};
 use crate::types::Type;
 use ruby_prism::{ArgumentsNode, CallNode, Node, Visit};
 use std::cell::RefCell;
@@ -20,6 +20,7 @@ mod calls;
 mod case_flow;
 mod cfg_state;
 mod cfg_transfer;
+mod context;
 mod control_flow;
 mod declarations;
 mod dispatch;
@@ -53,6 +54,7 @@ use call_types::{
     KeywordArgumentInput, OwnedCallInput,
 };
 use cfg_transfer::{CfgFallbackCounters, CfgFallbackKind};
+use context::ProgramContext;
 use declarations::{AccessorKind, DeclarationState, MethodRegistrar, Visibility};
 pub use environment::Environment;
 use environment::PredicateAlias;
@@ -223,44 +225,6 @@ pub(crate) fn check_with_policies(
     let cfg_graphs = config
         .enable_cfg
         .then(|| Arc::<[cfg::Cfg]>::from(cfg::lower::build_all_for_index(&hir_program)));
-    let cfg_index = cfg_graphs
-        .as_deref()
-        .map(|graphs| cfg::CfgIndex::from_graphs(&hir_program, graphs));
-    let mut hir_call_ids = HashMap::new();
-    let mut hir_assignment_ids = HashMap::new();
-    let mut hir_value_ids = HashMap::new();
-    let hir_body_ids = hir_program
-        .bodies
-        .iter()
-        .enumerate()
-        .map(|(index, body)| {
-            (
-                (body.span.start as usize, body.span.end as usize),
-                hir::BodyId(index as u32),
-            )
-        })
-        .collect::<HashMap<_, _>>();
-    for (index, expression) in hir_program.expressions.iter().enumerate() {
-        let span = (expression.span.start as usize, expression.span.end as usize);
-        match &expression.kind {
-            hir::ExprKind::Call(_) => {
-                hir_call_ids
-                    .entry(span)
-                    .or_insert(hir::ExprId(index as u32));
-            }
-            hir::ExprKind::Assign { .. } => {
-                hir_assignment_ids
-                    .entry(span)
-                    .or_insert(hir::ExprId(index as u32));
-            }
-            hir::ExprKind::Nil | hir::ExprKind::Literal(_) | hir::ExprKind::Read(_) => {
-                hir_value_ids
-                    .entry(span)
-                    .or_insert(hir::ExprId(index as u32));
-            }
-            _ => {}
-        }
-    }
     let annotations = signature::collect_for_ast(source, &root);
     let mut diagnostics = parsed
         .errors()
@@ -284,18 +248,9 @@ pub(crate) fn check_with_policies(
             annotations.assertions.len()
         );
     }
+    let program = ProgramContext::new(bytes, hir_program, cfg_graphs, annotations);
     let analyzer = Analyzer {
-        source: bytes,
-        hir_program,
-        cfg_index,
-        cfg_graphs,
-        hir_call_ids,
-        hir_assignment_ids,
-        hir_value_ids,
-        hir_body_ids,
-        line_map: prism::LineMap::new(bytes),
-        has_inline_assertions: !annotations.assertions.is_empty(),
-        annotations,
+        program,
         config,
         declarations: DeclarationState::default(),
         method_resolution_cache: RefCell::new(BTreeMap::new()),
@@ -342,17 +297,7 @@ fn source_strictness_ranges(source: &str) -> Vec<(usize, usize, Strictness)> {
 }
 
 struct Analyzer<'src> {
-    source: &'src [u8],
-    hir_program: hir::Program,
-    cfg_index: Option<cfg::CfgIndex>,
-    cfg_graphs: Option<Arc<[cfg::Cfg]>>,
-    hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
-    hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
-    hir_value_ids: HashMap<(usize, usize), hir::ExprId>,
-    hir_body_ids: HashMap<(usize, usize), hir::BodyId>,
-    line_map: prism::LineMap,
-    has_inline_assertions: bool,
-    annotations: AnnotationTable,
+    program: ProgramContext<'src>,
     config: CheckerConfig,
     declarations: DeclarationState,
     method_resolution_cache: RefCell<BTreeMap<MethodKey, Option<MethodKey>>>,

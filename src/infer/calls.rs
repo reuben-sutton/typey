@@ -27,7 +27,7 @@ impl<'src> Analyzer<'src> {
     }
 
     pub(super) fn static_type_value(&self, node: &Node<'_>) -> bool {
-        let source_text = prism::text(self.source, node);
+        let source_text = prism::text(self.program.source, node);
         let source = source_text.trim();
         if matches!(
             source,
@@ -107,7 +107,7 @@ impl<'src> Analyzer<'src> {
     /// argument, but does not turn the follow-on `.foo` into an application
     /// missing-method diagnostic.
     pub(super) fn type_expression_value(&self, node: &Node<'_>) -> bool {
-        let source = prism::text(self.source, node);
+        let source = prism::text(self.program.source, node);
         let source = source.trim();
         self.static_type_value(node)
             || source == "T.class_of"
@@ -123,14 +123,14 @@ impl<'src> Analyzer<'src> {
                     if receiver.as_array_node().is_some() {
                         if let Some(array) = receiver.as_array_node() {
                             if let Some(element) = array.elements().first() {
-                                return prism::text(self.source, &element);
+                                return prism::text(self.program.source, &element);
                             }
                         }
                     }
                 }
             }
         }
-        let source = prism::text(self.source, node);
+        let source = prism::text(self.program.source, node);
         if source.contains("T.self_type") {
             "T.untyped".to_owned()
         } else {
@@ -267,8 +267,8 @@ impl<'src> Analyzer<'src> {
         // treating the chained `.params/.returns/.void` calls as an unknown
         // application method.  The signature parser already understands the
         // complete expression, including nested `T.nilable` and `bind`.
-        let runtime_proc_type_expression =
-            self.static_type_value(node) && prism::text(self.source, node).contains("T.proc");
+        let runtime_proc_type_expression = self.static_type_value(node)
+            && prism::text(self.program.source, node).contains("T.proc");
         let mut untyped_origin = None;
         let mut callee_type = if let Some(type_) = self.eval_dynamic_instance_variable_call(
             &name,
@@ -295,11 +295,9 @@ impl<'src> Analyzer<'src> {
             if type_.contains_any() {
                 untyped_origin = Some(if name == "unsafe" {
                     UntypedOrigin::Unsafe
-                } else if arguments
-                    .argument_nodes
-                    .iter()
-                    .any(|argument| prism::text(self.source, argument).contains("T.untyped"))
-                {
+                } else if arguments.argument_nodes.iter().any(|argument| {
+                    prism::text(self.program.source, argument).contains("T.untyped")
+                }) {
                     UntypedOrigin::ExplicitAnnotation
                 } else {
                     UntypedOrigin::FallbackCall

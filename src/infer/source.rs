@@ -310,8 +310,8 @@ impl<'src> Analyzer<'src> {
         self.reporting
             .diagnostics
             .push(Diagnostic::error_with_line_map(
-                self.source,
-                &self.line_map,
+                self.program.source,
+                &self.program.line_map,
                 message,
                 site.start,
                 site.end,
@@ -325,8 +325,8 @@ impl<'src> Analyzer<'src> {
         self.reporting
             .diagnostics
             .push(Diagnostic::note_with_line_map(
-                self.source,
-                &self.line_map,
+                self.program.source,
+                &self.program.line_map,
                 message,
                 site.start,
                 site.end,

@@ -299,7 +299,7 @@ impl<'src> Analyzer<'src> {
 
     pub(super) fn should_report_unreachable_branch(&self, node: &Node<'_>) -> bool {
         let start = prism::span(node).0;
-        self.source[..start]
+        self.program.source[..start]
             .iter()
             .rev()
             .find(|byte| !byte.is_ascii_whitespace())
@@ -1048,7 +1048,7 @@ impl<'src> Analyzer<'src> {
                 return environment.self_type.clone();
             }
         }
-        let type_ = signature::parse_type(&prism::text(self.source, node));
+        let type_ = signature::parse_type(&prism::text(self.program.source, node));
         let owner = self.lexical_owner(environment);
         match self.resolve_type_names(&type_, owner.as_deref()) {
             Type::Named(name, arguments)

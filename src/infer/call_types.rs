@@ -417,14 +417,14 @@ impl<'src> Analyzer<'src> {
     fn cfg_passed_symbol_name(&self, input: &OwnedCallInput) -> Option<String> {
         let expression = input
             .expression
-            .and_then(|expression| self.hir_program.expression(expression))?;
+            .and_then(|expression| self.program.hir_program.expression(expression))?;
         let hir::ExprKind::Call(call) = &expression.kind else {
             return None;
         };
         let hir::BlockArgument::Passed(block) = call.block.as_ref()? else {
             return None;
         };
-        let expression = self.hir_program.expression(*block)?;
+        let expression = self.program.hir_program.expression(*block)?;
         match &expression.kind {
             hir::ExprKind::Literal(hir::Literal::Symbol(name)) => Some(name.clone()),
             _ => None,
@@ -437,14 +437,14 @@ impl<'src> Analyzer<'src> {
     ) -> Option<String> {
         let expression = input
             .expression
-            .and_then(|expression| self.hir_program.expression(expression))?;
+            .and_then(|expression| self.program.hir_program.expression(expression))?;
         let hir::ExprKind::Call(call) = &expression.kind else {
             return None;
         };
         let hir::Argument::Positional(argument) = call.arguments.first()? else {
             return None;
         };
-        let expression = self.hir_program.expression(*argument)?;
+        let expression = self.program.hir_program.expression(*argument)?;
         let name = match &expression.kind {
             hir::ExprKind::Literal(hir::Literal::Symbol(name)) => name.clone(),
             // HIR string literals retain their source spelling. Dynamic ivar

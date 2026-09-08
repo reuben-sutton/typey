@@ -45,7 +45,7 @@ impl<'src> Analyzer<'src> {
         }
         if matches!(type_, Type::Integer) {
             if node.as_integer_node().is_some() {
-                return format!("Integer({})", prism::text(self.source, node));
+                return format!("Integer({})", prism::text(self.program.source, node));
             }
         }
         type_.to_string()
@@ -1015,19 +1015,19 @@ impl<'src> Analyzer<'src> {
         &self,
         site: SourceSite,
     ) -> Option<crate::signature::InlineAssertion> {
-        if !self.has_inline_assertions {
+        if !self.program.has_inline_assertions {
             return None;
         }
         let start = site.start;
         let end = site.end;
-        let start_line = self.line_map.line_number(start);
-        let end_line = self.line_map.line_number(end.saturating_sub(1));
+        let start_line = self.program.line_map.line_number(start);
+        let end_line = self.program.line_map.line_number(end.saturating_sub(1));
         if let Some(assertion) = [start_line, end_line]
             .into_iter()
-            .filter_map(|line| self.annotations.assertions.get(&line))
+            .filter_map(|line| self.program.annotations.assertions.get(&line))
             .find(|assertion| {
                 assertion.offset >= end
-                    && self.source[end..assertion.offset]
+                    && self.program.source[end..assertion.offset]
                         .iter()
                         .all(|byte| byte.is_ascii_whitespace() || *byte == b',')
             })
@@ -1040,22 +1040,24 @@ impl<'src> Analyzer<'src> {
         // narrows. Permit blank lines between that comment and the expression
         // while keeping ordinary comments from reaching arbitrarily far.
         for line in (0..start_line).rev() {
-            let Some(line_start) = self.line_map.line_start(line) else {
+            let Some(line_start) = self.program.line_map.line_start(line) else {
                 break;
             };
             let line_end = self
+                .program
                 .line_map
                 .line_start(line + 1)
-                .map_or(self.source.len(), |next| next.saturating_sub(1));
+                .map_or(self.program.source.len(), |next| next.saturating_sub(1));
             let trimmed = trim_ascii_whitespace(
-                self.source
-                    .get(line_start..line_end.min(self.source.len()))
+                self.program
+                    .source
+                    .get(line_start..line_end.min(self.program.source.len()))
                     .unwrap_or_default(),
             );
             if trimmed.is_empty() {
                 continue;
             }
-            let Some(assertion) = self.annotations.assertions.get(&line) else {
+            let Some(assertion) = self.program.annotations.assertions.get(&line) else {
                 break;
             };
             if assertion.kind == AssertionKind::SelfAs && trimmed.starts_with(b"#") {
@@ -1132,11 +1134,11 @@ impl<'src> Analyzer<'src> {
     }
 
     pub(crate) fn type_from_node<'node>(&self, node: &Node<'node>) -> Type {
-        signature::parse_type(&prism::text(self.source, node))
+        signature::parse_type(&prism::text(self.program.source, node))
     }
 
     pub(crate) fn runtime_type_object_type<'node>(&self, node: &Node<'node>) -> Type {
-        let source = prism::text(self.source, node);
+        let source = prism::text(self.program.source, node);
         let expression = source.trim().trim_start_matches("::");
         let class = if expression.starts_with("T.proc") {
             "T::Types::Proc"
@@ -1172,7 +1174,7 @@ impl<'src> Analyzer<'src> {
         &self,
         path: &ruby_prism::ConstantPathNode<'node>,
     ) -> String {
-        let absolute = prism::text(self.source, &path.as_node())
+        let absolute = prism::text(self.program.source, &path.as_node())
             .trim_start()
             .starts_with("::");
         let name = path.name().map_or_else(String::new, prism::constant_name);
@@ -1180,7 +1182,7 @@ impl<'src> Analyzer<'src> {
             Some(parent) => {
                 let parent = self
                     .constant_reference_name(&parent)
-                    .unwrap_or_else(|| prism::text(self.source, &parent));
+                    .unwrap_or_else(|| prism::text(self.program.source, &parent));
                 if parent.is_empty() {
                     name
                 } else {

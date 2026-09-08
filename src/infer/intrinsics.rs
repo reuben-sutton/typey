@@ -62,7 +62,7 @@ impl<'src> Analyzer<'src> {
                         .as_ref()
                         .is_some_and(|method| method.name == "<bound-block>")
                     && argument_nodes.get(1).is_some_and(|argument| {
-                        prism::text(self.source, argument).contains("T.attached_class")
+                        prism::text(self.program.source, argument).contains("T.attached_class")
                     })
                 {
                     let message =

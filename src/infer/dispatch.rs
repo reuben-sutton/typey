@@ -480,9 +480,10 @@ impl<'src> Analyzer<'src> {
         if name == "[]" {
             if let Type::Named(record, _) = receiver {
                 if let Some(key) = site.argument_nodes.first() {
-                    if let Some(type_) =
-                        signature::parse_inline_record_field(record, &prism::text(self.source, key))
-                    {
+                    if let Some(type_) = signature::parse_inline_record_field(
+                        record,
+                        &prism::text(self.program.source, key),
+                    ) {
                         return type_;
                     }
                 }

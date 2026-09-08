@@ -18,7 +18,7 @@ impl<'src> Analyzer<'src> {
                 continue;
             }
             self.reporting.diagnostics.push(Diagnostic::error(
-                self.source,
+                self.program.source,
                 format!(
                     "Argument kind mismatch for `{name}`, method declares `{}`, but RBS signature declares `{}`",
                     ruby_kind.display_name(),
@@ -47,7 +47,7 @@ impl<'src> Analyzer<'src> {
                     && ruby_parameters.block_name.is_none());
             if !matches_definition {
                 self.reporting.diagnostics.push(Diagnostic::error(
-                    self.source,
+                    self.program.source,
                     format!("Unknown parameter name `{name}`"),
                     signature_offset,
                     signature_offset,
@@ -60,7 +60,7 @@ impl<'src> Analyzer<'src> {
                 && !signature.param_names.iter().any(|name| name == block_name)
             {
                 self.reporting.diagnostics.push(Diagnostic::error(
-                    self.source,
+                    self.program.source,
                     format!("Malformed `sig`. Type not specified for parameter `{block_name}`"),
                     definition_offset,
                     definition_offset,
@@ -71,13 +71,13 @@ impl<'src> Analyzer<'src> {
 
     pub(super) fn register_methods<'node>(&mut self, root: &Node<'node>) {
         self.declarations.methods.clear();
-        self.declarations.type_aliases = self.annotations.type_aliases.clone();
+        self.declarations.type_aliases = self.program.annotations.type_aliases.clone();
         let mut registrar = MethodRegistrar::new(
-            self.source,
+            self.program.source,
             &mut self.reporting.diagnostics,
             &mut self.declarations,
-            &self.annotations.attribute_annotations,
-            &self.annotations.class_type_parameters,
+            &self.program.annotations.attribute_annotations,
+            &self.program.annotations.class_type_parameters,
         );
         registrar.visit(root);
         self.normalize_class_graph();
@@ -178,8 +178,8 @@ impl<'src> Analyzer<'src> {
         let mut source_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut builtin_rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
-        let method_annotations = self.annotations.method_annotations.clone();
-        let method_annotation_spans = self.annotations.method_annotation_spans.clone();
+        let method_annotations = self.program.annotations.method_annotations.clone();
+        let method_annotation_spans = self.program.annotations.method_annotation_spans.clone();
         for (offset, signatures) in &method_annotations {
             let Some(key) = self.declarations.definitions.get(offset).cloned() else {
                 continue;
@@ -393,14 +393,18 @@ impl<'src> Analyzer<'src> {
         // place expectation comments between the signature and definition,
         // and that search can accidentally select `T.attached_class` from a
         // prose comment instead of the declaration being validated.
-        let start = offset.min(self.source.len());
+        let start = offset.min(self.program.source.len());
         let end = self
+            .program
             .source
             .get(start..)
             .and_then(|source| source.iter().position(|byte| *byte == b'\n'))
-            .map_or(self.source.len(), |line_end| start + line_end);
-        self.reporting
-            .diagnostics
-            .push(Diagnostic::error(self.source, message, start, end));
+            .map_or(self.program.source.len(), |line_end| start + line_end);
+        self.reporting.diagnostics.push(Diagnostic::error(
+            self.program.source,
+            message,
+            start,
+            end,
+        ));
     }
 }

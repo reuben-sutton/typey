@@ -40,6 +40,7 @@ impl<'src> Analyzer<'src> {
     ) -> Eval {
         let (span, kind) = {
             let expression = self
+                .program
                 .hir_program
                 .expression(expression)
                 .expect("owned value expression exists after preflight");
@@ -189,6 +190,7 @@ impl<'src> Analyzer<'src> {
         match read {
             Read::Local(local) => {
                 let name = self
+                    .program
                     .hir_program
                     .local_name(local)
                     .map_or_else(String::new, |name| name.as_str().to_owned());
@@ -252,6 +254,7 @@ impl<'src> Analyzer<'src> {
         truthy: bool,
     ) {
         let Some(kind) = self
+            .program
             .hir_program
             .expression(expression)
             .map(|expression| expression.kind.clone())
@@ -312,6 +315,7 @@ impl<'src> Analyzer<'src> {
                 match call.receiver {
                     hir::Receiver::Explicit(receiver) => {
                         let Some(receiver_kind) = self
+                            .program
                             .hir_program
                             .expression(receiver)
                             .map(|expression| expression.kind.clone())
@@ -359,7 +363,12 @@ impl<'src> Analyzer<'src> {
     }
 
     fn narrow_cfg_local(&self, local: hir::LocalId, environment: &mut Environment, truthy: bool) {
-        let Some(name) = self.hir_program.local_name(local).map(|name| name.as_str()) else {
+        let Some(name) = self
+            .program
+            .hir_program
+            .local_name(local)
+            .map(|name| name.as_str())
+        else {
             return;
         };
         if environment.is_inferred(name) {
@@ -384,6 +393,7 @@ impl<'src> Analyzer<'src> {
         truthy: bool,
     ) {
         let Some(local_name) = self
+            .program
             .hir_program
             .local_name(local)
             .map(|name| name.as_str().to_owned())
@@ -476,6 +486,7 @@ impl<'src> Analyzer<'src> {
         environment: &Environment,
     ) -> Type {
         let Some(kind) = self
+            .program
             .hir_program
             .expression(expression)
             .map(|expression| expression.kind.clone())
@@ -489,6 +500,7 @@ impl<'src> Analyzer<'src> {
                 Self::class_object_value_type(&type_).unwrap_or(type_)
             }
             hir::ExprKind::Read(Read::Local(local)) => self
+                .program
                 .hir_program
                 .local_name(local)
                 .map_or(Type::Any, |name| environment.get(name.as_str())),

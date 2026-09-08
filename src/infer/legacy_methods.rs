@@ -150,7 +150,8 @@ impl<'src> Analyzer<'src> {
         };
         let body_result = if let Some(body) = definition.body() {
             if self.config.enable_cfg {
-                self.hir_body_ids
+                self.program
+                    .hir_body_ids
                     .get(&prism::span(node))
                     .copied()
                     .and_then(|body_id| {

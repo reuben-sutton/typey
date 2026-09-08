@@ -181,6 +181,7 @@ impl<'src> Analyzer<'src> {
         };
         let block_type = Self::block_value_type(&block_result);
         let closure_site = self
+            .program
             .hir_program
             .closure(closure_id)
             .map(|closure| SourceSite::from_span(closure.span, None))
@@ -244,7 +245,7 @@ impl<'src> Analyzer<'src> {
         bound_receiver: Option<&Type>,
         outer: &mut Environment,
     ) -> Option<Eval> {
-        let closure = self.hir_program.closure(closure_id)?.clone();
+        let closure = self.program.hir_program.closure(closure_id)?.clone();
         let captured = outer.clone();
         let mut closure_environment = outer.clone();
         if let Some(receiver) = bound_receiver {
@@ -267,7 +268,7 @@ impl<'src> Analyzer<'src> {
         let previous_expected_return = self.expected_return_type.take();
         self.expected_return_type = expected_return.map(|expected| {
             if matches!(expected, Type::TypeVar(_)) {
-                owned_literal_block_tuple_type(&self.hir_program, closure_id)
+                owned_literal_block_tuple_type(&self.program.hir_program, closure_id)
                     .unwrap_or_else(|| expected.clone())
             } else {
                 expected.clone()

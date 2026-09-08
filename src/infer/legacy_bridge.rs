@@ -35,8 +35,8 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Option<Eval> {
         let span = prism::span(node);
-        let expression = *self.hir_value_ids.get(&span)?;
-        if !Self::owned_value_tree_supported(&self.hir_program, expression) {
+        let expression = *self.program.hir_value_ids.get(&span)?;
+        if !Self::owned_value_tree_supported(&self.program.hir_program, expression) {
             return None;
         }
         self.cfg_transfer_values = self.cfg_transfer_values.saturating_add(1);
@@ -65,7 +65,7 @@ impl<'src> Analyzer<'src> {
         value_id: hir::ExprId,
         environment: &mut Environment,
     ) -> Option<Type> {
-        Self::owned_value_tree_supported(&self.hir_program, value_id)
+        Self::owned_value_tree_supported(&self.program.hir_program, value_id)
             .then(|| self.eval_owned_value(value_id, environment).type_)
     }
 
@@ -81,10 +81,15 @@ impl<'src> Analyzer<'src> {
             return None;
         }
         let value_node = self.assignment_value_node(node)?;
-        debug_assert!(self.hir_program.expression(value_id).is_some());
+        debug_assert!(self.program.hir_program.expression(value_id).is_some());
         match target {
             hir::AssignTarget::Local(local) => {
-                let name = self.hir_program.local_name(local)?.as_str().to_owned();
+                let name = self
+                    .program
+                    .hir_program
+                    .local_name(local)?
+                    .as_str()
+                    .to_owned();
                 let actual = self.eval_cfg_assignment_value(value_id, environment)?;
                 let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
                 if let Some(alias) = self.predicate_alias_for_value(&value_node, environment) {
@@ -145,14 +150,15 @@ impl<'src> Analyzer<'src> {
 
     pub(super) fn hir_call_for_node(&self, node: &Node<'_>) -> Option<&hir::Call> {
         let span = prism::span(node);
-        if let Some(expression_id) = self.hir_call_ids.get(&span) {
-            if let Some(expression) = self.hir_program.expression(*expression_id) {
+        if let Some(expression_id) = self.program.hir_call_ids.get(&span) {
+            if let Some(expression) = self.program.hir_program.expression(*expression_id) {
                 if let hir::ExprKind::Call(call) = &expression.kind {
                     return Some(call);
                 }
             }
         }
-        self.hir_program
+        self.program
+            .hir_program
             .expressions
             .iter()
             .find_map(|expression| {
@@ -172,8 +178,9 @@ impl<'src> Analyzer<'src> {
         prism_call: CallNode<'node>,
     ) -> Option<HirCallView<'node>> {
         let span = prism::span(node);
-        let expression_id = self.hir_call_ids.get(&span)?;
+        let expression_id = self.program.hir_call_ids.get(&span)?;
         let hir::ExprKind::Call(call) = &self
+            .program
             .hir_program
             .expressions
             .get(expression_id.0 as usize)?
@@ -191,13 +198,14 @@ impl<'src> Analyzer<'src> {
         &self,
         node: &Node<'_>,
     ) -> Option<(hir::AssignTarget, hir::ExprId, hir::AssignOperator)> {
-        let expression_id = self.hir_assignment_ids.get(&prism::span(node))?;
+        let expression_id = self.program.hir_assignment_ids.get(&prism::span(node))?;
         let hir::ExprKind::Assign {
             target,
             value,
             operator,
             ..
         } = &self
+            .program
             .hir_program
             .expressions
             .get(expression_id.0 as usize)?
@@ -356,7 +364,8 @@ impl<'src> Analyzer<'src> {
 
     pub(super) fn has_cfg_assignment_operation(&self, node: &Node<'_>) -> bool {
         let span = prism::span(node);
-        self.cfg_index
+        self.program
+            .cfg_index
             .as_ref()
             .is_some_and(|index| index.has_call(span) || index.has_write(span))
     }
