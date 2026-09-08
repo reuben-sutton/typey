@@ -19,8 +19,8 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates are 18 CFG tests, 10 HIR tests, 340 checker tests, and
-168 conformance tests passing. The
+The current local gates are 18 CFG tests, 10 HIR tests, 341 checker tests, and
+169 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has two semantic bridges: it
 looks up Prism nodes by source span and it reconstructs call argument shapes
@@ -102,6 +102,9 @@ The first modularization steps are now in place:
 * `infer/call_types.rs` owns the parser-backed call boundary, and CFG dispatch
   receives an `OwnedCallInput` containing the call identity and CFG operands;
   and
+* the legacy value dispatcher now transfers fully owned literal/read/array/hash
+  trees recursively from HIR source sites, rejecting unsupported children
+  before evaluation so it can safely fall back without partial state;
 * CFG call shape is first computed as an owned `OwnedCallArguments` value from
   HIR groups and `BlockState` values; only the final legacy adapter attaches
   Prism nodes for exact diagnostics and keyword-key recording, so the transfer
