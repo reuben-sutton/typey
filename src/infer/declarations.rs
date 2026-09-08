@@ -740,14 +740,16 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             let name = prism::constant_name(node.name());
             if name == "prop" || name == "const" {
                 self.register_struct_property(node, name == "const");
-            } else if name == "abstract!" && node.arguments().is_none() {
+            } else if matches!(name.as_str(), "abstract!" | "interface!")
+                && node.arguments().is_none()
+            {
                 if let Some(owner) = self
                     .singleton_stack
                     .last()
                     .or_else(|| self.class_stack.last())
                     .cloned()
                 {
-                    self.register_class_dsl_method(&owner, "abstract!");
+                    self.register_class_dsl_method(&owner, &name);
                 }
             }
             let arguments = node.arguments().map(|arguments| {

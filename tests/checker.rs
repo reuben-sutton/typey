@@ -7287,6 +7287,11 @@ fn preserves_instance_new_overrides() {
 }
 
 #[test]
+fn recognizes_interface_declaration_dsl() {
+    check_fixture("tests/fixtures/interface_dsl.rb");
+}
+
+#[test]
 fn suppresses_dead_code_api_errors_but_reports_unreachable_code() {
     check_fixture("tests/fixtures/unreachable_dead_api.rb");
 }
