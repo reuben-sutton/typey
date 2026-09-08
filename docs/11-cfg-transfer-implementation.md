@@ -55,8 +55,12 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
 * `79185dd` admitted binary compound assignments whose target is a direct
   storage place. Their existing owned lowering is a straight-line
   read/call/write sequence, so the body worklist can transfer them without
-  adding a second assignment evaluator. `&&=`/`||=`, attribute/index writes,
-  and dynamic compound targets remain outside this boundary.
+  adding a second assignment evaluator. `&&=`/`||=` and dynamic compound
+  targets remain outside this boundary.
+* `fda77a1` extended `Set` transfer to attribute and index targets whose
+  receiver and arguments are themselves owned, positional-only expressions.
+  The lowered setter calls now use the same call transfer as ordinary sends;
+  keyword/splat targets and logical compound forms remain recursive.
 
 ## Next boundary
 
@@ -65,12 +69,11 @@ semantics, rescue/ensure, and branch/body expression adapters. Complete-body
 transfer is deliberately narrow: it does not yet interpret keyword/splat/block
 calls, safe navigation, `super`, `yield`, closures, or abrupt terminators
 inside a body. The next implementation boundaries are the remaining call
-shapes, logical compound assignments, and dynamic writes, followed by
+shapes, logical compound assignments, and dynamic compound writes, followed by
 complete branch bodies and rescue/ensure edges. Collection splats also need
-explicit operand-span
-metadata before they can cross this boundary. The recursive path must remain
-available for differential checks until each operation and terminator has an
-equivalent transfer.
+explicit operand-span metadata before they can cross this boundary. The
+recursive path must remain available for differential checks until each
+operation and terminator has an equivalent transfer.
 
 The current call adapter is also an explicit bridge: it uses CFG-owned value
 IDs for evaluation order and types, but still obtains Prism call nodes for
