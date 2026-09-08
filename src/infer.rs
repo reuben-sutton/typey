@@ -4,7 +4,7 @@ use crate::directives::{effective_typed_mode, is_typed_ignore, typed_mode, Typed
 use crate::hir;
 use crate::prism;
 use crate::signature::{self, AnnotationTable, AssertionKind, MethodSig};
-use crate::types::{Type, TypeLattice};
+use crate::types::Type;
 use ruby_prism::{
     ArgumentsNode, CallNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit,
 };
@@ -21,6 +21,7 @@ mod cfg_transfer;
 mod control_flow;
 mod declarations;
 mod dispatch;
+mod environment;
 mod fixpoint;
 mod flow;
 mod legacy_eval;
@@ -37,6 +38,8 @@ use call_types::{
 };
 use cfg_transfer::{CfgFallbackCounters, CfgFallbackKind};
 use declarations::{DeclarationState, MethodRegistrar};
+pub use environment::Environment;
+use environment::PredicateAlias;
 use fixpoint::FixpointState;
 use flow::{Eval, Flow, FlowKind, OutcomeTypes};
 use method_state::MethodState;
@@ -146,13 +149,6 @@ struct ClassInfo {
     class_methods: Vec<String>,
     requires_ancestors: Vec<String>,
     type_members: BTreeMap<String, GenericMember>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PredicateAlias {
-    source: String,
-    negated: bool,
-    expected: Option<Type>,
 }
 
 #[derive(Default)]
@@ -274,205 +270,6 @@ impl CheckResult {
         self.diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == crate::diagnostic::Severity::Error)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Environment {
-    locals: BTreeMap<String, Type>,
-    /// Types learned from observed calls to an unsigiled method are useful
-    /// for expression inference, but they are not a proof about every future
-    /// call. Keep their provenance so control-flow predicates do not treat a
-    /// sample argument as exhaustive.
-    inferred_locals: BTreeSet<String>,
-    provisional_locals: BTreeSet<String>,
-    open_array_locals: BTreeSet<String>,
-    known_nonempty_arrays: BTreeSet<String>,
-    predicate_aliases: BTreeMap<String, PredicateAlias>,
-    known_truthiness: BTreeMap<String, bool>,
-    self_type: Type,
-    method_key: Option<MethodKey>,
-}
-
-impl Default for Environment {
-    fn default() -> Self {
-        Self {
-            locals: BTreeMap::new(),
-            inferred_locals: BTreeSet::new(),
-            provisional_locals: BTreeSet::new(),
-            open_array_locals: BTreeSet::new(),
-            known_nonempty_arrays: BTreeSet::new(),
-            predicate_aliases: BTreeMap::new(),
-            known_truthiness: BTreeMap::new(),
-            self_type: Type::Object,
-            method_key: None,
-        }
-    }
-}
-
-impl Environment {
-    #[must_use]
-    pub fn get(&self, name: &str) -> Type {
-        self.locals.get(name).cloned().unwrap_or(Type::Any)
-    }
-
-    #[must_use]
-    pub fn contains(&self, name: &str) -> bool {
-        self.locals.contains_key(name)
-    }
-
-    pub fn bind(&mut self, name: impl Into<String>, type_: Type) {
-        let name = name.into();
-        self.open_array_locals.remove(&name);
-        self.known_nonempty_arrays.remove(&name);
-        self.inferred_locals.remove(&name);
-        self.provisional_locals.remove(&name);
-        self.locals.insert(name.clone(), type_);
-        self.predicate_aliases.remove(&name);
-        self.known_truthiness.remove(&name);
-    }
-
-    fn remove(&mut self, name: &str) {
-        self.locals.remove(name);
-        self.inferred_locals.remove(name);
-        self.provisional_locals.remove(name);
-        self.open_array_locals.remove(name);
-        self.known_nonempty_arrays.remove(name);
-        self.predicate_aliases.remove(name);
-        self.known_truthiness.remove(name);
-    }
-
-    fn mark_inferred(&mut self, name: impl Into<String>) {
-        let name = name.into();
-        if self.locals.contains_key(&name) {
-            self.provisional_locals.remove(&name);
-            self.inferred_locals.insert(name);
-        }
-    }
-
-    fn mark_provisional(&mut self, name: impl Into<String>) {
-        let name = name.into();
-        if self.locals.contains_key(&name) {
-            self.inferred_locals.remove(&name);
-            self.provisional_locals.insert(name);
-        }
-    }
-
-    fn is_inferred(&self, name: &str) -> bool {
-        self.inferred_locals.contains(name)
-    }
-
-    fn is_provisional(&self, name: &str) -> bool {
-        self.provisional_locals.contains(name)
-    }
-
-    fn bind_predicate_alias(
-        &mut self,
-        name: impl Into<String>,
-        type_: Type,
-        alias: PredicateAlias,
-    ) {
-        let name = name.into();
-        self.open_array_locals.remove(&name);
-        self.known_nonempty_arrays.remove(&name);
-        self.inferred_locals.remove(&name);
-        self.provisional_locals.remove(&name);
-        self.locals.insert(name.clone(), type_);
-        self.predicate_aliases.insert(name.clone(), alias);
-        self.known_truthiness.remove(&name);
-    }
-
-    fn predicate_alias(&self, name: &str) -> Option<&PredicateAlias> {
-        self.predicate_aliases.get(name)
-    }
-
-    fn set_known_truthiness(&mut self, name: impl Into<String>, truthy: bool) {
-        self.known_truthiness.insert(name.into(), truthy);
-    }
-
-    fn known_truthiness(&self, name: &str) -> Option<bool> {
-        self.known_truthiness.get(name).copied()
-    }
-
-    fn set_known_nonempty_array(&mut self, name: impl Into<String>, nonempty: bool) {
-        let name = name.into();
-        if nonempty {
-            self.known_nonempty_arrays.insert(name);
-        } else {
-            self.known_nonempty_arrays.remove(&name);
-        }
-    }
-
-    fn known_nonempty_array(&self, name: &str) -> bool {
-        self.known_nonempty_arrays.contains(name)
-    }
-
-    /// Join two control-flow environments using the same type lattice as
-    /// expression inference. A local which exists on only one path can be
-    /// `nil` when the other path is taken.
-    #[must_use]
-    pub fn join(&self, other: &Self) -> Self {
-        let lattice = TypeLattice;
-        let mut result = Self {
-            locals: BTreeMap::new(),
-            inferred_locals: self
-                .inferred_locals
-                .union(&other.inferred_locals)
-                .cloned()
-                .collect(),
-            provisional_locals: self
-                .provisional_locals
-                .union(&other.provisional_locals)
-                .cloned()
-                .collect(),
-            open_array_locals: self
-                .open_array_locals
-                .intersection(&other.open_array_locals)
-                .cloned()
-                .collect(),
-            known_nonempty_arrays: self
-                .known_nonempty_arrays
-                .intersection(&other.known_nonempty_arrays)
-                .cloned()
-                .collect(),
-            predicate_aliases: self
-                .predicate_aliases
-                .iter()
-                .filter_map(|(name, alias)| {
-                    (other.predicate_aliases.get(name) == Some(alias))
-                        .then(|| (name.clone(), alias.clone()))
-                })
-                .collect(),
-            known_truthiness: self
-                .known_truthiness
-                .iter()
-                .filter_map(|(name, truthy)| {
-                    (other.known_truthiness.get(name) == Some(truthy))
-                        .then(|| (name.clone(), *truthy))
-                })
-                .collect(),
-            self_type: self.self_type.clone(),
-            method_key: self.method_key.clone(),
-        };
-        for name in self.locals.keys().chain(other.locals.keys()) {
-            if result.locals.contains_key(name) {
-                continue;
-            }
-            let type_ = match (self.locals.get(name), other.locals.get(name)) {
-                (Some(left), Some(right)) => lattice.join(left, right),
-                (Some(value), None) | (None, Some(value)) => lattice.join(value, &Type::Nil),
-                (None, None) => Type::Any,
-            };
-            result.locals.insert(name.clone(), type_);
-        }
-        result
-    }
-
-    #[must_use]
-    pub fn narrowed(&self, name: &str, type_: Type) -> Self {
-        let mut result = self.clone();
-        result.bind(name.to_owned(), self.get(name).meet(&type_));
-        result
     }
 }
 
