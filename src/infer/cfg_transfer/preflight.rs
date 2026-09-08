@@ -5,6 +5,7 @@
 //! contract; it does not infer a type or decide whether a program is valid.
 
 use super::*;
+use std::collections::HashSet;
 
 pub(super) fn body_can_transfer(program: &hir::Program, body: hir::BodyId) -> bool {
     let Some(body) = program.body(body) else {

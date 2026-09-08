@@ -7,10 +7,13 @@ use super::super::{
 };
 use super::cfg_global_refinement_key;
 use super::patterns::{case_pattern_is_type_test, narrow_pattern_value, pattern_source_place};
+use super::preflight;
 use crate::cfg;
 use crate::hir::{self, Read};
+use crate::prism;
 use crate::types::Type;
-use std::collections::HashMap;
+use ruby_prism::Node;
+use std::collections::{HashMap, HashSet};
 
 pub(super) struct BodyTransfer<'analyzer, 'src> {
     pub(super) analyzer: &'analyzer mut Analyzer<'src>,
@@ -616,6 +619,195 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             }
         }
         Self::truthiness_reachability(source)
+    }
+}
+
+impl<'src> Analyzer<'src> {
+    fn seed_cfg_global_state(&self, graph: &cfg::Cfg, environment: &mut Environment) {
+        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
+            let place = match &operation.kind {
+                cfg::OperationKind::Read { place } | cfg::OperationKind::Write { place, .. } => {
+                    place
+                }
+                _ => continue,
+            };
+            let cfg::Place::Global(name) = place else {
+                continue;
+            };
+            let name = name.as_str();
+            let type_ = self.globals.get(name).cloned().unwrap_or(Type::Any);
+            environment.bind(cfg_global_refinement_key(name), type_);
+        }
+    }
+
+    fn commit_cfg_global_state(&mut self, graph: &cfg::Cfg, environment: &Environment) {
+        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
+            let place = match &operation.kind {
+                cfg::OperationKind::Write { place, .. } => place,
+                _ => continue,
+            };
+            let cfg::Place::Global(name) = place else {
+                continue;
+            };
+            let name = name.as_str();
+            if let Some(type_) = environment
+                .contains(&cfg_global_refinement_key(name))
+                .then(|| environment.get(&cfg_global_refinement_key(name)))
+            {
+                self.observe_global(name.to_owned(), &type_);
+            }
+        }
+    }
+
+    fn clear_cfg_global_state(graph: &cfg::Cfg, environment: &mut Environment) {
+        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
+            let place = match &operation.kind {
+                cfg::OperationKind::Read { place } | cfg::OperationKind::Write { place, .. } => {
+                    place
+                }
+                _ => continue,
+            };
+            let cfg::Place::Global(name) = place else {
+                continue;
+            };
+            environment.remove(&cfg_global_refinement_key(name.as_str()));
+        }
+    }
+
+    /// Run the generic CFG transfer over a complete, straight-line method
+    /// body. Bodies with dispatch, branches, or exceptional control flow stay
+    /// on the recursive evaluator until their owned transfer exists; the
+    /// preflight is important because a failed transfer must not leave partial
+    /// diagnostics or recorded types behind.
+    pub(in crate::infer) fn eval_cfg_body<'node>(
+        &mut self,
+        body_node: &Node<'node>,
+        body_id: hir::BodyId,
+        environment: &mut Environment,
+        record_result: bool,
+    ) -> Option<Eval> {
+        let (start, end) = prism::span(body_node);
+        self.eval_cfg_body_owned(
+            SourceSite::new(start, end),
+            body_id,
+            environment,
+            record_result,
+        )
+    }
+
+    pub(in crate::infer) fn eval_cfg_body_owned(
+        &mut self,
+        body_site: SourceSite,
+        body_id: hir::BodyId,
+        environment: &mut Environment,
+        record_result: bool,
+    ) -> Option<Eval> {
+        if !preflight::body_can_transfer(&self.hir_program, body_id) {
+            return None;
+        }
+        // The graph is syntax-only and immutable. It is lowered once when the
+        // analyzer is created, then reused across seed, fixpoint, and final
+        // passes instead of rebuilding the same body for every method visit.
+        let graph_store = self.cfg_graphs.as_ref()?.clone();
+        let graph = graph_store.get(body_id.0 as usize)?;
+        let fixed_array_candidates = graph
+            .blocks
+            .iter()
+            .flat_map(|block| block.operations.iter())
+            .filter_map(|operation| {
+                let result = operation.result?;
+                let cfg::OperationKind::BuildArray { elements } = &operation.kind else {
+                    return None;
+                };
+                let elements = elements
+                    .iter()
+                    .map(|element| match element {
+                        cfg::ArrayOperand::Value(value) => Some(*value),
+                        cfg::ArrayOperand::Splat { .. } => None,
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some((result, elements))
+            })
+            .collect::<HashMap<_, _>>();
+        let splatted_values = graph
+            .blocks
+            .iter()
+            .flat_map(|block| block.operations.iter())
+            .filter_map(|operation| match &operation.kind {
+                cfg::OperationKind::Call { arguments, .. } => Some(arguments),
+                _ => None,
+            })
+            .flat_map(|arguments| arguments.iter())
+            .filter_map(|argument| match argument {
+                cfg::ArgumentOperand::Splat(value) => Some(*value),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let fixed_array_elements = fixed_array_candidates
+            .into_iter()
+            .filter(|(value, _)| splatted_values.contains(value))
+            .collect::<HashMap<_, _>>();
+        if graph.blocks.iter().any(|block| {
+            block.operations.iter().any(|operation| {
+                !matches!(
+                    operation.kind,
+                    cfg::OperationKind::Const { .. }
+                        | cfg::OperationKind::Read { .. }
+                        | cfg::OperationKind::ReadSpecial { .. }
+                        | cfg::OperationKind::Write { .. }
+                        | cfg::OperationKind::Call { .. }
+                        | cfg::OperationKind::MakeClosure { .. }
+                        | cfg::OperationKind::BuildArray { .. }
+                        | cfg::OperationKind::BuildHash { .. }
+                        | cfg::OperationKind::Record { .. }
+                        | cfg::OperationKind::PatternTest { .. }
+                        | cfg::OperationKind::BindForTarget { .. }
+                )
+            })
+        }) {
+            return None;
+        }
+
+        let body = self.hir_program.body(body_id)?;
+        let context = BodyContext {
+            body: body_id,
+            method: environment.method_key.clone(),
+            self_type: environment.self_type.clone(),
+            parameters: body.parameters.clone(),
+            strictness: self.strictness_at(body.span.start as usize),
+        };
+        let mut initial_environment = environment.clone();
+        self.seed_cfg_global_state(&graph, &mut initial_environment);
+        let initial = BlockState::with_values(initial_environment, Vec::new(), Flow::normal());
+        let mut transfer = BodyTransfer {
+            analyzer: self,
+            context,
+            fixed_array_elements,
+            normal_type: Type::Never,
+            abrupt: OutcomeTypes::default(),
+            terminal_flow: Flow::empty(),
+            final_environment: None,
+        };
+        let worklist = cfg::transfer::run(&graph, &mut transfer, initial).ok()?;
+        let normal_type = transfer.normal_type.clone();
+        let abrupt = transfer.abrupt.clone();
+        let terminal_flow = transfer.terminal_flow;
+        let mut final_environment = transfer.final_environment.clone()?;
+        drop(worklist);
+        drop(transfer);
+        self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);
+        self.commit_cfg_global_state(&graph, &final_environment);
+        Self::clear_cfg_global_state(&graph, &mut final_environment);
+        *environment = final_environment;
+        let mut result = Eval::from_parts(
+            Some(normal_type),
+            abrupt,
+            Flow::normal().union(terminal_flow),
+        );
+        if record_result {
+            result.type_ = self.record_at(body_site, result.type_.clone(), false, None);
+        }
+        Some(result)
     }
 }
 
