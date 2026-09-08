@@ -425,6 +425,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
     fn transfer_call(
         analyzer: &mut Analyzer<'src>,
         node: &Node<'node>,
+        expression: Option<hir::ExprId>,
         operation: &cfg::OperationKind,
         values: &[Option<Type>],
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
@@ -443,61 +444,96 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         if block.is_some() || *safe_navigation {
             return None;
         }
-        let call = node.as_call_node()?;
-        let raw_arguments = call
+        let call = expression
+            .and_then(|expression| analyzer.hir_program.expression(expression))
+            .and_then(|expression| match &expression.kind {
+                hir::ExprKind::Call(call) => Some(call.clone()),
+                _ => None,
+            })?;
+        let raw_argument_nodes = node
+            .as_call_node()?
             .arguments()
             .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
             .unwrap_or_default();
+        if raw_argument_nodes.len() != call.argument_groups.len() {
+            return None;
+        }
+        let mut raw_argument_nodes = raw_argument_nodes.into_iter();
         let mut call_arguments = CallArguments::default();
         let mut operand_index = 0usize;
-        for (argument_index, argument_node) in raw_arguments.into_iter().enumerate() {
-            if let Some(keyword_hash) = argument_node.as_keyword_hash_node() {
-                let elements = keyword_hash.elements().into_iter().collect::<Vec<_>>();
-                let keyword_group = operands
-                    .get(operand_index..operand_index.saturating_add(elements.len()))
-                    .is_some_and(|group| {
-                        group
-                            .iter()
-                            .all(|operand| matches!(operand, cfg::ArgumentOperand::Keyword { .. }))
-                    });
-                if keyword_group && !elements.is_empty() {
-                    let mut key = Type::Never;
-                    let mut value = Type::Never;
-                    let mut keyword_arguments = Vec::with_capacity(elements.len());
-                    for element in elements {
+        let mut group_start = 0usize;
+        for (argument_index, (group_end, span)) in call
+            .argument_groups
+            .iter()
+            .zip(&call.argument_spans)
+            .enumerate()
+        {
+            let argument_node = raw_argument_nodes.next()?;
+            debug_assert_eq!(
+                prism::span(&argument_node),
+                (span.start as usize, span.end as usize)
+            );
+            let group = call.arguments.get(group_start..*group_end)?;
+            if !group.is_empty()
+                && group
+                    .iter()
+                    .all(|argument| matches!(argument, hir::Argument::Keyword { .. }))
+            {
+                let keyword_value_nodes = argument_node
+                    .as_keyword_hash_node()?
+                    .elements()
+                    .into_iter()
+                    .map(|element| {
                         let assoc = element.as_assoc_node()?;
-                        let cfg::ArgumentOperand::Keyword {
-                            name,
-                            value: value_id,
-                        } = operands.get(operand_index)?
-                        else {
-                            return None;
-                        };
-                        let type_ = values.get(value_id.0 as usize).cloned().flatten()?;
-                        let name = name.as_str().to_owned();
-                        key = key.join(&Type::Symbol);
-                        value = value.join(&type_);
                         analyzer.record(&assoc.key(), Type::Symbol);
-                        keyword_arguments.push(KeywordArgument {
-                            name,
-                            node: assoc.value(),
-                            type_,
-                        });
-                        operand_index += 1;
+                        Some(assoc.value())
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                let mut keyword_value_nodes = keyword_value_nodes.into_iter();
+                let mut key = Type::Never;
+                let mut value = Type::Never;
+                let mut keyword_arguments = Vec::with_capacity(group.len());
+                for argument in group {
+                    let hir::Argument::Keyword { name, value: _ } = argument else {
+                        return None;
+                    };
+                    let cfg::ArgumentOperand::Keyword {
+                        name: operand_name,
+                        value: cfg_value_id,
+                    } = operands.get(operand_index)?
+                    else {
+                        return None;
+                    };
+                    let type_ = values.get(cfg_value_id.0 as usize).cloned().flatten()?;
+                    let value_node = keyword_value_nodes.next()?;
+                    if name.as_str() != operand_name.as_str() {
+                        return None;
                     }
-                    let key = if key.is_never() { Type::Any } else { key };
-                    let value = if value.is_never() { Type::Any } else { value };
-                    let hash_type = analyzer.apply_inline_assertion(
-                        &argument_node,
-                        Type::Hash(Box::new(key), Box::new(value)),
-                    );
-                    analyzer.record(&argument_node, hash_type.clone());
-                    call_arguments.argument_nodes.push(argument_node);
-                    call_arguments.argument_types.push(hash_type.clone());
-                    call_arguments.argument_indices.push(argument_index);
-                    call_arguments.keyword_arguments.extend(keyword_arguments);
-                    continue;
+                    key = key.join(&Type::Symbol);
+                    value = value.join(&type_);
+                    keyword_arguments.push(KeywordArgument {
+                        name: name.as_str().to_owned(),
+                        node: value_node,
+                        type_,
+                    });
+                    operand_index += 1;
                 }
+                let key = if key.is_never() { Type::Any } else { key };
+                let value = if value.is_never() { Type::Any } else { value };
+                let hash_type = analyzer.apply_inline_assertion(
+                    &argument_node,
+                    Type::Hash(Box::new(key), Box::new(value)),
+                );
+                analyzer.record(&argument_node, hash_type.clone());
+                call_arguments.argument_nodes.push(argument_node);
+                call_arguments.argument_types.push(hash_type);
+                call_arguments.argument_indices.push(argument_index);
+                call_arguments.keyword_arguments.extend(keyword_arguments);
+                group_start = *group_end;
+                continue;
+            }
+            if group.len() != 1 {
+                return None;
             }
             if let Some(cfg::ArgumentOperand::Splat(value)) = operands.get(operand_index) {
                 let type_ = values.get(value.0 as usize).cloned().flatten()?;
@@ -524,6 +560,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 }
                 call_arguments.argument_nodes.push(argument_node);
                 operand_index += 1;
+                group_start = *group_end;
                 continue;
             }
             let Some(cfg::ArgumentOperand::Positional(value)) = operands.get(operand_index) else {
@@ -536,12 +573,13 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             call_arguments.positional_indices.push(argument_index);
             call_arguments.positional_types.push(type_);
             operand_index += 1;
+            group_start = *group_end;
         }
-        if operand_index != operands.len() {
+        if group_start != call.arguments.len() || operand_index != operands.len() {
             return None;
         }
 
-        let receiver_node = call.receiver();
+        let receiver_node = node.as_call_node()?.receiver();
         let receiver_type = match receiver {
             cfg::ReceiverOperand::Implicit => environment.self_type.clone(),
             cfg::ReceiverOperand::Value(value) => {
@@ -816,6 +854,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     let result = Self::transfer_call(
                         self.analyzer,
                         node,
+                        operation.expression,
                         &operation.kind,
                         &next.values,
                         &self.fixed_array_elements,
