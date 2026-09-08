@@ -136,8 +136,10 @@ fn expr_can_transfer(
             });
             block_supported
                 && match &call.receiver {
-                    hir::Receiver::Implicit | hir::Receiver::Explicit(_) => true,
-                    hir::Receiver::Super | hir::Receiver::Yield => false,
+                    hir::Receiver::Implicit | hir::Receiver::Explicit(_) | hir::Receiver::Super => {
+                        true
+                    }
+                    hir::Receiver::Yield => false,
                 }
                 && match &call.receiver {
                     hir::Receiver::Explicit(receiver) => {
@@ -155,7 +157,7 @@ fn expr_can_transfer(
                     hir::Argument::KeywordSplat(value) => {
                         expr_can_transfer(program, *value, visiting)
                     }
-                    hir::Argument::Forwarded => false,
+                    hir::Argument::Forwarded => true,
                 })
         }
         ExprKind::Array(elements) => elements.iter().all(|element| match element {
@@ -530,17 +532,30 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 hir::ExprKind::Call(call) => Some(call.clone()),
                 _ => None,
             })?;
-        let call_arguments =
-            analyzer.cfg_call_arguments(&input, &call, node, values, fixed_array_elements)?;
+        let call_arguments = analyzer.cfg_call_arguments(
+            &input,
+            &call,
+            node,
+            values,
+            fixed_array_elements,
+            environment,
+        )?;
 
-        let receiver_node = node.as_call_node()?.receiver();
-        let block_node = node.as_call_node()?.block();
+        let receiver_node = node.as_call_node().and_then(|call| call.receiver());
+        let block_node = node
+            .as_call_node()
+            .and_then(|call| call.block())
+            .or_else(|| {
+                node.as_super_node()
+                    .and_then(|super_node| super_node.block())
+            });
         let receiver_type = match &input.receiver {
             cfg::ReceiverOperand::Implicit => environment.self_type.clone(),
             cfg::ReceiverOperand::Value(value) => {
                 values.get(value.0 as usize).cloned().flatten()?
             }
-            cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => return None,
+            cfg::ReceiverOperand::Super => environment.self_type.clone(),
+            cfg::ReceiverOperand::Yield => return None,
         };
         let site = CallSite {
             argument_nodes: &call_arguments.argument_nodes,
@@ -548,7 +563,42 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             block: block_node.as_ref(),
         };
         let has_block = input.block.is_some();
-        let (type_, untyped_origin) = if matches!(input.receiver, cfg::ReceiverOperand::Implicit) {
+        let (type_, untyped_origin) = if matches!(input.receiver, cfg::ReceiverOperand::Super) {
+            let key = analyzer.super_method_key(environment.method_key.as_ref()?)?;
+            analyzer.record_method_dependency(&key, environment);
+            if let Some(signature) = analyzer
+                .observe_call(&key, &call_arguments, has_block)
+                .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
+            {
+                let block_return_type = analyzer.cfg_block_return_type(
+                    &input,
+                    block_node.as_ref(),
+                    &key,
+                    &signature,
+                    &call_arguments,
+                    &receiver_type,
+                    values,
+                    environment,
+                );
+                let type_ = analyzer.invoke_signature(
+                    node,
+                    input.name.as_str(),
+                    &signature,
+                    &call_arguments,
+                    Some(&receiver_type),
+                    block_return_type.as_ref(),
+                );
+                let origin = analyzer
+                    .resolve_method_key(&key)
+                    .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
+                    .is_some_and(|state| state.explicit)
+                    .then_some(UntypedOrigin::DeclaredSignature)
+                    .unwrap_or(UntypedOrigin::InferredMethod);
+                (type_, origin)
+            } else {
+                (Type::Any, UntypedOrigin::FallbackCall)
+            }
+        } else if matches!(input.receiver, cfg::ReceiverOperand::Implicit) {
             let key = analyzer.implicit_method_key(input.name.as_str(), environment);
             analyzer.record_method_dependency(&key, environment);
             if let Some(signature) = analyzer

@@ -93,10 +93,44 @@ impl<'src> Analyzer<'src> {
         node: &Node<'node>,
         values: &[Option<Type>],
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
+        environment: &super::Environment,
     ) -> Option<CallArguments<'node>> {
+        if call
+            .arguments
+            .iter()
+            .any(|argument| matches!(argument, hir::Argument::Forwarded))
+        {
+            if !call
+                .arguments
+                .iter()
+                .all(|argument| matches!(argument, hir::Argument::Forwarded))
+            {
+                return None;
+            }
+            let method = environment.method_key.as_ref()?;
+            let state = self.declarations.methods.get(method)?;
+            let positional_types = state.call_signature().params;
+            let mut call_arguments = CallArguments {
+                argument_types: positional_types.clone(),
+                positional_types,
+                forwards_arguments: true,
+                ..CallArguments::default()
+            };
+            call_arguments.argument_indices = (0..call_arguments.argument_types.len()).collect();
+            call_arguments.positional_indices = call_arguments.argument_indices.clone();
+            return Some(call_arguments);
+        }
         let raw_argument_nodes = node
-            .as_call_node()?
-            .arguments()
+            .as_call_node()
+            .and_then(|call| call.arguments())
+            .or_else(|| {
+                node.as_super_node()
+                    .and_then(|super_node| super_node.arguments())
+            })
+            .or_else(|| {
+                node.as_yield_node()
+                    .and_then(|yield_node| yield_node.arguments())
+            })
             .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
             .unwrap_or_default();
         if raw_argument_nodes.len() != call.argument_groups.len() {

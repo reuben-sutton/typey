@@ -92,7 +92,30 @@ class CfgBodyTransfer
   end
 end
 
+class CfgSuperBase
+  #: () -> String
+  def render
+    "base"
+  end
+end
+
+class CfgSuperChild < CfgSuperBase
+  #: () -> String
+  def render
+    super
+  end
+end
+
+class CfgForwardChild < CfgSuperBase
+  #: (Integer) -> String
+  def render(...)
+    super(...)
+  end
+end
+
 CfgBodyTransfer.new.value
 T.reveal_type(CfgBodyTransfer.new.safe_navigation("text")) # note: Revealed type: `T.nilable(String)`
 T.reveal_type(CfgBodyTransfer.new.inline_block) # note: Revealed type: `T::Array[String]`
 T.reveal_type(CfgBodyTransfer.new.passed_block) # note: Revealed type: `T::Array[String]`
+T.reveal_type(CfgSuperChild.new.render) # note: Revealed type: `String`
+T.reveal_type(CfgForwardChild.new.render(1)) # note: Revealed type: `String`
