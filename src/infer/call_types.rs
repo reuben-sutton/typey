@@ -5,7 +5,9 @@
 //! layer makes that dependency explicit and gives CFG transfer a stable place
 //! to introduce source-owned call inputs.
 
-use super::{Flow, OutcomeTypes};
+use super::{Flow, OutcomeTypes, SourceSite};
+use crate::cfg;
+use crate::hir;
 use crate::types::Type;
 use ruby_prism::Node;
 
@@ -13,6 +15,44 @@ pub(super) struct CallSite<'a, 'node> {
     pub(super) argument_nodes: &'a [Node<'node>],
     pub(super) argument_types: &'a [Type],
     pub(super) block: Option<&'a Node<'node>>,
+}
+
+/// The owned semantic input consumed by CFG call transfer. Parser nodes are
+/// deliberately absent; source nodes remain a separate compatibility adapter
+/// for legacy diagnostic and builtin APIs.
+#[derive(Clone, Debug)]
+pub(super) struct OwnedCallInput {
+    pub(super) site: SourceSite,
+    pub(super) expression: Option<hir::ExprId>,
+    pub(super) receiver: cfg::ReceiverOperand,
+    pub(super) name: hir::Name,
+    pub(super) arguments: Vec<cfg::ArgumentOperand>,
+    pub(super) block: Option<cfg::BlockOperand>,
+    pub(super) safe_navigation: bool,
+}
+
+impl OwnedCallInput {
+    pub(super) fn from_operation(operation: &cfg::Operation) -> Option<Self> {
+        let cfg::OperationKind::Call {
+            receiver,
+            name,
+            arguments,
+            block,
+            safe_navigation,
+        } = &operation.kind
+        else {
+            return None;
+        };
+        Some(Self {
+            site: SourceSite::from_span(operation.span, operation.expression),
+            expression: operation.expression,
+            receiver: receiver.clone(),
+            name: name.clone(),
+            arguments: arguments.clone(),
+            block: block.clone(),
+            safe_navigation: *safe_navigation,
+        })
+    }
 }
 
 pub(super) enum CallArgumentInput<'node> {

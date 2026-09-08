@@ -28,7 +28,7 @@ mod type_system;
 
 use call_types::{
     CallArgumentEvaluation, CallArgumentInput, CallArguments, CallSite, IndexAccess,
-    KeywordArgument, KeywordArgumentInput,
+    KeywordArgument, KeywordArgumentInput, OwnedCallInput,
 };
 use declarations::{DeclarationState, MethodRegistrar};
 use fixpoint::FixpointState;

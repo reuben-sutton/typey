@@ -1,6 +1,7 @@
 use super::{
     ivar_refinement_key, Analyzer, CallArguments, CallSite, Environment, Eval, Flow, FlowKind,
-    HirCallView, KeywordArgument, MethodKey, OutcomeTypes, SharedKey, SourceSite, Strictness,
+    HirCallView, KeywordArgument, MethodKey, OutcomeTypes, OwnedCallInput, SharedKey, SourceSite,
+    Strictness,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
@@ -425,26 +426,16 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
     fn transfer_call(
         analyzer: &mut Analyzer<'src>,
         node: &Node<'node>,
-        expression: Option<hir::ExprId>,
-        operation: &cfg::OperationKind,
+        input: OwnedCallInput,
         values: &[Option<Type>],
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
         environment: &mut Environment,
     ) -> Option<Eval> {
-        let cfg::OperationKind::Call {
-            receiver,
-            name,
-            arguments: operands,
-            block,
-            safe_navigation,
-        } = operation
-        else {
-            return None;
-        };
-        if block.is_some() || *safe_navigation {
+        if input.block.is_some() || input.safe_navigation {
             return None;
         }
-        let call = expression
+        let call = input
+            .expression
             .and_then(|expression| analyzer.hir_program.expression(expression))
             .and_then(|expression| match &expression.kind {
                 hir::ExprKind::Call(call) => Some(call.clone()),
@@ -459,6 +450,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             return None;
         }
         let mut raw_argument_nodes = raw_argument_nodes.into_iter();
+        let operands = &input.arguments;
         let mut call_arguments = CallArguments::default();
         let mut operand_index = 0usize;
         let mut group_start = 0usize;
@@ -580,7 +572,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         }
 
         let receiver_node = node.as_call_node()?.receiver();
-        let receiver_type = match receiver {
+        let receiver_type = match &input.receiver {
             cfg::ReceiverOperand::Implicit => environment.self_type.clone(),
             cfg::ReceiverOperand::Value(value) => {
                 values.get(value.0 as usize).cloned().flatten()?
@@ -592,8 +584,8 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             argument_types: &call_arguments.argument_types,
             block: None,
         };
-        let type_ = if matches!(receiver, cfg::ReceiverOperand::Implicit) {
-            let key = analyzer.implicit_method_key(name.as_str(), environment);
+        let type_ = if matches!(input.receiver, cfg::ReceiverOperand::Implicit) {
+            let key = analyzer.implicit_method_key(input.name.as_str(), environment);
             analyzer.record_method_dependency(&key, environment);
             if let Some(signature) = analyzer
                 .observe_call(&key, &call_arguments, false)
@@ -601,7 +593,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             {
                 analyzer.invoke_signature(
                     node,
-                    name.as_str(),
+                    input.name.as_str(),
                     &signature,
                     &call_arguments,
                     Some(&receiver_type),
@@ -610,7 +602,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             } else {
                 analyzer.eval_global_call(
                     node,
-                    name.as_str(),
+                    input.name.as_str(),
                     &call_arguments.argument_nodes,
                     &call_arguments.argument_types,
                     None,
@@ -622,7 +614,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             let key = analyzer.receiver_method_key(
                 receiver_node.as_ref(),
                 &dispatch_receiver,
-                name.as_str(),
+                input.name.as_str(),
                 environment,
             );
             if let Some(key) = key {
@@ -633,13 +625,13 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 {
                     let type_ = analyzer.invoke_signature(
                         node,
-                        name.as_str(),
+                        input.name.as_str(),
                         &signature,
                         &call_arguments,
                         Some(&dispatch_receiver),
                         None,
                     );
-                    if name.as_str() == "new"
+                    if input.name.as_str() == "new"
                         && Analyzer::class_object_instance_type(&dispatch_receiver).is_some()
                     {
                         analyzer.instantiate_generic_class(type_)
@@ -647,10 +639,20 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                         type_
                     }
                 } else {
-                    analyzer.eval_method_call(&dispatch_receiver, name.as_str(), &site, environment)
+                    analyzer.eval_method_call(
+                        &dispatch_receiver,
+                        input.name.as_str(),
+                        &site,
+                        environment,
+                    )
                 }
             } else {
-                analyzer.eval_method_call(&dispatch_receiver, name.as_str(), &site, environment)
+                analyzer.eval_method_call(
+                    &dispatch_receiver,
+                    input.name.as_str(),
+                    &site,
+                    environment,
+                )
             }
         };
         let mut result = if type_.is_never() {
@@ -658,8 +660,11 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         } else {
             Eval::value(type_)
         };
-        let type_ =
-            analyzer.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
+        let type_ = analyzer.apply_inline_assertion_in_environment_at(
+            input.site,
+            result.type_.clone(),
+            environment,
+        );
         if result.normal_type.is_some() {
             result.normal_type = Some(type_.clone());
         }
@@ -854,8 +859,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     let result = Self::transfer_call(
                         self.analyzer,
                         node,
-                        operation.expression,
-                        &operation.kind,
+                        OwnedCallInput::from_operation(operation).ok_or(())?,
                         &next.values,
                         &self.fixed_array_elements,
                         &mut next.environment,
