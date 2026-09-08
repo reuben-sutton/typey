@@ -1,4 +1,4 @@
-use super::{name_matches, Analyzer, CallArguments, SourceSite};
+use super::{name_matches, Analyzer, CallArguments, MethodKey, SourceSite};
 use crate::prism;
 use crate::signature::MethodSig;
 use crate::types::Type;
@@ -12,6 +12,226 @@ enum SignatureDiagnosticSite<'a, 'node> {
 }
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn observe_call(
+        &mut self,
+        key: &MethodKey,
+        arguments: &CallArguments<'_>,
+        has_block: bool,
+    ) -> Option<MethodSig> {
+        let key = self.resolve_method_key(key)?;
+        if let Some(state) = self
+            .declarations
+            .methods
+            .get(&key)
+            .filter(|state| state.explicit)
+        {
+            let fallback = state.call_signature();
+            let overloads = if state.overloads.is_empty() {
+                vec![fallback.clone()]
+            } else {
+                state.overloads.clone()
+            };
+            return Some(
+                self.select_overload(&overloads, arguments, has_block)
+                    .unwrap_or(fallback),
+            );
+        }
+        let (signature, changed) = {
+            let recursive_inferred = self
+                .substitution_context
+                .as_ref()
+                .and_then(|current| self.resolve_method_key(current))
+                .is_some_and(|current| {
+                    current == key
+                        && self
+                            .declarations
+                            .methods
+                            .get(&current)
+                            .is_some_and(|state| !state.explicit)
+                });
+            let state = self.declarations.methods.get_mut(&key)?;
+            let mut changed = false;
+            let positional_types = if state.accepts_keyword_rest || !state.keywords.is_empty() {
+                &arguments.positional_types
+            } else {
+                &arguments.argument_types
+            };
+            // A direct recursive call often passes a value derived from the
+            // current method parameter. Observing that provisional `Any`
+            // argument would permanently poison the parameter summary before
+            // an external call can provide concrete evidence.
+            let recursive_arguments_concrete = !positional_types.iter().any(Type::contains_any)
+                && arguments
+                    .keyword_arguments
+                    .iter()
+                    .all(|argument| !argument.type_.contains_any());
+            if (!recursive_inferred || recursive_arguments_concrete)
+                && !arguments.forwards_arguments
+                && !arguments.has_unknown_positional_splat
+                && !arguments.has_unknown_keyword_splat
+            {
+                changed |= state.observe_arguments(positional_types);
+                if state.accepts_keyword_rest || !state.keywords.is_empty() {
+                    for argument in &arguments.keyword_arguments {
+                        changed |= state.observe_keyword(&argument.name, &argument.type_);
+                    }
+                }
+            }
+            (state.call_signature(), changed)
+        };
+        if changed {
+            self.fixpoint.changed_methods.insert(key);
+        }
+        Some(signature)
+    }
+
+    fn select_overload(
+        &self,
+        overloads: &[MethodSig],
+        arguments: &CallArguments<'_>,
+        has_block: bool,
+    ) -> Option<MethodSig> {
+        let matching = overloads
+            .iter()
+            .enumerate()
+            .filter(|(_, signature)| self.signature_accepts_arguments(signature, arguments))
+            .collect::<Vec<_>>();
+        let block_preference = |signature: &MethodSig| {
+            if has_block == signature.block.is_some() {
+                0
+            } else {
+                1
+            }
+        };
+        matching
+            .into_iter()
+            .min_by_key(|(index, signature)| {
+                let positional_count =
+                    if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
+                        arguments.positional_types.len()
+                    } else {
+                        arguments.argument_types.len()
+                    };
+                (
+                    block_preference(signature),
+                    signature.params.len().saturating_sub(positional_count),
+                    *index,
+                )
+            })
+            .map(|(_, signature)| signature.clone())
+    }
+
+    fn signature_accepts_arguments(
+        &self,
+        signature: &MethodSig,
+        arguments: &CallArguments<'_>,
+    ) -> bool {
+        if !self.signature_shape_accepts_arguments(signature, arguments) {
+            return false;
+        }
+        if arguments.forwards_arguments
+            || arguments.has_dynamic_positional_splat
+            || arguments.has_dynamic_keyword_splat
+            || arguments.has_unknown_positional_splat
+            || arguments.has_unknown_keyword_splat
+        {
+            return true;
+        }
+        let keyword_mode = !signature.keywords.is_empty() || signature.accepts_keyword_rest;
+        let positional_types = if keyword_mode {
+            &arguments.positional_types
+        } else {
+            &arguments.argument_types
+        };
+        let type_parameter_bindings =
+            self.infer_type_parameter_bindings(signature, arguments, None);
+        if !positional_types.iter().enumerate().all(|(index, actual)| {
+            let Some(expected) = signature.positional_type(index, positional_types.len()) else {
+                return false;
+            };
+            let expected = self.substitute_signature_type(
+                expected,
+                None,
+                &type_parameter_bindings,
+                &signature.type_parameters,
+            );
+            self.is_assignable(actual, &expected) || matches!(expected, Type::TypeVar(_))
+        }) {
+            return false;
+        }
+        if keyword_mode
+            && !arguments.has_keyword_splat
+            && !arguments.keyword_arguments.iter().all(|argument| {
+                signature
+                    .keywords
+                    .get(&argument.name)
+                    .is_some_and(|expected| {
+                        let expected = self.substitute_signature_type(
+                            &expected.type_,
+                            None,
+                            &type_parameter_bindings,
+                            &signature.type_parameters,
+                        );
+                        self.is_assignable(&argument.type_, &expected)
+                            || matches!(expected, Type::TypeVar(_))
+                    })
+                    || signature.accepts_keyword_rest
+            })
+        {
+            return false;
+        }
+        true
+    }
+
+    fn signature_shape_accepts_arguments(
+        &self,
+        signature: &MethodSig,
+        arguments: &CallArguments<'_>,
+    ) -> bool {
+        if arguments.forwards_arguments
+            || arguments.has_dynamic_positional_splat
+            || arguments.has_dynamic_keyword_splat
+            || arguments.has_unknown_positional_splat
+            || arguments.has_unknown_keyword_splat
+        {
+            return true;
+        }
+        let keyword_mode = !signature.keywords.is_empty() || signature.accepts_keyword_rest;
+        let positional_types = if keyword_mode {
+            &arguments.positional_types
+        } else {
+            &arguments.argument_types
+        };
+        if positional_types.len() < signature.required_params
+            || (!signature.accepts_rest && positional_types.len() > signature.params.len())
+        {
+            return false;
+        }
+        if keyword_mode && !arguments.has_keyword_splat {
+            let provided = arguments
+                .keyword_arguments
+                .iter()
+                .map(|argument| argument.name.as_str())
+                .collect::<BTreeSet<_>>();
+            if signature
+                .keywords
+                .iter()
+                .any(|(name, parameter)| parameter.required && !provided.contains(name.as_str()))
+            {
+                return false;
+            }
+            if !signature.accepts_keyword_rest
+                && arguments
+                    .keyword_arguments
+                    .iter()
+                    .any(|argument| !signature.keywords.contains_key(&argument.name))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     pub(super) fn invoke_signature<'node>(
         &mut self,
         node: &Node<'node>,
