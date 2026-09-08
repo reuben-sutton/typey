@@ -2035,86 +2035,93 @@ impl<'src> Analyzer<'src> {
         node: &Node<'node>,
         environment: &mut Environment,
     ) -> Option<Eval> {
-        let kind = self.hir_value_kind_for_node(node)?;
-        match kind {
-            ExprKind::Nil
-            | ExprKind::Literal(_)
-            | ExprKind::Read(_)
-            | ExprKind::Array(_)
-            | ExprKind::Hash(_) => {
-                self.cfg_transfer_values = self.cfg_transfer_values.saturating_add(1);
-                Some(self.transfer_cfg_value(node, kind, environment))
-            }
-            _ => None,
+        let expression = self.hir_value_expression_for_node(node)?;
+        if !Self::owned_value_tree_supported(&self.hir_program, expression) {
+            return None;
         }
+        self.cfg_transfer_values = self.cfg_transfer_values.saturating_add(1);
+        Some(self.eval_owned_value(expression, environment))
     }
 
-    fn hir_value_kind_for_node(&self, node: &Node<'_>) -> Option<ExprKind> {
+    fn hir_value_expression_for_node(&self, node: &Node<'_>) -> Option<hir::ExprId> {
         let span = prism::span(node);
         let expression_id = self.hir_value_ids.get(&span)?;
-        let expression = self.hir_program.expression(*expression_id)?;
+        Some(*expression_id)
+    }
+
+    fn owned_value_tree_supported(program: &hir::Program, expression: hir::ExprId) -> bool {
+        let Some(expression) = program.expression(expression) else {
+            return false;
+        };
         match &expression.kind {
-            ExprKind::Nil
-            | ExprKind::Literal(_)
-            | ExprKind::Read(_)
-            | ExprKind::Array(_)
-            | ExprKind::Hash(_) => Some(expression.kind.clone()),
-            _ => None,
+            ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => true,
+            ExprKind::Array(elements) => elements.iter().all(|element| match element {
+                ArrayElement::Value(value) | ArrayElement::Splat { value, .. } => {
+                    Self::owned_value_tree_supported(program, *value)
+                }
+            }),
+            ExprKind::Hash(elements) => elements.iter().all(|element| match element {
+                HashElement::Pair { key, value } => {
+                    Self::owned_value_tree_supported(program, *key)
+                        && Self::owned_value_tree_supported(program, *value)
+                }
+                HashElement::Splat { value, .. } => {
+                    Self::owned_value_tree_supported(program, *value)
+                }
+            }),
+            _ => false,
         }
     }
 
-    fn transfer_cfg_value<'node>(
-        &mut self,
-        node: &Node<'node>,
-        kind: ExprKind,
-        environment: &mut Environment,
-    ) -> Eval {
+    fn eval_owned_value(&mut self, expression: hir::ExprId, environment: &mut Environment) -> Eval {
+        let (span, kind) = {
+            let expression = self
+                .hir_program
+                .expression(expression)
+                .expect("owned value expression exists after preflight");
+            (expression.span, expression.kind.clone())
+        };
+        let site = SourceSite::from_span(span, Some(expression));
         let type_ = match kind {
             ExprKind::Nil => Type::Nil,
             ExprKind::Literal(literal) => Self::cfg_literal_type(&literal),
-            ExprKind::Read(read) => self.transfer_cfg_read(node, read, environment),
-            ExprKind::Array(elements) => {
-                return self.transfer_cfg_array(node, elements, environment);
+            ExprKind::Read(read) => {
+                let type_ = self.transfer_cfg_read_at(site, read, environment);
+                return Eval::value(self.record_at(site, type_, false, None));
             }
-            ExprKind::Hash(elements) => {
-                return self.transfer_cfg_hash(node, elements, environment);
-            }
-            _ => unreachable!("non-value HIR operation reached CFG value transfer"),
+            ExprKind::Array(elements) => return self.eval_owned_array(site, elements, environment),
+            ExprKind::Hash(elements) => return self.eval_owned_hash(site, elements, environment),
+            _ => unreachable!("non-value HIR operation reached owned value transfer"),
         };
-        Eval::value(self.record(node, type_))
+        let type_ = self.apply_inline_assertion_in_environment_at(site, type_, environment);
+        Eval::value(self.record_at(site, type_, false, None))
     }
 
-    fn transfer_cfg_array<'node>(
+    fn eval_owned_array(
         &mut self,
-        node: &Node<'node>,
+        site: SourceSite,
         elements: Vec<ArrayElement>,
         environment: &mut Environment,
     ) -> Eval {
-        let Some(array) = node.as_array_node() else {
-            return Eval::value(self.record(node, Type::Any));
-        };
-        let prism_elements = array.elements().into_iter().collect::<Vec<_>>();
-        if prism_elements.len() != elements.len() {
-            return Eval::value(self.record(node, Type::Any));
-        }
-
         let tuple_depth = self.literal_tuple_depth;
         self.literal_tuple_depth += 1;
         let mut element_types = Vec::new();
         let mut fixed_length = true;
         let mut element = Type::Never;
-        for (hir_element, prism_element) in elements.into_iter().zip(prism_elements) {
-            let (value_node, splat) = match hir_element {
-                ArrayElement::Value(_) => (prism_element, false),
-                ArrayElement::Splat { .. } => {
-                    let value_node = prism_element
-                        .as_splat_node()
-                        .and_then(|splat| splat.expression())
-                        .unwrap_or(prism_element);
-                    (value_node, true)
-                }
+        for element_value in elements {
+            let (value, splat, splat_span) = match element_value {
+                ArrayElement::Value(value) => (value, false, None),
+                ArrayElement::Splat { value, span } => (value, true, Some(span)),
             };
-            let child_type = self.eval_node(&value_node, environment).type_;
+            let child_type = self.eval_owned_value(value, environment).type_;
+            if let Some(span) = splat_span {
+                self.record_at(
+                    SourceSite::from_span(span, None),
+                    child_type.clone(),
+                    false,
+                    None,
+                );
+            }
             let child_type = if splat {
                 fixed_length = false;
                 self.array_element_type(&child_type)
@@ -2148,66 +2155,50 @@ impl<'src> Analyzer<'src> {
         } else {
             Type::Array(Box::new(element))
         };
-        let type_ = self.apply_inline_assertion_in_environment(node, inferred, environment);
-        Eval::value(self.record(node, type_))
+        let type_ = self.apply_inline_assertion_in_environment_at(site, inferred, environment);
+        Eval::value(self.record_at(site, type_, false, None))
     }
 
-    fn transfer_cfg_hash<'node>(
+    fn eval_owned_hash(
         &mut self,
-        node: &Node<'node>,
+        site: SourceSite,
         elements: Vec<HashElement>,
         environment: &mut Environment,
     ) -> Eval {
-        let prism_elements = if let Some(hash) = node.as_hash_node() {
-            hash.elements().into_iter().collect::<Vec<_>>()
-        } else if let Some(hash) = node.as_keyword_hash_node() {
-            hash.elements().into_iter().collect::<Vec<_>>()
-        } else {
-            return Eval::value(self.record(node, Type::Any));
-        };
-        if prism_elements.len() != elements.len() {
-            return Eval::value(self.record(node, Type::Any));
-        }
-
         let mut key = Type::Never;
         let mut value = Type::Never;
-        for (hir_element, prism_element) in elements.into_iter().zip(prism_elements) {
-            match hir_element {
-                HashElement::Pair { .. } => {
-                    let Some(assoc) = prism_element.as_assoc_node() else {
-                        return Eval::value(self.record(node, Type::Any));
-                    };
-                    key = key.join(&self.eval_node(&assoc.key(), environment).type_);
-                    value = value.join(&self.eval_node(&assoc.value(), environment).type_);
+        for element in elements {
+            match element {
+                HashElement::Pair {
+                    key: key_id,
+                    value: value_id,
+                } => {
+                    key = key.join(&self.eval_owned_value(key_id, environment).type_);
+                    value = value.join(&self.eval_owned_value(value_id, environment).type_);
                 }
-                HashElement::Splat { .. } => {
-                    let Some(splat) = prism_element.as_assoc_splat_node() else {
-                        return Eval::value(self.record(node, Type::Any));
-                    };
-                    if let Some(expression) = splat.value() {
-                        match self.eval_node(&expression, environment).type_ {
-                            Type::Hash(splat_key, splat_value) => {
-                                key = key.join(&splat_key);
-                                value = value.join(&splat_value);
-                            }
-                            Type::Any => {
-                                key = Type::Any;
-                                value = Type::Any;
-                            }
-                            _ => {}
-                        }
+                HashElement::Splat {
+                    value: value_id, ..
+                } => match self.eval_owned_value(value_id, environment).type_ {
+                    Type::Hash(splat_key, splat_value) => {
+                        key = key.join(&splat_key);
+                        value = value.join(&splat_value);
                     }
-                }
+                    Type::Any => {
+                        key = Type::Any;
+                        value = Type::Any;
+                    }
+                    _ => {}
+                },
             }
         }
         let key = if key.is_never() { Type::Any } else { key };
         let value = if value.is_never() { Type::Any } else { value };
-        let type_ = self.apply_inline_assertion_in_environment(
-            node,
+        let type_ = self.apply_inline_assertion_in_environment_at(
+            site,
             Type::Hash(Box::new(key), Box::new(value)),
             environment,
         );
-        Eval::value(self.record(node, type_))
+        Eval::value(self.record_at(site, type_, false, None))
     }
 
     fn cfg_literal_type(literal: &Literal) -> Type {
@@ -2522,55 +2513,6 @@ impl<'src> Analyzer<'src> {
         environment: &Environment,
     ) -> Type {
         self.cfg_predicate_argument_type(expression, environment)
-    }
-
-    fn transfer_cfg_read(
-        &mut self,
-        node: &Node<'_>,
-        read: Read,
-        environment: &mut Environment,
-    ) -> Type {
-        match read {
-            Read::Local(local) => {
-                let name = self
-                    .hir_program
-                    .local_name(local)
-                    .map_or_else(String::new, |name| name.as_str().to_owned());
-                self.apply_inline_assertion_in_environment(
-                    node,
-                    environment.get(&name),
-                    environment,
-                )
-            }
-            Read::InstanceVariable(name) => {
-                let actual = self.ivar_type(environment, name.as_str());
-                self.apply_inline_assertion_in_environment(node, actual, environment)
-            }
-            Read::ClassVariable(name) => {
-                let actual = self.class_var_type(environment, name.as_str());
-                self.apply_inline_assertion(node, actual)
-            }
-            Read::Global(name) => {
-                let name = name.as_str().to_owned();
-                self.record_shared_read(SharedKey::Global(name.clone()), environment);
-                self.apply_inline_assertion(
-                    node,
-                    self.globals.get(&name).cloned().unwrap_or(Type::Any),
-                )
-            }
-            Read::Constant(path) => {
-                let name = path.as_str().to_owned();
-                let actual = self.constant_type(environment, &name);
-                self.report_missing_constant_if_needed(node, environment, &name);
-                self.apply_inline_assertion(node, actual)
-            }
-            Read::SelfValue => self.apply_inline_assertion(node, environment.self_type.clone()),
-            Read::Numbered(number) => {
-                self.apply_inline_assertion(node, environment.get(&format!("_{number}")))
-            }
-            Read::It => self.apply_inline_assertion(node, environment.get("it")),
-            Read::BackReference(_) => self.apply_inline_assertion(node, Type::Any),
-        }
     }
 
     pub(super) fn has_cfg_call_operation(&self, node: &Node<'_>) -> bool {
