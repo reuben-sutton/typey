@@ -10,6 +10,37 @@ use ruby_prism::{IfNode, Node, Visit};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CfgFallbackKind {
+    UnsupportedOperation,
+    UnsupportedEdge,
+    LegacyBridge,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct CfgFallbackCounters {
+    pub(super) unsupported_operation: usize,
+    pub(super) unsupported_edge: usize,
+    pub(super) legacy_bridge: usize,
+}
+
+impl CfgFallbackCounters {
+    pub(super) fn record(&mut self, kind: CfgFallbackKind) {
+        let counter = match kind {
+            CfgFallbackKind::UnsupportedOperation => &mut self.unsupported_operation,
+            CfgFallbackKind::UnsupportedEdge => &mut self.unsupported_edge,
+            CfgFallbackKind::LegacyBridge => &mut self.legacy_bridge,
+        };
+        *counter = counter.saturating_add(1);
+    }
+
+    pub(super) fn total(&self) -> usize {
+        self.unsupported_operation
+            .saturating_add(self.unsupported_edge)
+            .saturating_add(self.legacy_bridge)
+    }
+}
+
 /// The inference-side state at a CFG block boundary.
 ///
 /// CFG construction remains type-free. This state is the first boundary where
@@ -2174,7 +2205,13 @@ impl<'src> Analyzer<'src> {
             .cloned()
     }
 
-    pub(super) fn report_cfg_fallback(&self, node: &Node<'_>, kind: &str) {
+    pub(super) fn record_cfg_fallback(
+        &mut self,
+        node: &Node<'_>,
+        kind: &str,
+        fallback: CfgFallbackKind,
+    ) {
+        self.cfg_transfer_fallbacks.record(fallback);
         if self.config.debug {
             eprintln!(
                 "[typey] CFG fallback for {kind} at {:?}: no owned transfer is available",
@@ -2420,8 +2457,7 @@ impl<'src> Analyzer<'src> {
             if let Some(conditional) = self.cfg_conditional_for_node(node) {
                 return self.transfer_cfg_if(node, if_node, conditional, environment);
             }
-            self.cfg_transfer_fallbacks = self.cfg_transfer_fallbacks.saturating_add(1);
-            self.report_cfg_fallback(node, "conditional");
+            self.record_cfg_fallback(node, "conditional", CfgFallbackKind::UnsupportedOperation);
         }
         self.eval_if(node, if_node, environment)
     }

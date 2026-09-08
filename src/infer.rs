@@ -30,6 +30,7 @@ use call_types::{
     CallArgumentEvaluation, CallArgumentInput, CallArguments, CallSite, IndexAccess,
     KeywordArgument, KeywordArgumentInput, OwnedCallInput,
 };
+use cfg_transfer::{CfgFallbackCounters, CfgFallbackKind};
 use declarations::{DeclarationState, MethodRegistrar};
 use fixpoint::FixpointState;
 use flow::{Eval, Flow, FlowKind, OutcomeTypes};
@@ -1335,7 +1336,7 @@ pub(crate) fn check_with_policies(
         cfg_transfer_conditionals: 0,
         cfg_transfer_loops: 0,
         cfg_transfer_values: 0,
-        cfg_transfer_fallbacks: 0,
+        cfg_transfer_fallbacks: CfgFallbackCounters::default(),
     };
     let result = analyzer.run(&root);
     (result, diagnostics)
@@ -1398,7 +1399,7 @@ struct Analyzer<'src> {
     cfg_transfer_conditionals: usize,
     cfg_transfer_loops: usize,
     cfg_transfer_values: usize,
-    cfg_transfer_fallbacks: usize,
+    cfg_transfer_fallbacks: CfgFallbackCounters,
 }
 
 /// A call shape whose semantic fields come from owned HIR. During this
@@ -2035,14 +2036,17 @@ impl<'src> Analyzer<'src> {
         });
         if self.config.debug {
             eprintln!(
-                "[typey] CFG transfers: {} bodies, {} calls, {} assignments, {} conditionals, {} loops, {} values, {} legacy fallbacks",
+                "[typey] CFG transfers: {} bodies, {} calls, {} assignments, {} conditionals, {} loops, {} values, {} fallbacks (unsupported operations {}, unsupported edges {}, legacy bridges {})",
                 self.cfg_transfer_bodies,
                 self.cfg_transfer_calls,
                 self.cfg_transfer_assignments,
                 self.cfg_transfer_conditionals,
                 self.cfg_transfer_loops,
                 self.cfg_transfer_values,
-                self.cfg_transfer_fallbacks
+                self.cfg_transfer_fallbacks.total(),
+                self.cfg_transfer_fallbacks.unsupported_operation,
+                self.cfg_transfer_fallbacks.unsupported_edge,
+                self.cfg_transfer_fallbacks.legacy_bridge
             );
             eprintln!(
                 "[typey] complete: {} diagnostics, {} recorded types in {:?}",
@@ -3050,8 +3054,7 @@ impl<'src> Analyzer<'src> {
                 return self.transfer_cfg_assignment(node, target, value, operator, environment);
             }
             if self.config.enable_cfg {
-                self.cfg_transfer_fallbacks = self.cfg_transfer_fallbacks.saturating_add(1);
-                self.report_cfg_fallback(node, "assignment");
+                self.record_cfg_fallback(node, "assignment", CfgFallbackKind::UnsupportedOperation);
             }
             return self.eval_hir_assignment(node, target, value, operator, environment);
         }
@@ -3071,8 +3074,7 @@ impl<'src> Analyzer<'src> {
                 return self.transfer_cfg_call(node, hir_call, environment);
             }
             if self.config.enable_cfg {
-                self.cfg_transfer_fallbacks = self.cfg_transfer_fallbacks.saturating_add(1);
-                self.report_cfg_fallback(node, "call");
+                self.record_cfg_fallback(node, "call", CfgFallbackKind::UnsupportedOperation);
             }
             return self.eval_call_result(node, &hir_call, environment);
         }
