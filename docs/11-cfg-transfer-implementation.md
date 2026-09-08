@@ -60,7 +60,12 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
 * `fda77a1` extended `Set` transfer to attribute and index targets whose
   receiver and arguments are themselves owned, positional-only expressions.
   The lowered setter calls now use the same call transfer as ordinary sends;
-  keyword/splat targets and logical compound forms remain recursive.
+  keyword/splat targets and non-local logical compound forms remain recursive.
+* `df09d11` added local `&&=`/`||=` transfer using owned pattern-test and
+  branch edges. The host preserves both reachable paths and only records
+  source operations that correspond to real expressions. Ivar, class-variable,
+  global, and dynamic logical assignments remain recursive until the state
+  model carries their assignment-specific non-nil postconditions.
 
 ## Next boundary
 
@@ -69,8 +74,8 @@ semantics, rescue/ensure, and branch/body expression adapters. Complete-body
 transfer is deliberately narrow: it does not yet interpret keyword/splat/block
 calls, safe navigation, `super`, `yield`, closures, or abrupt terminators
 inside a body. The next implementation boundaries are the remaining call
-shapes, logical compound assignments, and dynamic compound writes, followed by
-complete branch bodies and rescue/ensure edges. Collection splats also need
+shapes, non-local logical compound assignments, and dynamic compound writes,
+then complete branch bodies and rescue/ensure edges. Collection splats also need
 explicit operand-span metadata before they can cross this boundary. The
 recursive path must remain available for differential checks until each
 operation and terminator has an equivalent transfer.

@@ -58,6 +58,9 @@ recursive evaluator remains the compatibility baseline.
   forms remain explicit fallback boundaries.
 * `fda77a1` extended `Set` transfer to owned attribute and index targets when
   their receiver and arguments are positional-only expressions.
+* `df09d11` added local logical-assignment branches to the complete-body
+  worklist; non-local logical assignments remain explicit fallbacks until
+  their postcondition facts are represented in transfer state.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
