@@ -1,7 +1,7 @@
 //! Owned CFG transfer for writes and iteration bindings.
 
 use super::super::{ivar_refinement_key, Analyzer, Environment, SourceSite};
-use super::cfg_global_refinement_key;
+use super::globals::cfg_global_refinement_key;
 use crate::cfg;
 use crate::hir;
 use crate::types::Type;

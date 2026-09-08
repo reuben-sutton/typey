@@ -1,7 +1,7 @@
 //! Owned value, read, and predicate transfer for CFG/HIR.
 
 use super::super::{ivar_refinement_key, Analyzer, Environment, Eval, SharedKey, SourceSite};
-use super::cfg_global_refinement_key;
+use super::globals::cfg_global_refinement_key;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
 use crate::types::Type;
 

@@ -6,13 +6,10 @@ mod builtins;
 mod calls;
 mod collections;
 mod construction;
+mod globals;
 mod patterns;
 mod preflight;
 mod value;
-
-fn cfg_global_refinement_key(name: &str) -> String {
-    format!("\u{1}cfg-global:{name}")
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CfgFallbackKind {

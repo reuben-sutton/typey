@@ -4,7 +4,7 @@ use super::super::cfg_state::{BlockState, BodyContext};
 use super::super::{
     Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput, SourceSite,
 };
-use super::cfg_global_refinement_key;
+use super::globals::{clear_cfg_global_state, commit_cfg_global_state, seed_cfg_global_state};
 use super::patterns::{narrow_pattern_value, pattern_source_place};
 use super::preflight;
 use crate::cfg;
@@ -226,57 +226,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
 }
 
 impl<'src> Analyzer<'src> {
-    fn seed_cfg_global_state(&self, graph: &cfg::Cfg, environment: &mut Environment) {
-        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
-            let place = match &operation.kind {
-                cfg::OperationKind::Read { place } | cfg::OperationKind::Write { place, .. } => {
-                    place
-                }
-                _ => continue,
-            };
-            let cfg::Place::Global(name) = place else {
-                continue;
-            };
-            let name = name.as_str();
-            let type_ = self.globals.get(name).cloned().unwrap_or(Type::Any);
-            environment.bind(cfg_global_refinement_key(name), type_);
-        }
-    }
-
-    fn commit_cfg_global_state(&mut self, graph: &cfg::Cfg, environment: &Environment) {
-        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
-            let place = match &operation.kind {
-                cfg::OperationKind::Write { place, .. } => place,
-                _ => continue,
-            };
-            let cfg::Place::Global(name) = place else {
-                continue;
-            };
-            let name = name.as_str();
-            if let Some(type_) = environment
-                .contains(&cfg_global_refinement_key(name))
-                .then(|| environment.get(&cfg_global_refinement_key(name)))
-            {
-                self.observe_global(name.to_owned(), &type_);
-            }
-        }
-    }
-
-    fn clear_cfg_global_state(graph: &cfg::Cfg, environment: &mut Environment) {
-        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
-            let place = match &operation.kind {
-                cfg::OperationKind::Read { place } | cfg::OperationKind::Write { place, .. } => {
-                    place
-                }
-                _ => continue,
-            };
-            let cfg::Place::Global(name) = place else {
-                continue;
-            };
-            environment.remove(&cfg_global_refinement_key(name.as_str()));
-        }
-    }
-
     pub(in crate::infer) fn eval_cfg_body_owned(
         &mut self,
         body_site: SourceSite,
@@ -379,7 +328,7 @@ impl<'src> Analyzer<'src> {
             closure_kind,
         };
         let mut initial_environment = environment.clone();
-        self.seed_cfg_global_state(&graph, &mut initial_environment);
+        seed_cfg_global_state(self, &graph, &mut initial_environment);
         let fallback_environment = initial_environment.clone();
         let initial = BlockState::with_values(initial_environment, Vec::new(), Flow::normal());
         let mut transfer = BodyTransfer {
@@ -421,8 +370,8 @@ impl<'src> Analyzer<'src> {
         drop(worklist);
         drop(transfer);
         self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);
-        self.commit_cfg_global_state(&graph, &final_environment);
-        Self::clear_cfg_global_state(&graph, &mut final_environment);
+        commit_cfg_global_state(self, &graph, &final_environment);
+        clear_cfg_global_state(&graph, &mut final_environment);
         *environment = final_environment;
         let normal_type = (!normal_type.is_never()).then_some(normal_type);
         let flow = if normal_type.is_some() {
