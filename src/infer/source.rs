@@ -1,6 +1,6 @@
 //! Source locations used by inference paths that no longer need parser nodes.
 
-use super::{Analyzer, InferredType, UntypedOrigin};
+use super::{strictness_rank, Analyzer, InferredType, Strictness, UntypedOrigin};
 use crate::diagnostic::Diagnostic;
 use crate::hir;
 use crate::types::Type;
@@ -31,6 +31,14 @@ impl SourceSite {
 }
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn reports_missing_api_at(&self, site: SourceSite) -> bool {
+        strictness_rank(self.strictness_at(site.start)) >= strictness_rank(Strictness::True)
+            && !self
+                .rbi_ranges
+                .iter()
+                .any(|(start, end)| site.start >= *start && site.end <= *end)
+    }
+
     pub(super) fn record_at(
         &mut self,
         site: SourceSite,

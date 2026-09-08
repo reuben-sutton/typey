@@ -790,10 +790,6 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     .analyzer
                     .apply_inline_assertion_at(site, Analyzer::cfg_literal_type(value)),
                 cfg::OperationKind::Read { place } => {
-                    let node = nodes
-                        .nodes
-                        .get(&(operation.span.start as usize, operation.span.end as usize))
-                        .ok_or(())?;
                     let read = match place {
                         cfg::Place::Local(local) => Read::Local(*local),
                         cfg::Place::InstanceVariable(name) => Read::InstanceVariable(name.clone()),
@@ -802,15 +798,11 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                         cfg::Place::Constant(path) => Read::Constant(path.clone()),
                     };
                     self.analyzer
-                        .transfer_cfg_read(node, read, &mut next.environment)
+                        .transfer_cfg_read_at(site, read, &mut next.environment)
                 }
                 cfg::OperationKind::ReadSpecial { read } => {
-                    let node = nodes
-                        .nodes
-                        .get(&(operation.span.start as usize, operation.span.end as usize))
-                        .ok_or(())?;
                     self.analyzer
-                        .transfer_cfg_read(node, read.clone(), &mut next.environment)
+                        .transfer_cfg_read_at(site, read.clone(), &mut next.environment)
                 }
                 cfg::OperationKind::Write { place, value } => {
                     let actual = next.value(*value).ok_or(())?;
@@ -1649,6 +1641,64 @@ impl<'src> Analyzer<'src> {
             Literal::String(_) | Literal::XString(_) => Type::String,
             Literal::Symbol(_) => Type::Symbol,
             Literal::RegularExpression(_) => Type::named("Regexp"),
+        }
+    }
+
+    pub(super) fn transfer_cfg_read_at(
+        &mut self,
+        site: SourceSite,
+        read: Read,
+        environment: &mut Environment,
+    ) -> Type {
+        match read {
+            Read::Local(local) => {
+                let name = self
+                    .hir_program
+                    .local_name(local)
+                    .map_or_else(String::new, |name| name.as_str().to_owned());
+                self.apply_inline_assertion_in_environment_at(
+                    site,
+                    environment.get(&name),
+                    environment,
+                )
+            }
+            Read::InstanceVariable(name) => {
+                let actual = self.ivar_type(environment, name.as_str());
+                self.apply_inline_assertion_in_environment_at(site, actual, environment)
+            }
+            Read::ClassVariable(name) => {
+                let actual = self.class_var_type(environment, name.as_str());
+                self.apply_inline_assertion_at(site, actual)
+            }
+            Read::Global(name) => {
+                let name = name.as_str().to_owned();
+                self.record_shared_read(SharedKey::Global(name.clone()), environment);
+                self.apply_inline_assertion_at(
+                    site,
+                    self.globals.get(&name).cloned().unwrap_or(Type::Any),
+                )
+            }
+            Read::Constant(path) => {
+                let name = path.as_str().to_owned();
+                let actual = self.constant_type(environment, &name);
+                if self.reports_missing_api_at(site) && !self.constant_is_known(environment, &name)
+                {
+                    self.error_at(
+                        site,
+                        format!(
+                            "Unable to resolve constant `{}`",
+                            name.trim_start_matches("::")
+                        ),
+                    );
+                }
+                self.apply_inline_assertion_at(site, actual)
+            }
+            Read::SelfValue => self.apply_inline_assertion_at(site, environment.self_type.clone()),
+            Read::Numbered(number) => {
+                self.apply_inline_assertion_at(site, environment.get(&format!("_{number}")))
+            }
+            Read::It => self.apply_inline_assertion_at(site, environment.get("it")),
+            Read::BackReference(_) => self.apply_inline_assertion_at(site, Type::Any),
         }
     }
 
