@@ -87,6 +87,19 @@ fn preserves_positional_hash_argument_shape_through_hir_calls() {
 }
 
 #[test]
+fn compiles_cfg_bodies_without_changing_checker_results() {
+    let source = "value = 1\nif value\n  value.to_s\nend\n";
+    let result = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn reports_malformed_sorbet_proc_signatures() {
     check_fixture("tests/fixtures/malformed_bound_proc_signature.rb");
 }

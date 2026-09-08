@@ -1,3 +1,4 @@
+use crate::cfg;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::directives::{effective_typed_mode, is_typed_ignore, typed_mode, TypedMode};
 use crate::hir;
@@ -8,7 +9,7 @@ use ruby_prism::{
     ArgumentsNode, CallNode, DefNode, IfNode, Node, ParametersNode, UnlessNode, Visit,
 };
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 mod arguments;
 mod blocks;
@@ -474,6 +475,10 @@ pub struct CheckerConfig {
     pub strictness: Strictness,
     /// Emit phase and progress information to stderr while checking.
     pub debug: bool,
+    /// Compile owned HIR bodies into CFGs for the in-progress differential
+    /// migration. The default remains off until CFG transfer replaces the
+    /// recursive evaluator for all supported bodies.
+    pub enable_cfg: bool,
 }
 
 impl Default for CheckerConfig {
@@ -481,6 +486,7 @@ impl Default for CheckerConfig {
         Self {
             strictness: Strictness::Ignore,
             debug: false,
+            enable_cfg: false,
         }
     }
 }
@@ -1228,6 +1234,35 @@ pub(crate) fn check_with_policies(
     let parsed = prism::parse(bytes);
     let root = parsed.node();
     let hir_program = hir::lower(hir::FileId(0), bytes);
+    let cfgs = config
+        .enable_cfg
+        .then(|| {
+            hir_program
+                .bodies
+                .iter()
+                .enumerate()
+                .map(|(index, _)| cfg::build(&hir_program, hir::BodyId(index as u32)))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut cfg_call_spans = HashSet::new();
+    let mut cfg_write_spans = HashSet::new();
+    for graph in &cfgs {
+        for block in &graph.blocks {
+            for operation in &block.operations {
+                let span = (operation.span.start as usize, operation.span.end as usize);
+                match operation.kind {
+                    cfg::OperationKind::Call { .. } => {
+                        cfg_call_spans.insert(span);
+                    }
+                    cfg::OperationKind::Write { .. } => {
+                        cfg_write_spans.insert(span);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     let mut hir_call_ids = HashMap::new();
     let mut hir_assignment_ids = HashMap::new();
     for (index, expression) in hir_program.expressions.iter().enumerate() {
@@ -1272,6 +1307,9 @@ pub(crate) fn check_with_policies(
     let analyzer = Analyzer {
         source: bytes,
         hir_program,
+        cfg_body_count: cfgs.len(),
+        cfg_call_spans,
+        cfg_write_spans,
         hir_call_ids,
         hir_assignment_ids,
         line_map: prism::LineMap::new(bytes),
@@ -1324,6 +1362,9 @@ fn source_strictness_ranges(source: &str) -> Vec<(usize, usize, Strictness)> {
 struct Analyzer<'src> {
     source: &'src [u8],
     hir_program: hir::Program,
+    cfg_body_count: usize,
+    cfg_call_spans: HashSet<(usize, usize)>,
+    cfg_write_spans: HashSet<(usize, usize)>,
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
     line_map: prism::LineMap,
@@ -1583,6 +1624,24 @@ impl<'src> Analyzer<'src> {
             })
     }
 
+    fn has_cfg_call_operation(&self, node: &Node<'_>) -> bool {
+        self.cfg_call_spans.contains(&prism::span(node))
+    }
+
+    fn has_cfg_assignment_operation(&self, node: &Node<'_>) -> bool {
+        let span = prism::span(node);
+        self.cfg_call_spans.contains(&span) || self.cfg_write_spans.contains(&span)
+    }
+
+    fn report_cfg_fallback(&self, node: &Node<'_>, kind: &str) {
+        if self.config.debug {
+            eprintln!(
+                "[typey] CFG fallback for {kind} at {:?}: HIR operation is orphaned under an unsupported parent",
+                prism::span(node)
+            );
+        }
+    }
+
     fn hir_call_view<'node>(
         &self,
         node: &Node<'_>,
@@ -1834,6 +1893,10 @@ impl<'src> Analyzer<'src> {
                 self.declarations.methods.len(),
                 self.declarations.classes.len(),
                 self.declarations.type_aliases.len()
+            );
+            eprintln!(
+                "[typey] compiled {} HIR bodies into CFG",
+                self.cfg_body_count
             );
             eprintln!(
                 "[typey] registration complete in {:?}",
@@ -2994,6 +3057,9 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, Type::Nil));
         }
         if let Some((target, value, operator)) = self.hir_assignment_for_node(node) {
+            if !self.has_cfg_assignment_operation(node) {
+                self.report_cfg_fallback(node, "assignment");
+            }
             return self.eval_hir_assignment(node, target, value, operator, environment);
         }
         if let Some(call) = node.as_call_node() {
@@ -3008,6 +3074,9 @@ impl<'src> Analyzer<'src> {
                         self.hir_call_ids.len()
                     )
             });
+            if !self.has_cfg_call_operation(node) {
+                self.report_cfg_fallback(node, "call");
+            }
             return self.eval_call_result(node, &hir_call, environment);
         }
         if let Some(multi) = node.as_multi_write_node() {
