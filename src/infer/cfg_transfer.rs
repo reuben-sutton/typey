@@ -147,13 +147,6 @@ impl<'node> SpanNodeIndex<'node> {
             .iter()
             .find(|node| node.as_call_node().is_some() || node.as_super_node().is_some())
     }
-
-    fn closure_node(&self, span: (usize, usize)) -> Option<&Node<'node>> {
-        self.nodes
-            .get(&span)?
-            .iter()
-            .find(|node| node.as_block_node().is_some() || node.as_lambda_node().is_some())
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -624,12 +617,12 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
     fn transfer_closure(
         analyzer: &mut Analyzer<'src>,
         closure_id: hir::ClosureId,
-        closure_node: &Node<'node>,
         outer: &Environment,
+        nodes: &'node SpanNodeIndex<'node>,
     ) -> Option<Type> {
-        let (body_id, parameters) = {
+        let (body_id, parameters, span) = {
             let closure = analyzer.hir_program.closure(closure_id)?;
-            (closure.body, closure.parameters.clone())
+            (closure.body, closure.parameters.clone(), closure.span)
         };
         let signature = Analyzer::inferred_hir_block_signature(&parameters);
         let mut closure_environment = outer.clone();
@@ -672,8 +665,13 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 closure_environment.bind("it", type_);
             }
         }
-        let body_result =
-            analyzer.eval_cfg_body(closure_node, body_id, &mut closure_environment, false)?;
+        let body_result = analyzer.eval_cfg_body_with_nodes(
+            SourceSite::from_span(span, None),
+            body_id,
+            &mut closure_environment,
+            false,
+            nodes,
+        )?;
         Some(Type::Proc(signature.params, Box::new(body_result.type_)))
     }
 
@@ -1307,12 +1305,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     type_
                 }
                 cfg::OperationKind::MakeClosure { closure } => {
-                    let node = nodes
-                        .closure_node((operation.span.start as usize, operation.span.end as usize))
-                        .ok_or_else(|| {
-                            format!("missing call Prism node at {:?}", operation.span)
-                        })?;
-                    Self::transfer_closure(self.analyzer, *closure, node, &next.environment)
+                    Self::transfer_closure(self.analyzer, *closure, &next.environment, nodes)
                         .ok_or_else(|| format!("closure transfer failed at {:?}", operation.span))?
                 }
                 _ => return Err(format!("unsupported CFG operation at {:?}", operation.span)),
@@ -1887,6 +1880,26 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
         record_result: bool,
     ) -> Option<Eval> {
+        let (start, end) = prism::span(body_node);
+        let mut nodes = SpanNodeIndex::default();
+        nodes.visit(body_node);
+        self.eval_cfg_body_with_nodes(
+            SourceSite::new(start, end),
+            body_id,
+            environment,
+            record_result,
+            &nodes,
+        )
+    }
+
+    fn eval_cfg_body_with_nodes<'node>(
+        &mut self,
+        body_site: SourceSite,
+        body_id: hir::BodyId,
+        environment: &mut Environment,
+        record_result: bool,
+        nodes: &'node SpanNodeIndex<'node>,
+    ) -> Option<Eval> {
         if !body_can_transfer(&self.hir_program, body_id) {
             return None;
         }
@@ -1932,8 +1945,6 @@ impl<'src> Analyzer<'src> {
             .into_iter()
             .filter(|(value, _)| splatted_values.contains(value))
             .collect::<HashMap<_, _>>();
-        let mut nodes = SpanNodeIndex::default();
-        nodes.visit(body_node);
         if graph.blocks.iter().any(|block| {
             block.operations.iter().any(|operation| {
                 matches!(
@@ -2004,7 +2015,7 @@ impl<'src> Analyzer<'src> {
             Flow::normal().union(terminal_flow),
         );
         if record_result {
-            result.type_ = self.record(body_node, result.type_.clone());
+            result.type_ = self.record_at(body_site, result.type_.clone(), false, None);
         }
         Some(result)
     }
