@@ -11,13 +11,50 @@ use crate::hir;
 use crate::prism;
 use crate::signature::MethodSig;
 use crate::types::Type;
-use ruby_prism::{ArgumentsNode, CallNode, Node};
+use ruby_prism::{ArgumentsNode, CallNode, Node, Visit};
 use std::collections::HashMap;
 
 pub(super) struct CallSite<'a, 'node> {
     pub(super) argument_nodes: &'a [Node<'node>],
     pub(super) argument_types: &'a [Type],
     pub(super) block: Option<&'a Node<'node>>,
+}
+
+/// Compatibility lookup for the exact Prism call node used by legacy
+/// diagnostics and builtin hooks. CFG transfer otherwise consumes owned HIR
+/// and CFG operands; this index is deliberately kept in the call adapter.
+#[derive(Default)]
+pub(super) struct CallNodeIndex<'node> {
+    nodes: HashMap<(usize, usize), Vec<Node<'node>>>,
+}
+
+impl<'node> Visit<'node> for CallNodeIndex<'node> {
+    fn visit_branch_node_enter(&mut self, node: Node<'node>) {
+        let span = prism::span(&node);
+        self.nodes.entry(span).or_default().push(node);
+    }
+
+    fn visit_leaf_node_enter(&mut self, node: Node<'node>) {
+        let span = prism::span(&node);
+        self.nodes.entry(span).or_default().push(node);
+    }
+}
+
+impl<'node> CallNodeIndex<'node> {
+    pub(super) fn visit_body(&mut self, node: &Node<'node>) {
+        self.visit(node);
+    }
+
+    pub(super) fn contains_span(&self, span: (usize, usize)) -> bool {
+        self.nodes.contains_key(&span)
+    }
+
+    pub(super) fn call_node(&self, span: (usize, usize)) -> Option<&Node<'node>> {
+        self.nodes
+            .get(&span)?
+            .iter()
+            .find(|node| node.as_call_node().is_some() || node.as_super_node().is_some())
+    }
 }
 
 /// The owned semantic input consumed by CFG call transfer. Parser nodes are

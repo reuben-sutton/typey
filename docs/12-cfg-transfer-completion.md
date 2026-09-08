@@ -73,7 +73,7 @@ owned HIR -> owned CFG -> BlockTransfer -> abstract state/result
 ```
 
 `CfgIndex` may remain as a structural/debug index. It must not be required to
-discover the semantic operands of a transfer operation. `SpanNodeIndex` and
+discover the semantic operands of a transfer operation. `CallNodeIndex` and
 `HirCallView` are migration bridges, not part of the final transfer contract.
 
 ### Progress in the current iteration
@@ -89,6 +89,8 @@ The first modularization steps are now in place:
 * `infer/legacy_eval.rs` owns the recursive Prism evaluator's expression and
   assignment dispatch, leaving the main inference host responsible for
   orchestration and shared state rather than syntax dispatch;
+* `infer/control_flow.rs` owns the parser-backed loop, `for`, control-value,
+  and loop-target transfer retained by the legacy evaluator;
 * `BodyTransfer` transfers literals, reads, writes, arrays, hashes, and
   pattern values from CFG/HIR payloads without looking up a Prism node;
 * HIR preserves top-level call argument groups and owned source spans;
@@ -97,9 +99,10 @@ The first modularization steps are now in place:
   and
 * CFG argument materialization is isolated to that adapter, so the transfer
   host no longer reconstructs call shape directly from `CallNode` children;
-* source-span lookup retains all same-span Prism candidates and selects the
-  semantic call node, so enclosing statement nodes cannot hide a passed block
-  from CFG dispatch; and
+* `infer/call_types.rs` owns `CallNodeIndex`, the narrow parser lookup that
+  retains all same-span Prism candidates and selects the semantic call node,
+  so enclosing statement nodes cannot hide a passed block from CFG dispatch;
+  and
 * `MakeClosure` now transfers from its owned `ClosureId` and closure span;
   nested CFG bodies reuse the containing body's semantic node index, so
   closure creation no longer performs a source-span lookup;
@@ -280,7 +283,7 @@ because its Prism node was not found.
 4. Unify conditional, loop, and `for` state transfer on owned expression IDs.
 5. Implement rescue, retry, and ensure unwind routing. Non-local `return`,
    `break`, and `next` outcomes remain the next control-flow slice.
-6. Delete `SpanNodeIndex` from CFG transfer and make `HirCallView` recursive
+6. Delete `CallNodeIndex` from CFG transfer and make `HirCallView` recursive
    only.
 7. Run CFG by default behind a temporary opt-out, then remove the opt-out once
    the differential gates pass.

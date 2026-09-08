@@ -1,12 +1,13 @@
 use super::{
-    ivar_refinement_key, Analyzer, CallSite, Environment, Eval, Flow, FlowKind, HirCallView,
-    MethodKey, OutcomeTypes, OwnedCallInput, SharedKey, SourceSite, Strictness, UntypedOrigin,
+    ivar_refinement_key, Analyzer, CallNodeIndex, CallSite, Environment, Eval, Flow, FlowKind,
+    HirCallView, MethodKey, OutcomeTypes, OwnedCallInput, SharedKey, SourceSite, Strictness,
+    UntypedOrigin,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
 use crate::prism;
 use crate::types::Type;
-use ruby_prism::{IfNode, Node, Visit};
+use ruby_prism::{IfNode, Node};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -123,32 +124,6 @@ impl BlockState {
     }
 }
 
-#[derive(Default)]
-struct SpanNodeIndex<'node> {
-    nodes: HashMap<(usize, usize), Vec<Node<'node>>>,
-}
-
-impl<'node> Visit<'node> for SpanNodeIndex<'node> {
-    fn visit_branch_node_enter(&mut self, node: Node<'node>) {
-        let span = prism::span(&node);
-        self.nodes.entry(span).or_default().push(node);
-    }
-
-    fn visit_leaf_node_enter(&mut self, node: Node<'node>) {
-        let span = prism::span(&node);
-        self.nodes.entry(span).or_default().push(node);
-    }
-}
-
-impl<'node> SpanNodeIndex<'node> {
-    fn call_node(&self, span: (usize, usize)) -> Option<&Node<'node>> {
-        self.nodes
-            .get(&span)?
-            .iter()
-            .find(|node| node.as_call_node().is_some() || node.as_super_node().is_some())
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BodyContext {
     body: hir::BodyId,
@@ -161,7 +136,7 @@ struct BodyContext {
 struct BodyTransfer<'analyzer, 'src, 'node> {
     analyzer: &'analyzer mut Analyzer<'src>,
     context: BodyContext,
-    nodes: &'node SpanNodeIndex<'node>,
+    nodes: &'node CallNodeIndex<'node>,
     fixed_array_elements: HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
     normal_type: Type,
     abrupt: OutcomeTypes,
@@ -651,7 +626,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         analyzer: &mut Analyzer<'src>,
         closure_id: hir::ClosureId,
         outer: &Environment,
-        nodes: &'node SpanNodeIndex<'node>,
+        nodes: &'node CallNodeIndex<'node>,
     ) -> Option<Type> {
         let (body_id, parameters, span) = {
             let closure = analyzer.hir_program.closure(closure_id)?;
@@ -1949,8 +1924,8 @@ impl<'src> Analyzer<'src> {
         record_result: bool,
     ) -> Option<Eval> {
         let (start, end) = prism::span(body_node);
-        let mut nodes = SpanNodeIndex::default();
-        nodes.visit(body_node);
+        let mut nodes = CallNodeIndex::default();
+        nodes.visit_body(body_node);
         self.eval_cfg_body_with_nodes(
             SourceSite::new(start, end),
             body_id,
@@ -1966,7 +1941,7 @@ impl<'src> Analyzer<'src> {
         body_id: hir::BodyId,
         environment: &mut Environment,
         record_result: bool,
-        nodes: &'node SpanNodeIndex<'node>,
+        nodes: &'node CallNodeIndex<'node>,
     ) -> Option<Eval> {
         if !body_can_transfer(&self.hir_program, body_id) {
             return None;
@@ -2028,8 +2003,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::Record { .. }
                         | cfg::OperationKind::PatternTest { .. }
                 ) && !nodes
-                    .nodes
-                    .contains_key(&(operation.span.start as usize, operation.span.end as usize))
+                    .contains_span((operation.span.start as usize, operation.span.end as usize))
             }) || block.operations.iter().any(|operation| {
                 !matches!(
                     operation.kind,
