@@ -29,6 +29,8 @@ recursive evaluator remains the compatibility baseline.
 * `29c18e6` and `4c169c5` moved literal/read operations and direct storage
   writes into the inference-side CFG transfer module. Compound and dynamic
   writes remain explicit compatibility bridges.
+* `4dcb8bc` moved collection construction into owned transfer, and `31c89ea`
+  made the CFG conditional scheduler use the generic transfer worklist.
 * `dfe6009` removed avoidable CFG-index work. Index-only lowering no longer
   builds the full expression span map or clones call names, while full graph
   construction retains expression identity for structural consumers.

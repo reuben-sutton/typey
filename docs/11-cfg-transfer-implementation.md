@@ -23,13 +23,19 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
 * `4c169c5` moved direct `Set` writes for locals, ivars, class vars, globals,
   and constants to the same owned transfer module. Compound and dynamic
   attribute/index writes remain explicitly bridged.
+* `4dcb8bc` moved array and hash construction, including keyword-hash and
+  collection splats, behind the owned transfer boundary.
+* `31c89ea` connected conditional transfer to the generic deterministic
+  block worklist. The temporary host still delegates branch-body expression
+  semantics to the existing evaluator, but scheduling, reachability, and the
+  join now belong to the transfer layer.
 
 ## Next boundary
 
 The analyzer still uses its recursive evaluator for compound/dynamic operation
-semantics, and `BlockState` is not yet driven by the generic worklist for
-complete bodies. The next implementation should add `BodyContext` and a
-transfer host that adapts `BlockState` to `BlockTransfer`, then move collection
-construction, closures, and ordinary calls. The recursive path must remain
-available for differential checks until each operation and terminator has an
-equivalent transfer.
+semantics and for branch-body expressions; `BlockState` is not yet driven by
+the generic worklist for complete bodies. The next implementation should add
+`BodyContext` and a body transfer host that adapts the owned CFG to
+`BlockTransfer`, then move closures and ordinary calls. The recursive path
+must remain available for differential checks until each operation and
+terminator has an equivalent transfer.
