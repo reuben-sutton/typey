@@ -29,6 +29,7 @@ mod legacy_eval;
 mod method_lookup;
 mod method_state;
 mod method_types;
+mod owned_blocks;
 mod predicate_flow;
 mod shared_state;
 mod signature_calls;

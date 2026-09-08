@@ -23,11 +23,11 @@ The current local gates are 18 CFG tests, 10 HIR tests, 341 checker tests, and
 169 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has semantic bridges in the
-legacy recursive path: call dispatch and callback observation still use Prism
-children for exact diagnostics and block contracts, while conditional and
-loop regions still evaluate some child bodies recursively. A body containing
-an unsupported operation or an unmigrated callback shape falls back as a
-whole.
+legacy recursive path: call dispatch still uses Prism children for exact
+diagnostics and builtin hooks, while parser-backed callback contracts and some
+conditional and loop helpers still evaluate child bodies recursively. Ordinary
+inline callbacks now use an owned HIR contract; a body containing an unsupported
+operation or an unmigrated callback shape falls back as a whole.
 
 The next step is therefore not another scheduler abstraction. It is to make
 CFG transfer an owned-HIR abstract interpreter, complete the remaining control
@@ -150,14 +150,16 @@ The first modularization steps are now in place:
   continuing or re-raising; and
 * retry is lowered to the protected body entry, and synthesized calls such as
   compound-assignment sends use owned CFG operands even without a HIR `Call`.
+* ordinary inline callback blocks now transfer from owned closure parameters,
+  bodies, captured locals, bound receivers, and generic return contracts;
+  `define_method` remains an explicit future-method bridge.
 
-The remaining bridges are deliberate and measurable: inline callback blocks
-still preflight to the recursive evaluator until their expected parameter,
-receiver-binding, and return-checking contract is owned; the legacy call
-adapter still needs parser nodes for exact argument diagnostics and builtin
-hooks; and the specialized conditional/loop helpers still consume parser
-nodes. Removing those requires moving their diagnostic and block contracts to
-owned source sites rather than weakening the checker. CFG fallback telemetry now
+The remaining bridges are deliberate and measurable: the legacy call adapter
+still needs parser nodes for exact argument diagnostics and builtin hooks; the
+specialized conditional/loop helpers still consume parser nodes; and
+`define_method`/`define_singleton_method` still require future-method binding
+semantics. Removing those requires moving their diagnostic and block contracts
+to owned source sites rather than weakening the checker. CFG fallback telemetry now
 distinguishes unsupported operations, unsupported edges, and legacy bridges;
 the latter two categories are wired for the exceptional-control-flow work but
 are not yet populated by the migrated ordinary-body path. Non-local `return`,

@@ -74,6 +74,10 @@ class CfgBodyTransfer
     [1, 2].map(&:to_s)
   end
 
+  def hash_map
+    {"one" => 1}.map { |key, value| [key, value.to_s] }.to_h
+  end
+
   def plain_begin
     begin
       value = 1
@@ -137,6 +141,7 @@ T.reveal_type(CfgBodyTransfer.new.safe_navigation("text")) # note: Revealed type
 T.reveal_type(CfgBodyTransfer.new.inline_block) # note: Revealed type: `T::Array[String]`
 T.reveal_type(CfgBodyTransfer.new.passed_block) # note: Revealed type: `T::Array[String]`
 T.reveal_type(CfgBodyTransfer.new.symbol_block) # note: Revealed type: `T::Array[String]`
+T.reveal_type(CfgBodyTransfer.new.hash_map) # note: Revealed type: `T::Hash[String, String]`
 T.reveal_type(CfgBodyTransfer.new.plain_begin) # note: Revealed type: `String`
 T.reveal_type(CfgSuperChild.new.render) # note: Revealed type: `String`
 T.reveal_type(CfgForwardChild.new.render(1)) # note: Revealed type: `String`

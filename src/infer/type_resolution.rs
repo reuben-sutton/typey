@@ -668,6 +668,30 @@ impl<'src> Analyzer<'src> {
             let first = bindings.next()?;
             return Some(bindings.fold(first, |current, member| current.join(&member)));
         }
+        if name == "Enumerable::Elem" {
+            match &receiver_type {
+                Type::Array(element) => return Some(element.as_ref().clone()),
+                Type::Hash(key, value) => {
+                    return Some(Type::Tuple(vec![
+                        key.as_ref().clone(),
+                        value.as_ref().clone(),
+                    ]))
+                }
+                Type::Tuple(elements) => return Some(Type::union(elements.iter().cloned())),
+                Type::Named(owner, arguments) if name_matches(owner, "Enumerable") => {
+                    return arguments.first().cloned();
+                }
+                Type::Named(owner, arguments) if name_matches(owner, "Array") => {
+                    return arguments.first().cloned();
+                }
+                Type::Named(owner, arguments)
+                    if name_matches(owner, "Hash") && arguments.len() == 2 =>
+                {
+                    return Some(Type::Tuple(arguments.clone()));
+                }
+                _ => {}
+            }
+        }
         let (receiver_owner, arguments) = match receiver_type {
             Type::Named(receiver_owner, arguments) => (receiver_owner.clone(), arguments.clone()),
             Type::Array(element) => ("Array".to_owned(), vec![(*element).clone()]),

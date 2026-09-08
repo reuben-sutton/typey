@@ -443,14 +443,28 @@ impl<'src> Analyzer<'src> {
         environment: &mut super::Environment,
     ) -> Option<Type> {
         match input.block.as_ref()? {
-            cfg::BlockOperand::Inline(_) => self.observe_block_call(
-                key,
-                block_node,
-                signature,
-                arguments,
-                Some(receiver_type),
-                environment,
-            ),
+            cfg::BlockOperand::Inline(closure) => {
+                if block_node.is_some() {
+                    self.observe_block_call(
+                        key,
+                        block_node,
+                        signature,
+                        arguments,
+                        Some(receiver_type),
+                        environment,
+                    )
+                } else {
+                    self.cfg_inline_block_return_type(
+                        input,
+                        *closure,
+                        key,
+                        signature,
+                        arguments,
+                        receiver_type,
+                        environment,
+                    )
+                }
+            }
             cfg::BlockOperand::Passed(value) => {
                 let expected = signature.block.as_ref().and_then(optional_proc_type);
                 if let (Some(expected), Some(name)) =

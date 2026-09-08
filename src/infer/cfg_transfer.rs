@@ -101,13 +101,12 @@ fn expr_can_transfer(
         ExprKind::Call(call) => {
             let block_supported = call.block.as_ref().is_none_or(|block| match block {
                 hir::BlockArgument::Inline(closure) => {
-                    // Inline callback observation still requires the legacy
-                    // block contract (expected parameters, receiver binding,
-                    // and callback return checking). Do not enter CFG
-                    // transfer until that contract has an owned form; this
-                    // keeps a later fallback transactional.
-                    let _ = closure;
-                    false
+                    !matches!(
+                        call.name.as_str(),
+                        "define_method" | "define_singleton_method"
+                    ) && program
+                        .closure(*closure)
+                        .is_some_and(|closure| body_can_transfer(program, closure.body))
                 }
                 hir::BlockArgument::Passed(value) => {
                     expr_can_transfer(program, *value, visiting, loop_depth, local_return)
@@ -645,9 +644,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
         environment: &mut Environment,
     ) -> Option<Eval> {
-        if node.is_none() && matches!(input.block, Some(cfg::BlockOperand::Inline(_))) {
-            return None;
-        }
         let call = input
             .expression
             .and_then(|expression| analyzer.hir_program.expression(expression))
@@ -955,7 +951,10 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         };
         let inferred = if fixed_length
             && (preserve_fixed_shape
-                || (analyzer.preserve_literal_tuples && analyzer.literal_tuple_depth == 0))
+                || (analyzer.preserve_literal_tuples && analyzer.literal_tuple_depth == 0)
+                || analyzer.expected_return_type.as_ref().is_some_and(|expected| {
+                    matches!(expected, Type::Tuple(expected) if expected.len() == element_types.len())
+                }))
         {
             Type::Tuple(element_types)
         } else {
@@ -1920,7 +1919,7 @@ impl<'src> Analyzer<'src> {
         )
     }
 
-    fn eval_cfg_body_owned(
+    pub(super) fn eval_cfg_body_owned(
         &mut self,
         body_site: SourceSite,
         body_id: hir::BodyId,
