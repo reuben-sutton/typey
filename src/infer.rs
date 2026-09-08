@@ -61,7 +61,7 @@ use flow::{Eval, Flow, FlowKind, OutcomeTypes};
 use keys::{
     ivar_refinement_key, name_matches, nominal_name, ClassVarKey, IvarKey, MethodKey, SharedKey,
 };
-use method_state::MethodState;
+use method_state::{BlockReceiverBinding, MethodState};
 use method_types::{
     apply_parameter_shape, optional_proc_type, proc_parts, proc_receiver, ParameterShape,
 };

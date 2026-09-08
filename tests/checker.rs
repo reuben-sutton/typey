@@ -7258,6 +7258,30 @@ fn transfers_passed_dynamic_method_body_with_bound_receiver() {
 }
 
 #[test]
+fn transfers_passed_dynamic_singleton_method_body_with_bound_receiver() {
+    let path = "tests/fixtures/cfg_passed_singleton_method.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let baseline = check_fixture(path);
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    let start = source.find("only_class\nend").expect("passed body");
+    assert!(baseline
+        .types
+        .iter()
+        .any(|inferred| inferred.start == start && inferred.is_send));
+    assert!(cfg
+        .types
+        .iter()
+        .any(|inferred| inferred.start == start && inferred.is_send));
+}
+
+#[test]
 fn does_not_treat_concern_class_methods_as_module_instances() {
     check_fixture("tests/fixtures/concern_class_methods_self.rb");
 }

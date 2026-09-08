@@ -1,6 +1,7 @@
 use super::{
     name_matches, optional_proc_type, prism, proc_parts, proc_receiver, strictness_rank, Analyzer,
-    CallArguments, CallSite, Environment, Eval, MethodKey, MethodState, SourceSite, Strictness,
+    BlockReceiverBinding, CallArguments, CallSite, Environment, Eval, MethodKey, MethodState,
+    SourceSite, Strictness,
 };
 use crate::hir;
 use crate::signature::{self, MethodSig};
@@ -21,12 +22,16 @@ impl<'src> Analyzer<'src> {
         block: Option<&Node<'_>>,
         environment: &Environment,
     ) {
-        if name != "define_method"
-            || (block.is_none()
-                && !arguments
-                    .argument_nodes
-                    .iter()
-                    .any(|argument| argument.as_block_argument_node().is_some()))
+        let binding = match name {
+            "define_method" => BlockReceiverBinding::Instance,
+            "define_singleton_method" => BlockReceiverBinding::Receiver,
+            _ => return,
+        };
+        if block.is_none()
+            && !arguments
+                .argument_nodes
+                .iter()
+                .any(|argument| argument.as_block_argument_node().is_some())
         {
             return;
         }
@@ -36,8 +41,7 @@ impl<'src> Analyzer<'src> {
         let Some(state) = self.declarations.methods.get_mut(current) else {
             return;
         };
-        if !state.explicit && !state.binds_block_to_receiver {
-            state.binds_block_to_receiver = true;
+        if state.observe_block_receiver_binding(binding) {
             self.fixpoint.changed_methods.insert(current.clone());
         }
     }
@@ -590,11 +594,11 @@ impl<'src> Analyzer<'src> {
                 .cloned()
         })
         .flatten();
-        let binds_block_to_receiver = self
+        let block_receiver_binding = self
             .declarations
             .methods
             .get(&key)
-            .is_some_and(|state| state.binds_block_to_receiver);
+            .and_then(|state| state.block_receiver_binding);
         let bound_receiver = class_new_receiver
             .or_else(|| self.active_support_test_block_receiver(&key, receiver_type))
             .or_else(|| {
@@ -603,10 +607,19 @@ impl<'src> Analyzer<'src> {
                     .and_then(optional_proc_type)
                     .and_then(|block| proc_receiver(&block).cloned())
             })
-            .or_else(|| {
-                binds_block_to_receiver
-                    .then(|| receiver_type.and_then(Self::class_object_instance_type))
-                    .flatten()
+            .or_else(|| match block_receiver_binding {
+                Some(BlockReceiverBinding::Instance) => {
+                    receiver_type.and_then(Self::class_object_instance_type)
+                }
+                Some(BlockReceiverBinding::Receiver) => receiver_type.cloned(),
+                Some(BlockReceiverBinding::Both) => receiver_type.map(|receiver| {
+                    let instance = Self::class_object_instance_type(receiver);
+                    instance.map_or_else(
+                        || receiver.clone(),
+                        |instance| Type::union([instance, receiver.clone()]),
+                    )
+                }),
+                None => None,
             })
             .or_else(|| self.rails_initializer_block_receiver(&key, receiver_type))
             .or_else(|| self.rails_application_configure_block_receiver(&key, receiver_type))

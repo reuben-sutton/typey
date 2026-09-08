@@ -6,9 +6,10 @@
 //! `cfg_transfer.rs` from growing another parser-shaped callback adapter.
 
 use super::{
-    optional_proc_type, proc_parts, Analyzer, CallArguments, Environment, Eval, MethodKey,
-    MethodState, OwnedCallInput, SourceSite,
+    method_state::BlockReceiverBinding, optional_proc_type, proc_parts, Analyzer, CallArguments,
+    Environment, Eval, MethodKey, MethodState, OwnedCallInput, SourceSite,
 };
+use crate::cfg;
 use crate::hir;
 use crate::signature::MethodSig;
 use crate::types::Type;
@@ -26,32 +27,50 @@ impl<'src> Analyzer<'src> {
         receiver_type: &Type,
         environment: &Environment,
     ) -> Option<Type> {
-        if input.name.as_str() != "define_method"
-            || !matches!(input.block, Some(crate::cfg::BlockOperand::Passed(_)))
-        {
+        let binding = match input.name.as_str() {
+            "define_method" => BlockReceiverBinding::Instance,
+            "define_singleton_method" => BlockReceiverBinding::Receiver,
+            _ => return None,
+        };
+        if !matches!(input.block, Some(cfg::BlockOperand::Passed(_))) {
+            return None;
+        }
+        if !matches!(
+            input.receiver,
+            cfg::ReceiverOperand::Implicit | cfg::ReceiverOperand::Value(_)
+        ) {
             return None;
         }
         let receiver = match input.receiver {
-            crate::cfg::ReceiverOperand::Implicit => &environment.self_type,
-            crate::cfg::ReceiverOperand::Value(_) => receiver_type,
-            crate::cfg::ReceiverOperand::Super | crate::cfg::ReceiverOperand::Yield => return None,
+            cfg::ReceiverOperand::Implicit => &environment.self_type,
+            cfg::ReceiverOperand::Value(_) => receiver_type,
+            cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => return None,
         };
-        if Self::class_object_instance_type(receiver).is_none() && !receiver.is_any() {
+        if binding == BlockReceiverBinding::Instance
+            && Self::class_object_instance_type(receiver).is_none()
+            && !receiver.is_any()
+        {
             return None;
         }
-        self.observe_cfg_define_method_binding(environment);
+        if binding == BlockReceiverBinding::Receiver && receiver.is_never() {
+            return None;
+        }
+        self.observe_cfg_define_method_binding(binding, environment);
         Some(Type::Symbol)
     }
 
-    fn observe_cfg_define_method_binding(&mut self, environment: &Environment) {
+    fn observe_cfg_define_method_binding(
+        &mut self,
+        binding: BlockReceiverBinding,
+        environment: &Environment,
+    ) {
         let Some(current) = environment.method_key.as_ref() else {
             return;
         };
         let Some(state) = self.declarations.methods.get_mut(current) else {
             return;
         };
-        if !state.explicit && !state.binds_block_to_receiver {
-            state.binds_block_to_receiver = true;
+        if state.observe_block_receiver_binding(binding) {
             self.fixpoint.changed_methods.insert(current.clone());
         }
     }
@@ -113,11 +132,11 @@ impl<'src> Analyzer<'src> {
                 .cloned()
         })
         .flatten();
-        let binds_block_to_receiver = self
+        let block_receiver_binding = self
             .declarations
             .methods
             .get(&key)
-            .is_some_and(|state| state.binds_block_to_receiver);
+            .and_then(|state| state.block_receiver_binding);
         let bound_receiver = class_new_receiver
             .or_else(|| match key.name.as_str() {
                 "define_method" => Self::class_object_instance_type(receiver_type),
@@ -131,10 +150,19 @@ impl<'src> Analyzer<'src> {
                     .and_then(optional_proc_type)
                     .and_then(|block| super::proc_receiver(&block).cloned())
             })
-            .or_else(|| {
-                binds_block_to_receiver
-                    .then(|| Self::class_object_instance_type(receiver_type))
-                    .flatten()
+            .or_else(|| match block_receiver_binding {
+                Some(BlockReceiverBinding::Instance) => {
+                    Self::class_object_instance_type(receiver_type)
+                }
+                Some(BlockReceiverBinding::Receiver) => Some(receiver_type.clone()),
+                Some(BlockReceiverBinding::Both) => {
+                    let instance = Self::class_object_instance_type(receiver_type);
+                    Some(instance.map_or_else(
+                        || receiver_type.clone(),
+                        |instance| Type::union([instance, receiver_type.clone()]),
+                    ))
+                }
+                None => None,
             })
             .or_else(|| self.rails_initializer_block_receiver(&key, Some(receiver_type)))
             .or_else(|| self.rails_application_configure_block_receiver(&key, Some(receiver_type)))

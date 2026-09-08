@@ -9,6 +9,22 @@ use crate::types::Type;
 use ruby_prism::ParametersNode;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BlockReceiverBinding {
+    Instance,
+    Receiver,
+    Both,
+}
+
+impl BlockReceiverBinding {
+    pub(super) fn join(self, other: Self) -> Self {
+        if self == other {
+            return self;
+        }
+        Self::Both
+    }
+}
+
 /// The evolving summary for one user-defined method. A missing parameter or
 /// return type means that no concrete evidence has reached that slot yet;
 /// calls use `Never` provisionally so unresolved calls do not poison the
@@ -21,7 +37,7 @@ pub(super) struct MethodState {
     pub(super) yield_params: Vec<Option<Type>>,
     pub(super) block_return_type: Option<Type>,
     pub(super) block: Option<Type>,
-    pub(super) binds_block_to_receiver: bool,
+    pub(super) block_receiver_binding: Option<BlockReceiverBinding>,
     pub(super) required_keywords: BTreeSet<String>,
     pub(super) return_type: Option<Type>,
     pub(super) return_terminates: bool,
@@ -41,6 +57,20 @@ pub(super) struct MethodState {
 }
 
 impl MethodState {
+    pub(super) fn observe_block_receiver_binding(&mut self, binding: BlockReceiverBinding) -> bool {
+        if self.explicit {
+            return false;
+        }
+        let next = self
+            .block_receiver_binding
+            .map_or(binding, |current| current.join(binding));
+        if self.block_receiver_binding == Some(next) {
+            return false;
+        }
+        self.block_receiver_binding = Some(next);
+        true
+    }
+
     pub(super) fn explicit_overloads(signatures: &[MethodSig]) -> Self {
         let signature = merge_method_signatures(signatures);
         let (yield_params, block_return_type) = signature
@@ -66,7 +96,7 @@ impl MethodState {
             yield_params,
             block_return_type,
             block: signature.block.clone(),
-            binds_block_to_receiver: false,
+            block_receiver_binding: None,
             required_keywords: signature
                 .keywords
                 .iter()
@@ -129,7 +159,7 @@ impl MethodState {
                 yield_params: Vec::new(),
                 block_return_type: None,
                 block: None,
-                binds_block_to_receiver: false,
+                block_receiver_binding: None,
                 required_keywords,
                 return_type: None,
                 return_terminates: false,
@@ -155,7 +185,7 @@ impl MethodState {
             yield_params: Vec::new(),
             block_return_type: None,
             block: None,
-            binds_block_to_receiver: false,
+            block_receiver_binding: None,
             required_keywords,
             return_type: None,
             return_terminates: false,
@@ -229,7 +259,7 @@ impl MethodState {
     pub(super) fn inferred_accessor(kind: AccessorKind) -> Self {
         let mut state = Self::inferred(None);
         state.return_type = Some(Type::Any);
-        state.binds_block_to_receiver = false;
+        state.block_receiver_binding = None;
         if kind == AccessorKind::Writer {
             state.params = vec![Some(Type::Any)];
             state.required_params = 1;
