@@ -412,6 +412,7 @@ fn narrow_pattern_value(
     value: cfg::ValueId,
     pattern: &cfg::Pattern,
     truthy: bool,
+    source_place: Option<&cfg::Place>,
 ) {
     let Some(source) = state.value(value) else {
         return;
@@ -448,7 +449,33 @@ fn narrow_pattern_value(
             }
         }
     };
-    state.set_value(value, narrowed);
+    state.set_value(value, narrowed.clone());
+    if let Some(source_place) = source_place {
+        match source_place {
+            cfg::Place::Local(local) => {
+                if let Some(name) = analyzer.hir_program.local_name(*local) {
+                    state.environment.bind(name.as_str().to_owned(), narrowed);
+                }
+            }
+            cfg::Place::InstanceVariable(name) => {
+                state
+                    .environment
+                    .bind(ivar_refinement_key(name.as_str()), narrowed);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn pattern_source_place(graph: &cfg::Cfg, value: cfg::ValueId) -> Option<cfg::Place> {
+    graph.blocks.iter().find_map(|block| {
+        block.operations.iter().find_map(|operation| {
+            (operation.result == Some(value)).then(|| match &operation.kind {
+                cfg::OperationKind::Read { place } => Some(place.clone()),
+                _ => None,
+            })?
+        })
+    })
 }
 
 fn case_pattern_is_type_test(
@@ -1053,10 +1080,10 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 !source.without(&Type::Nil).is_never(),
             ),
             cfg::Pattern::Case {
-                condition,
+                condition: condition_id,
                 expression,
             } => {
-                let condition = state.value(*condition).unwrap_or(Type::Any);
+                let condition = state.value(*condition_id).unwrap_or(Type::Any);
                 let is_type_test =
                     case_pattern_is_type_test(self.analyzer, *expression, &condition);
                 let expected = Analyzer::class_object_value_type(&condition).unwrap_or(condition);
@@ -1354,6 +1381,8 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                             _ => None,
                         });
                 let (source_id, pattern) = pattern.unwrap_or((None, None));
+                let source_place =
+                    source_id.and_then(|source_id| pattern_source_place(graph, source_id));
                 let source = next
                     .value(source_id.unwrap_or(*condition))
                     .ok_or_else(|| format!("missing branch operand {:?}", condition))?;
@@ -1377,7 +1406,14 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                         );
                     } else if let Some(source_id) = source_id {
                         let pattern = pattern.expect("pattern was present");
-                        narrow_pattern_value(self.analyzer, &mut state, source_id, pattern, true);
+                        narrow_pattern_value(
+                            self.analyzer,
+                            &mut state,
+                            source_id,
+                            pattern,
+                            true,
+                            source_place.as_ref(),
+                        );
                         if state.pending_exception.is_some()
                             && matches!(pattern, cfg::Pattern::Case { .. })
                         {
@@ -1397,7 +1433,14 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                         );
                     } else if let Some(source_id) = source_id {
                         let pattern = pattern.expect("pattern was present");
-                        narrow_pattern_value(self.analyzer, &mut state, source_id, pattern, false);
+                        narrow_pattern_value(
+                            self.analyzer,
+                            &mut state,
+                            source_id,
+                            pattern,
+                            false,
+                            source_place.as_ref(),
+                        );
                     }
                     edges.push(edge(*falsy, state));
                 }
