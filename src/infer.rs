@@ -523,25 +523,6 @@ struct Analyzer<'src> {
 }
 
 impl<'src> Analyzer<'src> {
-    fn is_send_node(node: &Node<'_>) -> bool {
-        node.as_call_node().is_some()
-            || node.as_call_and_write_node().is_some()
-            || node.as_call_operator_write_node().is_some()
-            || node.as_call_or_write_node().is_some()
-            || node.as_class_variable_operator_write_node().is_some()
-            || node.as_constant_operator_write_node().is_some()
-            || node.as_constant_path_operator_write_node().is_some()
-            || node.as_global_variable_operator_write_node().is_some()
-            || node.as_index_and_write_node().is_some()
-            || node.as_index_operator_write_node().is_some()
-            || node.as_index_or_write_node().is_some()
-            || node.as_instance_variable_operator_write_node().is_some()
-            || node.as_local_variable_operator_write_node().is_some()
-            || node.as_yield_node().is_some()
-            || node.as_super_node().is_some()
-            || node.as_forwarding_super_node().is_some()
-    }
-
     fn normal_type(result: Eval) -> Type {
         result.normal_type.unwrap_or(Type::Never)
     }
@@ -1045,76 +1026,6 @@ impl<'src> Analyzer<'src> {
             .map_or(self.source.len(), |line_end| start + line_end);
         self.diagnostics
             .push(Diagnostic::error(self.source, message, start, end));
-    }
-
-    fn record<'node>(&mut self, node: &Node<'node>, type_: Type) -> Type {
-        let (start, end) = prism::span(node);
-        let untyped_origin = if type_.contains_any() {
-            self.untyped_origins
-                .get(&(start, end))
-                .copied()
-                .or_else(|| {
-                    let direct_unsafe = node.as_call_node().is_some_and(|call| {
-                        prism::constant_name(call.name()) == "unsafe"
-                            && call.receiver().is_some_and(|receiver| {
-                                self.constant_reference_name(&receiver)
-                                    .is_some_and(|name| name.trim_start_matches("::") == "T")
-                            })
-                    });
-                    if direct_unsafe {
-                        Some(UntypedOrigin::Unsafe)
-                    } else {
-                        Some(UntypedOrigin::Propagated)
-                    }
-                })
-        } else {
-            None
-        };
-        self.record_at(
-            SourceSite::new(start, end),
-            type_,
-            self.report && Self::is_send_node(node),
-            untyped_origin,
-        )
-    }
-
-    fn deduplicate_types(types: Vec<InferredType>) -> Vec<InferredType> {
-        let mut by_span = BTreeMap::<(usize, usize), InferredType>::new();
-        for inferred in types {
-            let key = (inferred.start, inferred.end);
-            if let Some(previous) = by_span.get_mut(&key) {
-                let is_send = previous.is_send || inferred.is_send;
-                match (previous.type_.contains_any(), inferred.type_.contains_any()) {
-                    (true, false) => *previous = inferred,
-                    (false, true) => {}
-                    (false, false) => {
-                        previous.type_ = previous.type_.join(&inferred.type_);
-                        previous.untyped_origin = None;
-                    }
-                    (true, true) => *previous = inferred,
-                }
-                previous.is_send = is_send;
-            } else {
-                by_span.insert(key, inferred);
-            }
-        }
-        by_span.into_values().collect()
-    }
-
-    fn error<'node>(&mut self, node: &Node<'node>, message: impl Into<String>) {
-        if !self.report || self.suppress_diagnostics {
-            return;
-        }
-        let (start, end) = prism::span(node);
-        self.error_at(SourceSite::new(start, end), message);
-    }
-
-    fn note<'node>(&mut self, node: &Node<'node>, message: impl Into<String>) {
-        if !self.report || self.suppress_diagnostics {
-            return;
-        }
-        let (start, end) = prism::span(node);
-        self.note_at(SourceSite::new(start, end), message);
     }
 
     fn eval_call_result<'node>(
@@ -4048,14 +3959,6 @@ impl<'src> Analyzer<'src> {
             &BTreeMap::new(),
             &signature.type_parameters,
         )
-    }
-
-    fn error_at_or_node(&mut self, node: Option<&Node<'_>>, site: SourceSite, message: String) {
-        if let Some(node) = node {
-            self.error(node, message);
-        } else {
-            self.error_at(site, message);
-        }
     }
 
     fn select_overload(

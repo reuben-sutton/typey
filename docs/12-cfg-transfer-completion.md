@@ -186,6 +186,9 @@ The first modularization steps are now in place:
   children now live in `infer/legacy_bridge.rs`; their `pub(super)` surface is
   an explicit compatibility boundary used by the legacy evaluator and does
   not leak into owned CFG transfer.
+* Prism source recording, send classification, parser diagnostics, and type
+  deduplication now share `infer/source.rs` with owned `SourceSite` recording;
+  the analyzer no longer carries a second source-publication implementation.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
   `BoundProc` `call`/`[]` operations from CFG values, including argument
   checking and optional RBS block contracts; the optional-block fixture also
