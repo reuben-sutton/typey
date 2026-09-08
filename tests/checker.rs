@@ -193,6 +193,21 @@ fn transfers_straight_line_method_bodies_without_changing_results() {
 }
 
 #[test]
+fn transfers_optional_rbs_blocks_through_owned_proc_calls() {
+    let source = std::fs::read_to_string("tests/fixtures/optional_rbs_block.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn transfers_logical_writes_for_owned_storage_places() {
     let source =
         std::fs::read_to_string("tests/fixtures/hir_assignment_dispatch.rb").expect("fixture");

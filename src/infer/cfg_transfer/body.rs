@@ -2,8 +2,8 @@
 
 use super::super::cfg_state::{BlockState, BodyContext};
 use super::super::{
-    ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput,
-    SourceSite, UntypedOrigin,
+    ivar_refinement_key, proc_parts, Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes,
+    OwnedCallInput, SourceSite, UntypedOrigin,
 };
 use super::cfg_global_refinement_key;
 use super::patterns::{case_pattern_is_type_test, narrow_pattern_value, pattern_source_place};
@@ -208,7 +208,12 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             }
         };
         let has_block = input.block.is_some();
-        let (type_, untyped_origin) = if matches!(input.receiver, cfg::ReceiverOperand::Yield) {
+        let (type_, untyped_origin) = if input.name.as_str() == "!" {
+            // Unary negation is Ruby's boolean protocol, not a normal method
+            // lookup. In particular, it must work for nilable block locals
+            // before flow narrowing has selected their non-nil branch.
+            (Type::bool(), UntypedOrigin::Propagated)
+        } else if matches!(input.receiver, cfg::ReceiverOperand::Yield) {
             let type_ = analyzer.cfg_yield_result(input.site, &call_arguments, environment)?;
             (type_, UntypedOrigin::Propagated)
         } else if matches!(input.receiver, cfg::ReceiverOperand::Super) {
@@ -297,7 +302,35 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     format!("Used `&.` operator on `{receiver_type}`, which can never be nil"),
                 );
             }
-            if input.safe_navigation && dispatch_receiver.is_never() {
+            if matches!(input.name.as_str(), "call" | "[]") {
+                if let Some((parameters, result)) = proc_parts(&dispatch_receiver) {
+                    for (index, (actual, expected)) in call_arguments
+                        .argument_types
+                        .iter()
+                        .zip(parameters)
+                        .enumerate()
+                    {
+                        if !analyzer.is_assignable(actual, expected) {
+                            let argument_site = call_arguments
+                                .argument_sites
+                                .get(index)
+                                .copied()
+                                .unwrap_or(input.site);
+                            analyzer.error_at(
+                                argument_site,
+                                format!(
+                                    "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
+                                ),
+                            );
+                        }
+                    }
+                    (result.clone(), UntypedOrigin::Propagated)
+                } else if input.safe_navigation && dispatch_receiver.is_never() {
+                    (Type::Nil, UntypedOrigin::FallbackCall)
+                } else {
+                    return None;
+                }
+            } else if input.safe_navigation && dispatch_receiver.is_never() {
                 (Type::Nil, UntypedOrigin::FallbackCall)
             } else {
                 let key = analyzer.receiver_method_key(
@@ -552,6 +585,18 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         (
             !source.truthy_part().is_never(),
             !source.falsy_part().is_never(),
+        )
+    }
+
+    fn suppress_internal_call_record(&self, operation: &cfg::Operation) -> bool {
+        // The parser-backed evaluator uses `!value` as a control-flow
+        // predicate, so the source span remains associated with the operand
+        // rather than gaining a second recorded type for Ruby's boolean
+        // protocol call.  Keep the owned transfer's boolean result for branch
+        // narrowing, but preserve the same observable type recording.
+        matches!(
+            operation.kind,
+            cfg::OperationKind::Call { ref name, .. } if name.as_str() == "!"
         )
     }
 
@@ -954,6 +999,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 next.set_value(result, type_.clone());
             }
             if !self.suppress_internal_assignment_record(operation)
+                && !self.suppress_internal_call_record(operation)
                 && !matches!(
                     operation.kind,
                     cfg::OperationKind::PatternTest { .. }
