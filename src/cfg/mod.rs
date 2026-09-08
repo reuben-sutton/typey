@@ -9,6 +9,7 @@ use crate::hir::{self, BodyId, ClosureId, ConstantPath, ExprId, LocalId, Name, S
 
 pub mod index;
 pub mod lower;
+pub mod transfer;
 
 pub use index::CfgIndex;
 pub use lower::{build, build_all};
