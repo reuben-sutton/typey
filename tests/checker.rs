@@ -208,6 +208,25 @@ fn transfers_optional_rbs_blocks_through_owned_proc_calls() {
 }
 
 #[test]
+fn transfers_union_callable_calls_without_recursive_fallback() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_callable_union.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("T.any(Integer, String)")));
+}
+
+#[test]
 fn transfers_logical_writes_for_owned_storage_places() {
     let source =
         std::fs::read_to_string("tests/fixtures/hir_assignment_dispatch.rb").expect("fixture");

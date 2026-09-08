@@ -199,11 +199,12 @@ The first modularization steps are now in place:
   live in `infer/call_dispatch.rs`; `calls.rs` retains argument evaluation and
   the outer call protocol.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
-  `BoundProc` `call`/`[]` operations from CFG values, including argument
-  checking and optional RBS block contracts; the optional-block fixture also
-  verifies that CFG and recursive transfer publish identical source types.
-  Unary negation keeps its boolean result for flow narrowing without recording
-  an extra internal call type at the operand span.
+  `BoundProc` `call`/`[]` operations from CFG values, including unioned
+  callable receivers, argument checking, and optional RBS block contracts;
+  the optional-block and union-callable fixtures verify that CFG and recursive
+  transfer publish identical source types. Unary negation keeps its boolean
+  result for flow narrowing without recording an extra internal call type at
+  the operand span.
 
 The remaining bridges are deliberate and measurable: the legacy call adapter
 still needs parser nodes for exact argument diagnostics and builtin hooks; the

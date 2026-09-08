@@ -303,28 +303,13 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 );
             }
             if matches!(input.name.as_str(), "call" | "[]") {
-                if let Some((parameters, result)) = proc_parts(&dispatch_receiver) {
-                    for (index, (actual, expected)) in call_arguments
-                        .argument_types
-                        .iter()
-                        .zip(parameters)
-                        .enumerate()
-                    {
-                        if !analyzer.is_assignable(actual, expected) {
-                            let argument_site = call_arguments
-                                .argument_sites
-                                .get(index)
-                                .copied()
-                                .unwrap_or(input.site);
-                            analyzer.error_at(
-                                argument_site,
-                                format!(
-                                    "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
-                                ),
-                            );
-                        }
-                    }
-                    (result.clone(), UntypedOrigin::Propagated)
+                if let Some(type_) = Self::transfer_callable_call(
+                    analyzer,
+                    input.site,
+                    &dispatch_receiver,
+                    &call_arguments,
+                ) {
+                    (type_, UntypedOrigin::Propagated)
                 } else if input.safe_navigation && dispatch_receiver.is_never() {
                     (Type::Nil, UntypedOrigin::FallbackCall)
                 } else {
@@ -406,6 +391,50 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         }
         result.type_ = type_;
         Some(result)
+    }
+
+    fn transfer_callable_call(
+        analyzer: &mut Analyzer<'src>,
+        site: SourceSite,
+        receiver: &Type,
+        arguments: &super::super::CallArguments<'_>,
+    ) -> Option<Type> {
+        match receiver {
+            Type::Proc(_, _) | Type::BoundProc { .. } => {
+                let (parameters, result) = proc_parts(receiver)?;
+                for (index, (actual, expected)) in
+                    arguments.argument_types.iter().zip(parameters).enumerate()
+                {
+                    if !analyzer.is_assignable(actual, expected) {
+                        let argument_site =
+                            arguments.argument_sites.get(index).copied().unwrap_or(site);
+                        analyzer.error_at(
+                            argument_site,
+                            format!(
+                                "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
+                            ),
+                        );
+                    }
+                }
+                Some(result.clone())
+            }
+            Type::Union(members)
+                if members.iter().all(|member| {
+                    member.is_nil() || matches!(member, Type::Proc(_, _) | Type::BoundProc { .. })
+                }) =>
+            {
+                let mut result = Type::Never;
+                for member in members {
+                    if !member.is_nil() {
+                        result = result.join(&Self::transfer_callable_call(
+                            analyzer, site, member, arguments,
+                        )?);
+                    }
+                }
+                Some(if result.is_never() { Type::Any } else { result })
+            }
+            _ => None,
+        }
     }
 
     fn transfer_array(
