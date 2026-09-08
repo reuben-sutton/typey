@@ -292,6 +292,15 @@ fn closes_returning_blocks_without_lowering_following_sequence_into_them() {
 }
 
 #[test]
+fn records_unsupported_handoffs_without_hiding_nested_operations() {
+    let graph = cfg("for item in values\n  item.to_s\nend");
+    assert!(!graph.unsupported_spans.is_empty());
+    assert!(operations(&graph).iter().any(|operation| {
+        matches!(&operation.kind, OperationKind::Call { name, .. } if name.as_str() == "to_s")
+    }));
+}
+
+#[test]
 fn every_lowered_hir_expression_has_a_cfg_value_or_is_abrupt() {
     let source = "value = [1, 2]\nif value\n  value.first\nend";
     let program = lower(FileId(3), source.as_bytes());

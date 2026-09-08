@@ -70,6 +70,7 @@ impl<'program> Builder<'program> {
                 body,
                 entry: BlockId(0),
                 blocks: Vec::new(),
+                unsupported_spans: Vec::new(),
                 expression_values: vec![None; program.expressions.len()],
             },
             closed: Vec::new(),
@@ -271,6 +272,7 @@ impl<'program> Builder<'program> {
             ExprKind::Next(value) => self.lower_next(expression, block, value),
             ExprKind::Retry => self.lower_retry(expression, block, span),
             ExprKind::Definition(_) => {
+                self.cfg.unsupported_spans.push(span);
                 let value = self.emit(
                     block,
                     span,
@@ -282,6 +284,7 @@ impl<'program> Builder<'program> {
                 self.normal(expression, block, value)
             }
             ExprKind::Unsupported(unsupported) => {
+                self.cfg.unsupported_spans.push(span);
                 let value = self.emit(
                     block,
                     span,

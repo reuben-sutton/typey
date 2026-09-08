@@ -1262,6 +1262,7 @@ pub(crate) fn check_with_policies(
     let mut cfg_call_spans = HashSet::new();
     let mut cfg_write_spans = HashSet::new();
     let mut cfg_call_names = HashMap::new();
+    let cfg_unsupported_count = cfgs.iter().map(|graph| graph.unsupported_spans.len()).sum();
     for graph in &cfgs {
         for block in &graph.blocks {
             for operation in &block.operations {
@@ -1334,6 +1335,7 @@ pub(crate) fn check_with_policies(
         source: bytes,
         hir_program,
         cfg_body_count: cfgs.len(),
+        cfg_unsupported_count,
         cfg_call_spans,
         cfg_write_spans,
         cfg_call_names,
@@ -1394,6 +1396,7 @@ struct Analyzer<'src> {
     source: &'src [u8],
     hir_program: hir::Program,
     cfg_body_count: usize,
+    cfg_unsupported_count: usize,
     cfg_call_spans: HashSet<(usize, usize)>,
     cfg_write_spans: HashSet<(usize, usize)>,
     cfg_call_names: HashMap<(usize, usize), Vec<String>>,
@@ -1972,6 +1975,10 @@ impl<'src> Analyzer<'src> {
             eprintln!(
                 "[typey] compiled {} HIR bodies into CFG",
                 self.cfg_body_count
+            );
+            eprintln!(
+                "[typey] CFG unsupported handoffs: {}",
+                self.cfg_unsupported_count
             );
             eprintln!(
                 "[typey] registration complete in {:?}",
