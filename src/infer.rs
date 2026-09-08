@@ -15,6 +15,7 @@ use std::sync::Arc;
 mod arguments;
 mod blocks;
 mod builtins;
+mod call_types;
 mod calls;
 mod cfg_transfer;
 mod declarations;
@@ -25,6 +26,10 @@ mod source;
 mod type_resolution;
 mod type_system;
 
+use call_types::{
+    CallArgumentEvaluation, CallArgumentInput, CallArguments, CallSite, IndexAccess,
+    KeywordArgument, KeywordArgumentInput,
+};
 use declarations::{DeclarationState, MethodRegistrar};
 use fixpoint::FixpointState;
 use flow::{Eval, Flow, FlowKind, OutcomeTypes};
@@ -733,80 +738,6 @@ impl Environment {
         result.bind(name.to_owned(), self.get(name).meet(&type_));
         result
     }
-}
-
-struct CallSite<'a, 'node> {
-    argument_nodes: &'a [Node<'node>],
-    argument_types: &'a [Type],
-    block: Option<&'a Node<'node>>,
-}
-
-pub(super) enum CallArgumentInput<'node> {
-    Forwarded {
-        node: Node<'node>,
-    },
-    Positional {
-        node: Node<'node>,
-    },
-    Splat {
-        node: Node<'node>,
-        expression: Option<Node<'node>>,
-    },
-    KeywordHash {
-        node: Node<'node>,
-        entries: Vec<KeywordArgumentInput<'node>>,
-    },
-}
-
-pub(super) enum KeywordArgumentInput<'node> {
-    Pair {
-        key: Node<'node>,
-        value: Node<'node>,
-        name: Option<String>,
-    },
-    Splat(Option<Node<'node>>),
-    Forwarded,
-}
-
-struct KeywordArgument<'node> {
-    name: String,
-    node: Node<'node>,
-    type_: Type,
-}
-
-#[derive(Default)]
-struct CallArguments<'node> {
-    argument_nodes: Vec<Node<'node>>,
-    argument_types: Vec<Type>,
-    argument_indices: Vec<usize>,
-    positional_indices: Vec<usize>,
-    positional_types: Vec<Type>,
-    keyword_arguments: Vec<KeywordArgument<'node>>,
-    has_keyword_splat: bool,
-    has_dynamic_positional_splat: bool,
-    dynamic_positional_splat_types: Vec<Type>,
-    has_dynamic_keyword_splat: bool,
-    has_unknown_positional_splat: bool,
-    has_unknown_keyword_splat: bool,
-    /// The call uses Ruby's `...` forwarding form. There is no concrete
-    /// argument list at this syntax site; it is the caller's complete
-    /// positional, keyword, and block argument set.
-    forwards_arguments: bool,
-}
-
-struct CallArgumentEvaluation<'node> {
-    arguments: CallArguments<'node>,
-    abrupt: OutcomeTypes,
-    abrupt_flow: Flow,
-    all_normal: bool,
-}
-
-struct IndexAccess<'node> {
-    receiver_type: Type,
-    arguments: CallArguments<'node>,
-    abrupt: OutcomeTypes,
-    abrupt_flow: Flow,
-    all_normal: bool,
 }
 
 enum IndexAssignmentKind {
