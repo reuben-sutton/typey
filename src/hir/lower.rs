@@ -8,9 +8,10 @@
 
 use super::{
     Argument, ArrayElement, AssignOperator, AssignTarget, BeginExpr, Body, BodyId, BodyOwner,
-    Closure, ClosureId, ClosureKind, ConstantPath, DeclId, Declaration, DeclarationKind, Expr,
-    ExprId, ExprKind, FileId, HashElement, Literal, LocalId, LoopExpr, LoopKind, Name, Parameter,
-    ParameterKind, Parameters, Program, Read, Receiver, RescueClause, ScopeId, Span, Unsupported,
+    CaseArm, CaseExpr, Closure, ClosureId, ClosureKind, ConstantPath, DeclId, Declaration,
+    DeclarationKind, Expr, ExprId, ExprKind, FileId, HashElement, Literal, LocalId, LoopExpr,
+    LoopKind, Name, Parameter, ParameterKind, Parameters, Program, Read, Receiver, RescueClause,
+    ScopeId, Span, Unsupported,
 };
 use crate::prism;
 use ruby_prism::{ArgumentsNode, CallNode, Node, ParametersNode, Visit};
@@ -667,6 +668,9 @@ impl<'src> Lowerer<'src> {
                 },
             );
         }
+        if let Some(case_node) = node.as_case_node() {
+            return self.lower_case(node, &case_node);
+        }
         if let Some(return_node) = node.as_return_node() {
             let value = self.lower_control_arguments(return_node.arguments());
             return self.push_expr(node, ExprKind::Return(value));
@@ -815,6 +819,47 @@ impl<'src> Lowerer<'src> {
         }
 
         self.unsupported(node)
+    }
+
+    fn lower_case(&mut self, node: &Node<'_>, case_node: &ruby_prism::CaseNode<'_>) -> ExprId {
+        let scrutinee = case_node
+            .predicate()
+            .map(|predicate| self.lower_node(&predicate));
+        let arms = case_node
+            .conditions()
+            .into_iter()
+            .filter_map(|condition| {
+                let when_node = condition.as_when_node()?;
+                let conditions = when_node
+                    .conditions()
+                    .into_iter()
+                    .map(|condition| self.lower_node(&condition))
+                    .collect();
+                let body = when_node
+                    .statements()
+                    .map(|statements| self.lower_node(&statements.as_node()))
+                    .unwrap_or_else(|| self.nil(&condition));
+                Some(CaseArm {
+                    conditions,
+                    body,
+                    span: self.span(&condition),
+                })
+            })
+            .collect();
+        let else_body = case_node.else_clause().map(|else_clause| {
+            else_clause
+                .statements()
+                .map(|statements| self.lower_node(&statements.as_node()))
+                .unwrap_or_else(|| self.nil(&else_clause.as_node()))
+        });
+        self.push_expr(
+            node,
+            ExprKind::Case(CaseExpr {
+                scrutinee,
+                arms,
+                else_body,
+            }),
+        )
     }
 
     fn lower_assignment(

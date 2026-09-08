@@ -334,6 +334,18 @@ fn expr_can_transfer(
                     .body
                     .is_none_or(|body| expr_can_transfer(program, body, visiting, loop_depth + 1))
         }
+        ExprKind::Case(case) => {
+            case.scrutinee
+                .is_none_or(|scrutinee| expr_can_transfer(program, scrutinee, visiting, loop_depth))
+                && case.arms.iter().all(|arm| {
+                    arm.conditions.iter().all(|condition| {
+                        expr_can_transfer(program, *condition, visiting, loop_depth)
+                    }) && expr_can_transfer(program, arm.body, visiting, loop_depth)
+                })
+                && case.else_body.is_none_or(|else_body| {
+                    expr_can_transfer(program, else_body, visiting, loop_depth)
+                })
+        }
         // Value-carrying break and next still need non-local outcome values
         // in the transfer state. A valueless form is safe here because its
         // outcome is the same nil value already materialized by lowering.
@@ -419,17 +431,62 @@ fn narrow_pattern_value(
                 source.falsy_part()
             }
         }
-        cfg::Pattern::Case { condition, .. } => {
+        cfg::Pattern::Case {
+            condition,
+            expression,
+        } => {
             let condition = state.value(*condition).unwrap_or(Type::Any);
-            let expected = Analyzer::class_object_value_type(&condition).unwrap_or(condition);
-            if truthy {
-                analyzer.meet_predicate_type(&source, &expected)
+            if !case_pattern_is_type_test(analyzer, *expression, &condition) {
+                source
             } else {
-                source.without(&expected)
+                let expected = Analyzer::class_object_value_type(&condition).unwrap_or(condition);
+                if truthy {
+                    analyzer.meet_predicate_type(&source, &expected)
+                } else {
+                    source.without(&expected)
+                }
             }
         }
     };
     state.set_value(value, narrowed);
+}
+
+fn case_pattern_is_type_test(
+    analyzer: &Analyzer<'_>,
+    expression: hir::ExprId,
+    condition: &Type,
+) -> bool {
+    if Analyzer::class_object_value_type(condition).is_some() {
+        return true;
+    }
+    let Some(expression) = analyzer.hir_program.expression(expression) else {
+        return false;
+    };
+    match &expression.kind {
+        ExprKind::Literal(Literal::Nil | Literal::True | Literal::False) => true,
+        ExprKind::Read(Read::Constant(path)) => matches!(
+            path.as_str().rsplit("::").next(),
+            Some(
+                "Array"
+                    | "BasicObject"
+                    | "Class"
+                    | "Complex"
+                    | "FalseClass"
+                    | "Float"
+                    | "Hash"
+                    | "Integer"
+                    | "NilClass"
+                    | "Numeric"
+                    | "Object"
+                    | "Rational"
+                    | "Regexp"
+                    | "String"
+                    | "Symbol"
+                    | "TrueClass"
+            )
+        ),
+        _ => false,
+    }
 }
 
 fn conditional_graph() -> &'static cfg::Cfg {
@@ -995,10 +1052,15 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 !source.meet(&Type::Nil).is_never(),
                 !source.without(&Type::Nil).is_never(),
             ),
-            cfg::Pattern::Case { condition, .. } => {
+            cfg::Pattern::Case {
+                condition,
+                expression,
+            } => {
                 let condition = state.value(*condition).unwrap_or(Type::Any);
+                let is_type_test =
+                    case_pattern_is_type_test(self.analyzer, *expression, &condition);
                 let expected = Analyzer::class_object_value_type(&condition).unwrap_or(condition);
-                self.case_match_reachability(source, &expected)
+                self.case_match_reachability(source, &expected, is_type_test)
             }
         };
         let test_type = match (truthy, falsy) {
@@ -1010,7 +1072,12 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         Some((truthy, falsy, test_type))
     }
 
-    fn case_match_reachability(&self, source: &Type, expected: &Type) -> (bool, bool) {
+    fn case_match_reachability(
+        &self,
+        source: &Type,
+        expected: &Type,
+        is_type_test: bool,
+    ) -> (bool, bool) {
         if source.is_any() || expected.is_any() {
             return (true, true);
         }
@@ -1019,9 +1086,17 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 .iter()
                 .fold((false, false), |(truthy, falsy), member| {
                     let (member_truthy, member_falsy) =
-                        self.case_match_reachability(member, expected);
+                        self.case_match_reachability(member, expected, is_type_test);
                     (truthy || member_truthy, falsy || member_falsy)
                 });
+        }
+        if !is_type_test {
+            return (
+                !self
+                    .analyzer
+                    .definitely_disjoint_class_types(source, expected),
+                true,
+            );
         }
         if self.analyzer.is_assignable(source, expected) {
             (true, false)
