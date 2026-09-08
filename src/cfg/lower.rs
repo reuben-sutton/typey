@@ -309,6 +309,29 @@ impl<'program> Builder<'program> {
         }
     }
 
+    /// Record an expression value on a terminal return path before restoring
+    /// the path's original terminator. Recursive inference records enclosing
+    /// expressions even when one branch returns, so the CFG must preserve
+    /// that source-site observation without turning the return into a join.
+    fn record_terminal_return(&mut self, block: BlockId, expression: ExprId) {
+        let terminator = std::mem::replace(
+            &mut self.cfg.blocks[block.0 as usize].terminator,
+            Terminator::Unreachable,
+        );
+        let Terminator::Return(value) = terminator else {
+            self.cfg.blocks[block.0 as usize].terminator = terminator;
+            return;
+        };
+        self.closed[block.0 as usize] = false;
+        self.emit(
+            block,
+            self.span(expression),
+            OperationKind::Record { value },
+            false,
+        );
+        self.set_terminator(block, Terminator::Return(value));
+    }
+
     fn lower_expr(&mut self, expression: ExprId, block: BlockId) -> Flow {
         let expr = self
             .program
@@ -736,6 +759,8 @@ impl<'program> Builder<'program> {
                 join,
                 vec![then_flow.value.expect("then branch produces a value")],
             );
+        } else {
+            self.record_terminal_return(then_flow.block, expression);
         }
 
         let else_flow = match else_body {
@@ -758,6 +783,8 @@ impl<'program> Builder<'program> {
                 join,
                 vec![else_flow.value.expect("else branch produces a value")],
             );
+        } else {
+            self.record_terminal_return(else_flow.block, expression);
         }
 
         let reachable = then_flow.reachable || else_flow.reachable;
@@ -1226,7 +1253,24 @@ impl<'program> Builder<'program> {
 
     fn lower_return(&mut self, expression: ExprId, block: BlockId, value: Option<ExprId>) -> Flow {
         let (block, value) = self.lower_optional_value(block, value);
-        self.set_terminator(block, Terminator::Return(value));
+        let value = value.unwrap_or_else(|| {
+            self.emit(
+                block,
+                self.span(expression),
+                OperationKind::Const {
+                    value: hir::Literal::Nil,
+                },
+                true,
+            )
+            .expect("return seed produces a value")
+        });
+        self.emit(
+            block,
+            self.span(expression),
+            OperationKind::Record { value: Some(value) },
+            false,
+        );
+        self.set_terminator(block, Terminator::Return(Some(value)));
         self.abrupt(expression, block)
     }
 
