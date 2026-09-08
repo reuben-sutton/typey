@@ -375,7 +375,6 @@ impl<'src> Analyzer<'src> {
     pub(super) fn cfg_block_return_type<'node>(
         &mut self,
         input: &OwnedCallInput,
-        block_node: Option<&Node<'node>>,
         key: &MethodKey,
         signature: &MethodSig,
         arguments: &CallArguments<'node>,
@@ -384,29 +383,15 @@ impl<'src> Analyzer<'src> {
         environment: &mut super::Environment,
     ) -> Option<Eval> {
         match input.block.as_ref()? {
-            cfg::BlockOperand::Inline(closure) => {
-                if block_node.is_some() {
-                    self.observe_block_call(
-                        key,
-                        block_node,
-                        signature,
-                        arguments,
-                        Some(receiver_type),
-                        environment,
-                    )
-                    .map(Eval::value)
-                } else {
-                    self.cfg_inline_block_return_type(
-                        input,
-                        *closure,
-                        key,
-                        signature,
-                        arguments,
-                        receiver_type,
-                        environment,
-                    )
-                }
-            }
+            cfg::BlockOperand::Inline(closure) => self.cfg_inline_block_return_type(
+                input,
+                *closure,
+                key,
+                signature,
+                arguments,
+                receiver_type,
+                environment,
+            ),
             cfg::BlockOperand::Passed(value) => {
                 let expected = signature.block.as_ref().and_then(optional_proc_type);
                 if let (Some(expected), Some(name)) =
@@ -419,20 +404,6 @@ impl<'src> Analyzer<'src> {
                         expected,
                         environment,
                     )));
-                }
-                if let (Some(block), Some(expected)) = (block_node, expected.as_ref()) {
-                    if block
-                        .as_block_argument_node()
-                        .and_then(|block| block.expression())
-                        .and_then(|expression| expression.as_symbol_node())
-                        .is_some()
-                    {
-                        return Some(Eval::value(self.eval_symbol_passed_block(
-                            block,
-                            expected,
-                            environment,
-                        )));
-                    }
                 }
                 values
                     .get(value.0 as usize)

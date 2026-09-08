@@ -260,7 +260,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             {
                 let callback_result = analyzer.cfg_block_return_type(
                     &input,
-                    None,
                     &key,
                     &signature,
                     &call_arguments,
@@ -302,7 +301,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 {
                     let callback_result = analyzer.cfg_block_return_type(
                         &input,
-                        None,
                         &key,
                         &signature,
                         &call_arguments,
@@ -380,7 +378,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     {
                         let callback_result = analyzer.cfg_block_return_type(
                             &input,
-                            None,
                             &key,
                             &signature,
                             &call_arguments,
