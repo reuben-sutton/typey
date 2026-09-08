@@ -33,13 +33,21 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
   loop-carried environments and consumed `break`/`next` outcomes.
 * `38d2072` optimized the deterministic queue without changing its ordering
   or convergence contract.
+* `7e53b4b` connected `for` transfer to the same graph boundary, including
+  element binding and loop exits.
+* `d60667f` added a complete-body adapter for the first owned HIR subset:
+  literals, reads, sequences, and simple storage writes are transferred as
+  CFG operations, with method environments and recorded source types updated
+  only after a successful preflight. Unsupported bodies continue through the
+  recursive evaluator.
 
 ## Next boundary
 
 The analyzer still uses its recursive evaluator for compound/dynamic operation
-semantics, `for`, rescue/ensure, and branch/body expression adapters;
-`BlockState` is not yet driven by the generic worklist for complete bodies.
-The next implementation should add `BodyContext` and a body transfer host
-that adapts the owned CFG to `BlockTransfer`, then move closures and ordinary
-calls. The recursive path must remain available for differential checks until
-each operation and terminator has an equivalent transfer.
+semantics, rescue/ensure, and branch/body expression adapters. Complete-body
+transfer is deliberately narrow: it does not yet interpret calls, collection
+splats, closures, branches, or abrupt terminators inside a body. The next
+implementation should move ordinary call operations and their child values
+onto `BlockState`, then add rescue/ensure edges. The recursive path must remain
+available for differential checks until each operation and terminator has an
+equivalent transfer.

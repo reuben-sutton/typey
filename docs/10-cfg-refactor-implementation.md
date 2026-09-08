@@ -39,6 +39,13 @@ recursive evaluator remains the compatibility baseline.
 * `dfe6009` removed avoidable CFG-index work. Index-only lowering no longer
   builds the full expression span map or clones call names, while full graph
   construction retains expression identity for structural consumers.
+* `7e53b4b` moved `for` collection exits, element binding, loop-carried
+  environments, and `break`/`next` handling through the same worklist.
+* `d60667f` added the first complete-body transfer host. Straight-line method
+  bodies containing literals, reads, sequences, and simple storage writes now
+  run entirely through owned HIR CFG operations and the generic transfer
+  scheduler. The host preflights unsupported operations and falls back before
+  recording any partial result.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -48,34 +55,37 @@ into a concrete value or silently replaced with `T.untyped`.
 
 The current gates pass:
 
-* CFG structural tests: 14 passed;
+* CFG structural tests: 15 passed;
 * HIR lowering tests: 10 passed;
-* checker tests: 329 passed;
+* checker tests: 331 passed;
 * conformance tests: 158 passed;
 * release Spoom: the same three classified diagnostics as the baseline.
 
 CFG-enabled checker regressions cover ordinary calls, local and instance
 writes, attribute setters, loop/rescue fixtures, safe navigation, branches,
-compound assignments, and source identity. The default checker remains at
-baseline performance because CFG construction is not yet enabled by default.
-On the local release benchmark, Spoom took about 2.12s on the legacy path and
-1.85s with `--cfg` in the latest run; both paths produced the same three
-classified diagnostics. The measurements are close enough that the CFG index
-is no longer an unexplained repository-level regression. The remaining
-transfer boundary is semantic ownership, not an observed indexing hotspot.
+compound assignments, source identity, and a complete straight-line method
+body. The default checker remains at baseline performance because CFG
+construction is not yet enabled by default. In a matched local release run,
+Spoom took about 1.71s on the legacy path and 1.74s with `--cfg`; both paths
+produced the same three classified diagnostics. The body host itself transferred
+31 methods in that run. An initial slower result was traced to rebuilding the
+program-wide HIR expression index once per method; the body host now uses the
+index-free builder, and the residual difference is within run-to-run noise.
 
 ## Remaining migration boundary
 
-The legacy recursive evaluator still owns loop, rescue, ensure, and general
-expression transfer. CFG mode now selects conditional branch bodies and joins
-from owned CFG regions, while retaining source-node child evaluation as a
+The legacy recursive evaluator still owns rescue, ensure, and general
+expression transfer. CFG mode now selects conditional and loop regions from
+owned CFGs, and complete straight-line method bodies use the generic worklist.
+Conditional and loop bodies still retain source-node child evaluation as a
 temporary bridge. It still uses explicit fallbacks for executable expressions
 that are orphaned under unsupported syntax.
 
 The next stages are therefore:
 
-1. transfer loops, `break`, and `next` through CFG edges;
-2. transfer rescue, `retry`, and ensure edges;
+1. transfer rescue, `retry`, and ensure edges;
+2. move ordinary calls, compound writes, and complete branch bodies onto the
+   body worklist without Prism child-node adapters;
 3. compare diagnostics, inferred types, flow outcomes, send metrics, and
    untyped provenance against the recursive path;
 4. remove the opt-in switch and legacy path only after those comparisons are
