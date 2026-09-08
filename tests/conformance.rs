@@ -83,6 +83,18 @@ fn maps_rbs_caret_expectations_to_the_following_definition() {
 }
 
 #[test]
+fn maps_annotation_caret_expectations_to_the_following_definition() {
+    let parsed = expectations(
+        "# @interface\n\
+         #  ^^^^^^^^^ error: interface mismatch\n\
+         class Interface; end\n",
+    );
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].line, 3);
+    assert_eq!(parsed[0].message, "interface mismatch");
+}
+
+#[test]
 fn checks_rbi_fixtures_and_single_file_discovery() {
     let rbi = Path::new("tests/workspace_repo/sorbet/rbi/greeting.rbi");
     let report = check_fixture(rbi, CheckerConfig::default()).expect("RBI is readable");
