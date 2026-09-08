@@ -56,8 +56,8 @@ The current implementation has a useful but temporary shape:
 
 ```text
 owned HIR -> owned CFG -> BlockTransfer
-                         |-> source-span Prism lookup
-                         |-> existing recursive call/child evaluator
+                         |-> owned source-site transfer for values and writes
+                         |-> owned call input -> legacy diagnostic/builtin adapter
                          |-> whole-body legacy fallback
 ```
 
@@ -72,6 +72,27 @@ owned HIR -> owned CFG -> BlockTransfer -> abstract state/result
 `CfgIndex` may remain as a structural/debug index. It must not be required to
 discover the semantic operands of a transfer operation. `SpanNodeIndex` and
 `HirCallView` are migration bridges, not part of the final transfer contract.
+
+### Progress in the current iteration
+
+The first modularization steps are now in place:
+
+* `infer/source.rs` owns source-site recording, diagnostics, strictness checks,
+  and inline-assertion lookup for CFG paths;
+* `BodyTransfer` transfers literals, reads, writes, arrays, hashes, and
+  pattern values from CFG/HIR payloads without looking up a Prism node;
+* HIR preserves top-level call argument groups and owned source spans;
+* `infer/call_types.rs` owns the parser-backed call boundary, and CFG dispatch
+  receives an `OwnedCallInput` containing the call identity and CFG operands;
+  and
+* CFG argument materialization is isolated to that adapter, so the transfer
+  host no longer reconstructs call shape directly from `CallNode` children.
+
+The remaining bridge is deliberate and measurable: legacy dispatch still
+needs parser nodes for exact argument diagnostics and builtin hooks, and the
+specialized conditional/loop helpers still consume parser nodes. Removing
+those requires moving their diagnostic and block contracts to owned source
+sites/closure IDs rather than weakening the checker.
 
 ## Design
 
