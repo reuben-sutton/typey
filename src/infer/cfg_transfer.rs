@@ -1,5 +1,6 @@
 use super::{Analyzer, SourceSite};
 
+mod assignment;
 mod body;
 mod builtins;
 mod calls;

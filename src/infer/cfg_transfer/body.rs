@@ -2,8 +2,7 @@
 
 use super::super::cfg_state::{BlockState, BodyContext};
 use super::super::{
-    ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput,
-    SourceSite,
+    Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput, SourceSite,
 };
 use super::cfg_global_refinement_key;
 use super::patterns::{case_pattern_is_type_test, narrow_pattern_value, pattern_source_place};
@@ -99,87 +98,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             false,
         )?;
         Some(Type::Proc(signature.params, Box::new(body_result.type_)))
-    }
-
-    fn transfer_write(
-        analyzer: &mut Analyzer<'src>,
-        site: SourceSite,
-        place: &cfg::Place,
-        actual: Type,
-        logical: bool,
-        environment: &mut Environment,
-    ) -> Type {
-        match place {
-            cfg::Place::Local(local) => {
-                let name = analyzer
-                    .program
-                    .hir_program
-                    .local_name(*local)
-                    .map_or_else(String::new, |name| name.as_str().to_owned());
-                let type_ =
-                    analyzer.apply_inline_assertion_in_environment_at(site, actual, environment);
-                let type_ = if logical {
-                    type_.without(&Type::Nil)
-                } else {
-                    type_
-                };
-                environment.bind(name, type_.clone());
-                type_
-            }
-            cfg::Place::InstanceVariable(name) => {
-                let name = name.as_str().to_owned();
-                let type_ =
-                    analyzer.apply_inline_assertion_in_environment_at(site, actual, environment);
-                let type_ = if logical {
-                    type_.without(&Type::Nil)
-                } else {
-                    type_
-                };
-                analyzer.observe_ivar(environment, name.clone(), &type_, false);
-                environment.bind(ivar_refinement_key(&name), type_.clone());
-                type_
-            }
-            cfg::Place::ClassVariable(name) => {
-                let type_ = analyzer.apply_inline_assertion_at(site, actual);
-                analyzer.observe_class_var(environment, name.as_str().to_owned(), &type_);
-                type_
-            }
-            cfg::Place::Global(name) => {
-                let type_ = analyzer.apply_inline_assertion_at(site, actual);
-                environment.bind(cfg_global_refinement_key(name.as_str()), type_.clone());
-                type_
-            }
-            cfg::Place::Constant(path) => {
-                let type_ = analyzer.apply_inline_assertion_at(site, actual);
-                analyzer.observe_constant(environment, path.as_str().to_owned(), &type_);
-                type_
-            }
-        }
-    }
-
-    fn transfer_for_target(
-        analyzer: &mut Analyzer<'src>,
-        site: SourceSite,
-        target: &hir::AssignTarget,
-        element_type: Type,
-        environment: &mut Environment,
-    ) -> Option<Type> {
-        let place = match target {
-            hir::AssignTarget::Local(local) => cfg::Place::Local(*local),
-            hir::AssignTarget::InstanceVariable(name) => cfg::Place::InstanceVariable(name.clone()),
-            hir::AssignTarget::ClassVariable(name) => cfg::Place::ClassVariable(name.clone()),
-            hir::AssignTarget::Global(name) => cfg::Place::Global(name.clone()),
-            hir::AssignTarget::Constant(path) => cfg::Place::Constant(path.clone()),
-            hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. } => return None,
-        };
-        Some(Self::transfer_write(
-            analyzer,
-            site,
-            &place,
-            element_type,
-            false,
-            environment,
-        ))
     }
 
     fn transfer_array(
@@ -780,7 +698,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     let actual = next
                         .value(*value)
                         .ok_or_else(|| format!("missing write operand {:?}", value))?;
-                    Self::transfer_write(
+                    super::assignment::transfer_write(
                         self.analyzer,
                         site,
                         place,
@@ -794,7 +712,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         format!("missing for collection operand {:?}", collection)
                     })?;
                     let element_type = self.analyzer.array_element_type(&collection_type);
-                    Self::transfer_for_target(
+                    super::assignment::transfer_for_target(
                         self.analyzer,
                         site,
                         target,
