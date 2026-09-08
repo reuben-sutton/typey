@@ -93,9 +93,9 @@ writes, attribute setters, loop/rescue fixtures, safe navigation, branches,
 compound assignments, source identity, and a complete straight-line method
 body. The default checker remains at baseline performance because CFG
 construction is not yet enabled by default. In three sequential local release
-runs, Spoom took 1.71–1.76s with `--cfg` and 1.67–1.75s on the legacy path;
+runs, Spoom took 1.74–1.77s with `--cfg` and 1.67–1.75s on the legacy path;
 both paths produced the same three classified diagnostics. The CFG body host
-transferred 603 methods and 59,187 calls, with 157 legacy body fallbacks. An
+transferred 654 methods and 59,020 calls, with 157 legacy body fallbacks. An
 initial slower result was traced to rebuilding the program-wide HIR expression
 index once per method; the body host now uses the index-free builder, and the
 remaining run-to-run difference is negligible.

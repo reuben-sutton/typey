@@ -102,6 +102,6 @@ source recording and the existing dispatch helpers. That bridge should shrink
 as call argument metadata and dispatch inputs become owned HIR data.
 
 The graph cache has no observable cost on the Spoom regression: three
-sequential release runs measured 1.71–1.76s with CFG transfer and 1.67–1.75s
+sequential release runs measured 1.74–1.77s with CFG transfer and 1.67–1.75s
 on the recursive path, with identical diagnostics. It removes repeated body
 lowering without changing the current opt-in boundary.
