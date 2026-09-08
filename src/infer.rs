@@ -1247,13 +1247,18 @@ pub(crate) fn check_with_policies(
         .unwrap_or_default();
     let mut cfg_call_spans = HashSet::new();
     let mut cfg_write_spans = HashSet::new();
+    let mut cfg_call_names = HashMap::new();
     for graph in &cfgs {
         for block in &graph.blocks {
             for operation in &block.operations {
                 let span = (operation.span.start as usize, operation.span.end as usize);
-                match operation.kind {
-                    cfg::OperationKind::Call { .. } => {
+                match &operation.kind {
+                    cfg::OperationKind::Call { name, .. } => {
                         cfg_call_spans.insert(span);
+                        cfg_call_names
+                            .entry(span)
+                            .or_insert_with(Vec::new)
+                            .push(name.as_str().to_owned());
                     }
                     cfg::OperationKind::Write { .. } => {
                         cfg_write_spans.insert(span);
@@ -1310,6 +1315,7 @@ pub(crate) fn check_with_policies(
         cfg_body_count: cfgs.len(),
         cfg_call_spans,
         cfg_write_spans,
+        cfg_call_names,
         hir_call_ids,
         hir_assignment_ids,
         line_map: prism::LineMap::new(bytes),
@@ -1344,6 +1350,9 @@ pub(crate) fn check_with_policies(
         types: Vec::new(),
         untyped_origins: BTreeMap::new(),
         suppress_diagnostics: false,
+        cfg_transfer_calls: 0,
+        cfg_transfer_assignments: 0,
+        cfg_transfer_fallbacks: 0,
     };
     let result = analyzer.run(&root);
     (result, diagnostics)
@@ -1365,6 +1374,7 @@ struct Analyzer<'src> {
     cfg_body_count: usize,
     cfg_call_spans: HashSet<(usize, usize)>,
     cfg_write_spans: HashSet<(usize, usize)>,
+    cfg_call_names: HashMap<(usize, usize), Vec<String>>,
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
     line_map: prism::LineMap,
@@ -1399,6 +1409,9 @@ struct Analyzer<'src> {
     types: Vec<InferredType>,
     untyped_origins: BTreeMap<(usize, usize), UntypedOrigin>,
     suppress_diagnostics: bool,
+    cfg_transfer_calls: usize,
+    cfg_transfer_assignments: usize,
+    cfg_transfer_fallbacks: usize,
 }
 
 /// A call shape whose semantic fields come from owned HIR. During this
@@ -1628,6 +1641,12 @@ impl<'src> Analyzer<'src> {
         self.cfg_call_spans.contains(&prism::span(node))
     }
 
+    fn cfg_call_name_matches(&self, node: &Node<'_>, name: &str) -> bool {
+        self.cfg_call_names
+            .get(&prism::span(node))
+            .is_some_and(|names| names.iter().any(|candidate| candidate == name))
+    }
+
     fn has_cfg_assignment_operation(&self, node: &Node<'_>) -> bool {
         let span = prism::span(node);
         self.cfg_call_spans.contains(&span) || self.cfg_write_spans.contains(&span)
@@ -1640,6 +1659,33 @@ impl<'src> Analyzer<'src> {
                 prism::span(node)
             );
         }
+    }
+
+    fn transfer_cfg_call<'node>(
+        &mut self,
+        node: &Node<'node>,
+        call: HirCallView<'node>,
+        environment: &mut Environment,
+    ) -> Eval {
+        self.cfg_transfer_calls = self.cfg_transfer_calls.saturating_add(1);
+        // The CFG supplies the dispatch name and argument-shape operation.
+        // HirCallView retains only Prism child nodes so the existing transfer
+        // machinery can evaluate child expressions until the owned value
+        // evaluator lands.
+        debug_assert!(self.cfg_call_name_matches(node, &call.name()));
+        self.eval_call_result(node, &call, environment)
+    }
+
+    fn transfer_cfg_assignment<'node>(
+        &mut self,
+        node: &Node<'node>,
+        target: hir::AssignTarget,
+        value: hir::ExprId,
+        operator: hir::AssignOperator,
+        environment: &mut Environment,
+    ) -> Eval {
+        self.cfg_transfer_assignments = self.cfg_transfer_assignments.saturating_add(1);
+        self.eval_hir_assignment(node, target, value, operator, environment)
     }
 
     fn hir_call_view<'node>(
@@ -2046,6 +2092,10 @@ impl<'src> Analyzer<'src> {
                 .then_with(|| left.message.cmp(&right.message))
         });
         if self.config.debug {
+            eprintln!(
+                "[typey] CFG transfers: {} calls, {} assignments, {} legacy fallbacks",
+                self.cfg_transfer_calls, self.cfg_transfer_assignments, self.cfg_transfer_fallbacks
+            );
             eprintln!(
                 "[typey] complete: {} diagnostics, {} recorded types in {:?}",
                 self.diagnostics.len(),
@@ -3057,7 +3107,11 @@ impl<'src> Analyzer<'src> {
             return Eval::value(self.record(node, Type::Nil));
         }
         if let Some((target, value, operator)) = self.hir_assignment_for_node(node) {
-            if !self.has_cfg_assignment_operation(node) {
+            if self.config.enable_cfg && self.has_cfg_assignment_operation(node) {
+                return self.transfer_cfg_assignment(node, target, value, operator, environment);
+            }
+            if self.config.enable_cfg {
+                self.cfg_transfer_fallbacks = self.cfg_transfer_fallbacks.saturating_add(1);
                 self.report_cfg_fallback(node, "assignment");
             }
             return self.eval_hir_assignment(node, target, value, operator, environment);
@@ -3074,7 +3128,11 @@ impl<'src> Analyzer<'src> {
                         self.hir_call_ids.len()
                     )
             });
-            if !self.has_cfg_call_operation(node) {
+            if self.config.enable_cfg && self.has_cfg_call_operation(node) {
+                return self.transfer_cfg_call(node, hir_call, environment);
+            }
+            if self.config.enable_cfg {
+                self.cfg_transfer_fallbacks = self.cfg_transfer_fallbacks.saturating_add(1);
                 self.report_cfg_fallback(node, "call");
             }
             return self.eval_call_result(node, &hir_call, environment);

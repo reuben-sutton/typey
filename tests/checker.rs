@@ -100,6 +100,32 @@ fn compiles_cfg_bodies_without_changing_checker_results() {
 }
 
 #[test]
+fn uses_cfg_call_and_assignment_transfers_for_supported_shapes() {
+    let source = r#"class Box
+  def value=(value)
+    @value = value
+  end
+
+  def value
+    @value
+  end
+end
+
+box = Box.new
+box.value = 1
+box.value
+"#;
+    let result = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn reports_malformed_sorbet_proc_signatures() {
     check_fixture("tests/fixtures/malformed_bound_proc_signature.rb");
 }
