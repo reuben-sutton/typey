@@ -1,11 +1,12 @@
 use super::{
-    name_matches, optional_proc_type, prism, proc_parts, strictness_rank, Analyzer, CallArguments,
-    CallSite, Environment, Eval, MethodKey, MethodState, Strictness,
+    name_matches, optional_proc_type, prism, proc_parts, proc_receiver, strictness_rank, Analyzer,
+    CallArguments, CallSite, Environment, Eval, MethodKey, MethodState, SourceSite, Strictness,
 };
 use crate::hir;
-use crate::signature::MethodSig;
+use crate::signature::{self, MethodSig};
 use crate::types::Type;
 use ruby_prism::{Node, ParametersNode};
+use std::collections::BTreeMap;
 
 impl<'src> Analyzer<'src> {
     pub(super) fn eval_block_node<'node>(
@@ -491,5 +492,374 @@ impl<'src> Analyzer<'src> {
             let type_ = captured.get(name).join(&block.get(name));
             outer.bind(name.clone(), type_);
         }
+    }
+
+    pub(super) fn observe_block_call_eval<'node>(
+        &mut self,
+        key: &MethodKey,
+        block: Option<&Node<'node>>,
+        signature: &MethodSig,
+        arguments: &CallArguments<'node>,
+        receiver_type: Option<&Type>,
+        environment: &mut Environment,
+    ) -> Option<Eval> {
+        let Some(block) = block else {
+            return None;
+        };
+        let Some(key) = self.resolve_method_key(key) else {
+            return None;
+        };
+        let mut bindings = self.infer_type_parameter_bindings(signature, arguments, None);
+        bindings.extend(self.infer_generic_member_bindings(signature, arguments, receiver_type));
+        let previous_substitution_context = self.substitution_context.replace(key.clone());
+        let block_signature = signature.block.as_ref().map(|block| {
+            self.substitute_signature_type(
+                block,
+                receiver_type,
+                &bindings,
+                &signature.type_parameters,
+            )
+        });
+        self.substitution_context = previous_substitution_context;
+        let expected = block_signature
+            .as_ref()
+            .and_then(optional_proc_type)
+            .and_then(|block| proc_parts(&block).map(|(parameters, _)| parameters.to_vec()))
+            .unwrap_or_else(|| {
+                self.declarations
+                    .methods
+                    .get(&key)
+                    .map_or_else(Vec::new, MethodState::block_parameters)
+            });
+        let previous_expected_return = self.expected_return_type.take();
+        let expected_block_return = block_signature
+            .as_ref()
+            .and_then(optional_proc_type)
+            .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()));
+        self.expected_return_type = expected_block_return.map(|expected| {
+            if matches!(expected, Type::TypeVar(_)) {
+                Self::literal_block_tuple_type(block).unwrap_or(expected)
+            } else {
+                expected
+            }
+        });
+        let class_new_receiver = (key.name == "new"
+            && key.singleton
+            && key
+                .owner
+                .as_deref()
+                .is_some_and(|owner| name_matches(owner, "Class")))
+        .then(|| {
+            arguments
+                .argument_types
+                .first()
+                .filter(|argument| Self::class_object_instance_type(argument).is_some())
+                .cloned()
+        })
+        .flatten();
+        let binds_block_to_receiver = self
+            .declarations
+            .methods
+            .get(&key)
+            .is_some_and(|state| state.binds_block_to_receiver);
+        let bound_receiver = class_new_receiver
+            .or_else(|| self.active_support_test_block_receiver(&key, receiver_type))
+            .or_else(|| {
+                block_signature
+                    .as_ref()
+                    .and_then(optional_proc_type)
+                    .and_then(|block| proc_receiver(&block).cloned())
+            })
+            .or_else(|| {
+                binds_block_to_receiver
+                    .then(|| receiver_type.and_then(Self::class_object_instance_type))
+                    .flatten()
+            })
+            .or_else(|| self.rails_initializer_block_receiver(&key, receiver_type))
+            .or_else(|| self.rails_application_configure_block_receiver(&key, receiver_type))
+            .or_else(|| self.rails_route_draw_block_receiver(&key, receiver_type))
+            .or_else(|| self.active_support_ci_block_receiver(&key, receiver_type));
+        let (block_result, passed_block_signature) = if block.as_block_argument_node().is_some() {
+            if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
+            {
+                if block
+                    .as_block_argument_node()
+                    .and_then(|block| block.expression())
+                    .and_then(|expression| expression.as_symbol_node())
+                    .is_some()
+                {
+                    (
+                        Eval::value(self.eval_symbol_passed_block(
+                            block,
+                            &expected_signature,
+                            environment,
+                        )),
+                        None,
+                    )
+                } else {
+                    let Some(expression_type) =
+                        self.passed_block_expression_type(block, environment)
+                    else {
+                        // `&nil` is Ruby's spelling for omitting a block.
+                        return None;
+                    };
+                    if let Some(signature) = Self::passed_block_signature(&expression_type) {
+                        let return_type =
+                            proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
+                        (Eval::value(return_type), Some(signature))
+                    } else {
+                        (Eval::value(Type::Any), None)
+                    }
+                }
+            } else {
+                let Some(expression_type) = self.passed_block_expression_type(block, environment)
+                else {
+                    // `&nil` is Ruby's spelling for omitting a block.
+                    return None;
+                };
+                if let Some(signature) = Self::passed_block_signature(&expression_type) {
+                    let return_type =
+                        proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
+                    (Eval::value(return_type), Some(signature))
+                } else {
+                    (Eval::value(Type::Any), None)
+                }
+            }
+        } else if matches!(
+            key.name.as_str(),
+            "define_method" | "define_singleton_method"
+        ) {
+            // These APIs consume the block as a method body rather than as a
+            // callback.  Their core RBI supplies a generic block signature,
+            // so handle the body here before the ordinary callback path can
+            // accidentally retain the lexical module/class self.
+            self.eval_dynamic_method_body(&key.name, block, environment);
+            (Eval::value(Type::Any), None)
+        } else {
+            let block_result = if let Some(receiver) = bound_receiver.as_ref() {
+                self.eval_bound_block_node_result(block, &expected, receiver, environment)
+                    .0
+            } else {
+                self.eval_block_node_result_with_environment(block, &expected, environment)
+                    .0
+            };
+            (block_result, None)
+        };
+        let block_type = Self::block_value_type(&block_result);
+        self.expected_return_type = previous_expected_return;
+        let mut checked_bindings =
+            self.infer_type_parameter_bindings(signature, arguments, Some(&block_type));
+        checked_bindings.extend(self.infer_generic_member_bindings(
+            signature,
+            arguments,
+            receiver_type,
+        ));
+        let checked_block_signature = self
+            .declarations
+            .methods
+            .get(&key)
+            .is_some_and(|state| state.explicit)
+            .then(|| {
+                let previous_substitution_context = self.substitution_context.replace(key.clone());
+                let result = signature.block.as_ref().map(|block| {
+                    self.substitute_signature_type(
+                        block,
+                        receiver_type,
+                        &checked_bindings,
+                        &signature.type_parameters,
+                    )
+                });
+                self.substitution_context = previous_substitution_context;
+                result
+            })
+            .flatten();
+        if let Some(actual_block_signature) = passed_block_signature {
+            if let Some(expected_block_signature) = checked_block_signature
+                .as_ref()
+                .and_then(optional_proc_type)
+            {
+                if !self.is_assignable(&actual_block_signature, &expected_block_signature) {
+                    self.error(
+                        block,
+                        format!(
+                            "Expected `{}` but found `{}` for block argument",
+                            Self::block_type_description(&expected_block_signature),
+                            Self::block_type_description(&actual_block_signature),
+                        ),
+                    );
+                }
+            }
+        } else if let Some(block_signature) = checked_block_signature
+            .as_ref()
+            .and_then(optional_proc_type)
+        {
+            if let Some((_, expected_return)) = proc_parts(&block_signature) {
+                if !expected_return.is_any()
+                    && !expected_return.is_nil()
+                    && !self.is_assignable(&block_type, &expected_return)
+                {
+                    self.check_assignable(block, &block_type, &expected_return);
+                }
+            }
+        }
+        if self
+            .declarations
+            .methods
+            .get(&key)
+            .is_some_and(|state| !state.explicit)
+            && self
+                .declarations
+                .methods
+                .get_mut(&key)
+                .is_some_and(|state| state.observe_block_return(&block_type))
+        {
+            self.fixpoint.changed_methods.insert(key);
+        }
+        Some(block_result)
+    }
+
+    pub(super) fn observe_block_call<'node>(
+        &mut self,
+        key: &MethodKey,
+        block: Option<&Node<'node>>,
+        signature: &MethodSig,
+        arguments: &CallArguments<'node>,
+        receiver_type: Option<&Type>,
+        environment: &mut Environment,
+    ) -> Option<Type> {
+        self.observe_block_call_eval(key, block, signature, arguments, receiver_type, environment)
+            .map(|result| Self::block_value_type(&result))
+    }
+
+    pub(super) fn eval_symbol_passed_block<'node>(
+        &mut self,
+        node: &Node<'node>,
+        expected: &Type,
+        environment: &mut Environment,
+    ) -> Type {
+        let Some(symbol) = node
+            .as_block_argument_node()
+            .and_then(|block| block.expression())
+            .and_then(|expression| expression.as_symbol_node())
+        else {
+            return Type::Any;
+        };
+        let name = String::from_utf8_lossy(symbol.unescaped()).into_owned();
+        self.eval_symbol_passed_block_named(
+            Some(node),
+            SourceSite::from_prism_span(prism::span(node)),
+            &name,
+            expected,
+            environment,
+        )
+    }
+
+    pub(super) fn eval_symbol_passed_block_named(
+        &mut self,
+        node: Option<&Node<'_>>,
+        site: SourceSite,
+        name: &str,
+        expected: &Type,
+        environment: &mut Environment,
+    ) -> Type {
+        let Some((parameters, _)) = proc_parts(expected) else {
+            return Type::Any;
+        };
+        let Some(receiver) = parameters.first() else {
+            return Type::Any;
+        };
+        let Some(key) = self.receiver_method_key(None, receiver, &name, environment) else {
+            return Type::Any;
+        };
+        self.record_method_dependency(&key, environment);
+        let Some(signature) = self.observe_call(&key, &CallArguments::default(), false) else {
+            return Type::Any;
+        };
+        let owner = self
+            .resolve_method_key(&key)
+            .and_then(|resolved| resolved.owner)
+            .unwrap_or_else(|| receiver.to_string());
+        let method = format!("{owner}#{name}");
+
+        // Symbol#to_proc consumes the first yielded value as the receiver;
+        // all remaining yielded values are passed to the named method.
+        let mut positional = Vec::new();
+        let mut keywords = BTreeMap::<String, Type>::new();
+        for argument in parameters.iter().skip(1) {
+            if let Type::Named(shape, _) = argument {
+                if shape.starts_with('{') && shape.ends_with('}') {
+                    for keyword in signature.keywords.keys() {
+                        if let Some(type_) = signature::parse_inline_record_field(shape, keyword) {
+                            keywords.insert(keyword.clone(), type_);
+                        }
+                    }
+                    if !keywords.is_empty() {
+                        continue;
+                    }
+                }
+            }
+            positional.push(argument.clone());
+        }
+
+        if !signature.accepts_rest && positional.len() > signature.params.len() {
+            self.error_at_or_node(
+                node,
+                site,
+                format!(
+                    "Too many positional arguments provided for method `{method}`. Expected: `{}`, got: `{}`",
+                    signature.params.len(),
+                    positional.len(),
+                ),
+            );
+        }
+        for (index, actual) in positional.iter().enumerate() {
+            if let Some(expected) = signature.positional_type(index, positional.len()) {
+                if !self.is_assignable(actual, expected) {
+                    self.error_at_or_node(
+                        node,
+                        site,
+                        format!(
+                            "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
+                        ),
+                    );
+                }
+            }
+        }
+        for (name, parameter) in &signature.keywords {
+            let Some(actual) = keywords.get(name) else {
+                if parameter.required {
+                    self.error_at_or_node(
+                        node,
+                        site,
+                        format!("Missing required keyword argument `{name}` for method `{method}`"),
+                    );
+                }
+                continue;
+            };
+            if !self.is_assignable(actual, &parameter.type_) {
+                self.error_at_or_node(
+                    node,
+                    site,
+                    format!(
+                        "Expected `{}` but found `{actual}` for argument `{name}`",
+                        parameter.type_
+                    ),
+                );
+            }
+        }
+        if !signature.accepts_keyword_rest
+            && keywords
+                .keys()
+                .any(|name| !signature.keywords.contains_key(name))
+        {
+            // Inline record parameters are only materialized for keywords
+            // present in the called method's signature above.
+        }
+        self.substitute_signature_type(
+            &signature.return_type,
+            Some(receiver),
+            &BTreeMap::new(),
+            &signature.type_parameters,
+        )
     }
 }
