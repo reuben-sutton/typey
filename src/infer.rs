@@ -456,20 +456,6 @@ impl<'pr> Visit<'pr> for LocalWriteCollector {
     }
 }
 
-struct SourceNodeIndex<'pr> {
-    nodes: HashMap<(usize, usize), Node<'pr>>,
-}
-
-impl<'pr> Visit<'pr> for SourceNodeIndex<'pr> {
-    fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
-        self.nodes.entry(prism::span(&node)).or_insert(node);
-    }
-
-    fn visit_leaf_node_enter(&mut self, node: Node<'pr>) {
-        self.nodes.entry(prism::span(&node)).or_insert(node);
-    }
-}
-
 /// How much file-mode metadata the checker should use. Typey is intentionally
 /// permissive for untyped Ruby, while explicit annotations remain checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1248,15 +1234,9 @@ pub(crate) fn check_with_policies(
     let parsed = prism::parse(bytes);
     let root = parsed.node();
     let hir_program = hir::lower(hir::FileId(0), bytes);
-    let cfg_index = config.enable_cfg.then(|| {
-        let graphs = hir_program
-            .bodies
-            .iter()
-            .enumerate()
-            .map(|(index, _)| cfg::build(&hir_program, hir::BodyId(index as u32)))
-            .collect::<Vec<_>>();
-        cfg::CfgIndex::from_graphs(&hir_program, &graphs)
-    });
+    let cfg_index = config
+        .enable_cfg
+        .then(|| cfg::CfgIndex::from_program(&hir_program));
     let mut hir_call_ids = HashMap::new();
     let mut hir_assignment_ids = HashMap::new();
     for (index, expression) in hir_program.expressions.iter().enumerate() {
@@ -1298,18 +1278,10 @@ pub(crate) fn check_with_policies(
             annotations.assertions.len()
         );
     }
-    let source_nodes = config.enable_cfg.then(|| {
-        let mut index = SourceNodeIndex {
-            nodes: HashMap::new(),
-        };
-        index.visit(&root);
-        index.nodes
-    });
     let analyzer = Analyzer {
         source: bytes,
         hir_program,
         cfg_index,
-        source_nodes,
         hir_call_ids,
         hir_assignment_ids,
         line_map: prism::LineMap::new(bytes),
@@ -1367,7 +1339,6 @@ struct Analyzer<'src> {
     source: &'src [u8],
     hir_program: hir::Program,
     cfg_index: Option<cfg::CfgIndex>,
-    source_nodes: Option<HashMap<(usize, usize), Node<'src>>>,
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
     line_map: prism::LineMap,
@@ -1651,10 +1622,6 @@ impl<'src> Analyzer<'src> {
             .is_some_and(|index| index.has_call(span) || index.has_write(span))
     }
 
-    fn source_node_for_span(&self, span: (usize, usize)) -> Option<&Node<'src>> {
-        self.source_nodes.as_ref()?.get(&span)
-    }
-
     fn cfg_conditional_for_node(&self, node: &Node<'_>) -> Option<cfg::Conditional> {
         self.cfg_index
             .as_ref()
@@ -1683,7 +1650,6 @@ impl<'src> Analyzer<'src> {
         // machinery can evaluate child expressions until the owned value
         // evaluator lands.
         debug_assert!(self.cfg_call_name_matches(node, &call.name()));
-        debug_assert!(self.source_node_for_span(prism::span(node)).is_some());
         self.eval_call_result(node, &call, environment)
     }
 
@@ -1696,7 +1662,6 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         self.cfg_transfer_assignments = self.cfg_transfer_assignments.saturating_add(1);
-        debug_assert!(self.source_node_for_span(prism::span(node)).is_some());
         self.eval_hir_assignment(node, target, value, operator, environment)
     }
 

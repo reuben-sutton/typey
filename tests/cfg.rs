@@ -1,4 +1,4 @@
-use typey::cfg::{build, ArgumentOperand, OperationKind, Pattern, Terminator};
+use typey::cfg::{build, ArgumentOperand, CfgIndex, OperationKind, Pattern, Terminator};
 use typey::hir::{lower, ExprKind, FileId};
 
 fn cfg(source: &str) -> typey::cfg::Cfg {
@@ -348,4 +348,37 @@ fn every_lowered_hir_expression_has_a_cfg_value_or_is_abrupt() {
                 ExprKind::Return(_) | ExprKind::Break(_) | ExprKind::Next(_)
             ) || graph.expression_values[index].is_some()
         }));
+}
+
+#[test]
+fn streaming_cfg_index_matches_materialized_graphs() {
+    let source = "value = 1\nif value\n  value.to_s\nelse\n  value.inspect\nend\n";
+    let program = lower(FileId(3), source.as_bytes());
+    let graphs = all_cfgs(source);
+    let streaming = CfgIndex::from_program(&program);
+    let materialized = CfgIndex::from_graphs(&program, &graphs);
+    assert_eq!(streaming.body_count(), materialized.body_count());
+    assert_eq!(
+        streaming.unsupported_count(),
+        materialized.unsupported_count()
+    );
+    for graph in &graphs {
+        for block in &graph.blocks {
+            for operation in &block.operations {
+                let span = (operation.span.start as usize, operation.span.end as usize);
+                match operation.kind {
+                    OperationKind::Call { .. } => assert!(streaming.has_call(span)),
+                    OperationKind::Write { .. } => assert!(streaming.has_write(span)),
+                    _ => {}
+                }
+            }
+        }
+        for conditional in &graph.conditionals {
+            let expression = program
+                .expression(conditional.expression)
+                .expect("conditional expression");
+            let span = (expression.span.start as usize, expression.span.end as usize);
+            assert!(streaming.conditional(span).is_some());
+        }
+    }
 }

@@ -18,7 +18,53 @@ use std::collections::HashMap;
 /// Build a CFG for one already-lowered HIR body.
 #[must_use]
 pub fn build(program: &Program, body: BodyId) -> Cfg {
-    Builder::new(program, body).finish()
+    let expressions_by_span = expression_index(program);
+    build_with_index_and_values(program, body, &expressions_by_span, true)
+}
+
+/// Build all body CFGs while sharing the HIR span index between bodies.
+#[must_use]
+pub fn build_all(program: &Program) -> Vec<Cfg> {
+    let expressions_by_span = expression_index(program);
+    program
+        .bodies
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            build_with_index_and_values(program, BodyId(index as u32), &expressions_by_span, true)
+        })
+        .collect()
+}
+
+pub(crate) fn expression_index(program: &Program) -> HashMap<(u32, u32), ExprId> {
+    program
+        .expressions
+        .iter()
+        .enumerate()
+        .map(|(index, expression)| {
+            (
+                (expression.span.start, expression.span.end),
+                ExprId(index as u32),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn build_for_index(
+    program: &Program,
+    body: BodyId,
+    expressions_by_span: &HashMap<(u32, u32), ExprId>,
+) -> Cfg {
+    build_with_index_and_values(program, body, expressions_by_span, false)
+}
+
+fn build_with_index_and_values(
+    program: &Program,
+    body: BodyId,
+    expressions_by_span: &HashMap<(u32, u32), ExprId>,
+    retain_expression_values: bool,
+) -> Cfg {
+    Builder::new(program, body, expressions_by_span, retain_expression_values).finish()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -55,41 +101,40 @@ struct RescueContext {
 
 struct Builder<'program> {
     program: &'program Program,
+    expressions_by_span: &'program HashMap<(u32, u32), ExprId>,
     cfg: Cfg,
     closed: Vec<bool>,
     next_value: u32,
     loops: Vec<LoopContext>,
     rescues: Vec<RescueContext>,
-    expressions_by_span: HashMap<(u32, u32), ExprId>,
+    retain_expression_values: bool,
 }
 
 impl<'program> Builder<'program> {
-    fn new(program: &'program Program, body: BodyId) -> Self {
+    fn new(
+        program: &'program Program,
+        body: BodyId,
+        expressions_by_span: &'program HashMap<(u32, u32), ExprId>,
+        retain_expression_values: bool,
+    ) -> Self {
         Self {
             program,
+            expressions_by_span,
             cfg: Cfg {
                 body,
                 entry: BlockId(0),
                 blocks: Vec::new(),
                 conditionals: Vec::new(),
                 unsupported_spans: Vec::new(),
-                expression_values: vec![None; program.expressions.len()],
+                expression_values: retain_expression_values
+                    .then(|| vec![None; program.expressions.len()])
+                    .unwrap_or_default(),
             },
             closed: Vec::new(),
             next_value: 0,
             loops: Vec::new(),
             rescues: Vec::new(),
-            expressions_by_span: program
-                .expressions
-                .iter()
-                .enumerate()
-                .map(|(index, expression)| {
-                    (
-                        (expression.span.start, expression.span.end),
-                        ExprId(index as u32),
-                    )
-                })
-                .collect(),
+            retain_expression_values,
         }
     }
 
@@ -219,7 +264,9 @@ impl<'program> Builder<'program> {
     }
 
     fn normal(&mut self, expression: ExprId, block: BlockId, value: Option<ValueId>) -> Flow {
-        self.cfg.expression_values[expression.0 as usize] = value;
+        if self.retain_expression_values {
+            self.cfg.expression_values[expression.0 as usize] = value;
+        }
         Flow {
             block,
             value,
@@ -228,7 +275,9 @@ impl<'program> Builder<'program> {
     }
 
     fn abrupt(&mut self, expression: ExprId, block: BlockId) -> Flow {
-        self.cfg.expression_values[expression.0 as usize] = None;
+        if self.retain_expression_values {
+            self.cfg.expression_values[expression.0 as usize] = None;
+        }
         Flow {
             block,
             value: None,

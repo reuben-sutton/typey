@@ -11,7 +11,7 @@ pub mod index;
 pub mod lower;
 
 pub use index::CfgIndex;
-pub use lower::build;
+pub use lower::{build, build_all};
 
 macro_rules! id_type {
     ($name:ident) => {

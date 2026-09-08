@@ -26,6 +26,9 @@ recursive evaluator remains the compatibility baseline.
 * The current work records owned conditional regions and transfers `if`
   branches and joins through those regions while retaining the existing flow
   lattice and source-node child evaluation.
+* The CFG performance pass moved operation indexing out of the analyzer. The
+  index now streams one body graph at a time and does not retain a Prism-node
+  index or per-body expression-value vectors during repository analysis.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -37,7 +40,7 @@ The current gates pass:
 
 * CFG structural tests: 14 passed;
 * HIR lowering tests: 10 passed;
-* checker tests: 328 passed;
+* checker tests: 329 passed;
 * conformance tests: 158 passed;
 * release Spoom: the same three classified diagnostics as the baseline.
 
@@ -45,6 +48,10 @@ CFG-enabled checker regressions cover ordinary calls, local and instance
 writes, attribute setters, loop/rescue fixtures, safe navigation, branches,
 compound assignments, and source identity. The default checker remains at
 baseline performance because CFG construction is not yet enabled by default.
+On the local release benchmark, Spoom took about 1.88s on the legacy path and
+2.55s with `--cfg`; the CFG path produces the same three classified
+diagnostics. The remaining overhead is graph/index construction and the still
+bridged transfer path, not repository discovery.
 
 ## Remaining migration boundary
 

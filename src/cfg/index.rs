@@ -6,7 +6,7 @@
 //! evaluator.
 
 use super::{Cfg, Conditional};
-use crate::hir::Program;
+use crate::hir::{BodyId, Program};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, Default)]
@@ -21,42 +21,60 @@ pub struct CfgIndex {
 
 impl CfgIndex {
     #[must_use]
+    pub fn from_program(program: &Program) -> Self {
+        let expressions_by_span = super::lower::expression_index(program);
+        let mut index = Self {
+            body_count: program.bodies.len(),
+            ..Self::default()
+        };
+        for (body, _) in program.bodies.iter().enumerate() {
+            let graph =
+                super::lower::build_for_index(program, BodyId(body as u32), &expressions_by_span);
+            index.add_graph(program, &graph);
+        }
+        index
+    }
+
+    #[must_use]
     pub fn from_graphs(program: &Program, graphs: &[Cfg]) -> Self {
         let mut index = Self {
             body_count: graphs.len(),
             ..Self::default()
         };
         for graph in graphs {
-            index.unsupported_count += graph.unsupported_spans.len();
-            for conditional in &graph.conditionals {
-                if let Some(expression) = program.expression(conditional.expression) {
-                    index.conditionals.insert(
-                        (expression.span.start as usize, expression.span.end as usize),
-                        conditional.clone(),
-                    );
-                }
+            index.add_graph(program, graph);
+        }
+        index
+    }
+
+    fn add_graph(&mut self, program: &Program, graph: &Cfg) {
+        self.unsupported_count += graph.unsupported_spans.len();
+        for conditional in &graph.conditionals {
+            if let Some(expression) = program.expression(conditional.expression) {
+                self.conditionals.insert(
+                    (expression.span.start as usize, expression.span.end as usize),
+                    conditional.clone(),
+                );
             }
-            for block in &graph.blocks {
-                for operation in &block.operations {
-                    let span = (operation.span.start as usize, operation.span.end as usize);
-                    match &operation.kind {
-                        super::OperationKind::Call { name, .. } => {
-                            index.call_spans.insert(span);
-                            index
-                                .call_names
-                                .entry(span)
-                                .or_default()
-                                .push(name.as_str().to_owned());
-                        }
-                        super::OperationKind::Write { .. } => {
-                            index.write_spans.insert(span);
-                        }
-                        _ => {}
+        }
+        for block in &graph.blocks {
+            for operation in &block.operations {
+                let span = (operation.span.start as usize, operation.span.end as usize);
+                match &operation.kind {
+                    super::OperationKind::Call { name, .. } => {
+                        self.call_spans.insert(span);
+                        self.call_names
+                            .entry(span)
+                            .or_default()
+                            .push(name.as_str().to_owned());
                     }
+                    super::OperationKind::Write { .. } => {
+                        self.write_spans.insert(span);
+                    }
+                    _ => {}
                 }
             }
         }
-        index
     }
 
     #[must_use]
