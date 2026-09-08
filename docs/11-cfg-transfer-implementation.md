@@ -70,6 +70,9 @@ not depend on `Type`, `Environment`, diagnostics, or method summaries.
   call host reconstructs keyword groups from owned names/value IDs and records
   their source key/hash nodes; keyword splats, forwarding, and blocks remain
   recursive.
+* `1b91c1a` made body graphs immutable per-check inputs. The analyzer lowers
+  each index-compatible body once and reuses that graph across all inference
+  passes, while the generic worklist continues to own scheduling and joins.
 
 ## Next boundary
 
@@ -88,3 +91,8 @@ The current call adapter is also an explicit bridge: it uses CFG-owned value
 IDs for evaluation order and types, but still obtains Prism call nodes for
 source recording and the existing dispatch helpers. That bridge should shrink
 as call argument metadata and dispatch inputs become owned HIR data.
+
+The graph cache has no observable cost on the Spoom regression: three
+sequential release runs measured 1.71–1.76s with CFG transfer and 1.67–1.75s
+on the recursive path, with identical diagnostics. It removes repeated body
+lowering without changing the current opt-in boundary.

@@ -63,6 +63,10 @@ recursive evaluator remains the compatibility baseline.
   their postcondition facts are represented in transfer state.
 * `7b61018` extended complete-body calls to fixed keyword arguments while
   retaining keyword splats, forwarding, and blocks as explicit fallbacks.
+* `1b91c1a` caches the index-compatible body graphs for the lifetime of one
+  analyzer. CFG lowering is no longer repeated for each seed, fixpoint, or
+  final method visit; the immutable graphs are shared by the CFG index and
+  the transfer host.
 
 The CFG builder has no dependency on `Type`, `Environment`, diagnostics, or
 Rails models. Unsupported HIR remains an explicit operation; it is not turned
@@ -75,15 +79,15 @@ The current gates pass:
 * CFG structural tests: 15 passed;
 * HIR lowering tests: 10 passed;
 * checker tests: 331 passed;
-* conformance tests: 158 passed;
+* conformance tests: 160 passed;
 * release Spoom: the same three classified diagnostics as the baseline.
 
 CFG-enabled checker regressions cover ordinary calls, local and instance
 writes, attribute setters, loop/rescue fixtures, safe navigation, branches,
 compound assignments, source identity, and a complete straight-line method
 body. The default checker remains at baseline performance because CFG
-construction is not yet enabled by default. In three matched local release
-runs, Spoom took 1.71–1.73s with `--cfg` and 1.67–1.75s on the legacy path;
+construction is not yet enabled by default. In three sequential local release
+runs, Spoom took 1.71–1.76s with `--cfg` and 1.67–1.75s on the legacy path;
 both paths produced the same three classified diagnostics. The CFG body host
 transferred 603 methods and 59,187 calls, with 157 legacy body fallbacks. An
 initial slower result was traced to rebuilding the program-wide HIR expression
