@@ -353,4 +353,24 @@ impl<'src> Analyzer<'src> {
         }
         None
     }
+
+    pub(super) fn has_cfg_assignment_operation(&self, node: &Node<'_>) -> bool {
+        let span = prism::span(node);
+        self.cfg_index
+            .as_ref()
+            .is_some_and(|index| index.has_call(span) || index.has_write(span))
+    }
+
+    pub(super) fn record_cfg_fallback(
+        &mut self,
+        node: &Node<'_>,
+        kind: &str,
+        fallback: CfgFallbackKind,
+    ) {
+        self.record_cfg_fallback_at(
+            SourceSite::from_prism_span(prism::span(node)),
+            kind,
+            fallback,
+        );
+    }
 }
