@@ -156,10 +156,15 @@ The first modularization steps are now in place:
 * ordinary inline callback blocks now transfer from owned closure parameters,
   bodies, captured locals, bound receivers, and generic return contracts;
   `define_method` remains an explicit future-method bridge.
+* parser-backed conditional, `while`/`until`, and `for` CFG entry points now
+  live in `infer/cfg_transfer/legacy.rs`; the owned transfer module retains
+  their reusable synthetic state machines without owning their Prism-node
+  dispatch.
 
 The remaining bridges are deliberate and measurable: the legacy call adapter
 still needs parser nodes for exact argument diagnostics and builtin hooks; the
-specialized conditional/loop helpers still consume parser nodes; and
+specialized conditional/loop helpers still consume parser nodes through the
+dedicated legacy adapter; and
 `define_method`/`define_singleton_method` still require future-method binding
 semantics. Removing those requires moving their diagnostic and block contracts
 to owned source sites rather than weakening the checker. CFG fallback telemetry now
