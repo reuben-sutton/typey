@@ -170,16 +170,17 @@ fn expr_can_transfer(
             operator,
             ..
         } => {
-            matches!(operator, hir::AssignOperator::Set)
-                && matches!(
-                    target,
-                    hir::AssignTarget::Local(_)
-                        | hir::AssignTarget::InstanceVariable(_)
-                        | hir::AssignTarget::ClassVariable(_)
-                        | hir::AssignTarget::Global(_)
-                        | hir::AssignTarget::Constant(_)
-                )
-                && expr_can_transfer(program, *value, visiting)
+            matches!(
+                operator,
+                hir::AssignOperator::Set | hir::AssignOperator::Binary(_)
+            ) && matches!(
+                target,
+                hir::AssignTarget::Local(_)
+                    | hir::AssignTarget::InstanceVariable(_)
+                    | hir::AssignTarget::ClassVariable(_)
+                    | hir::AssignTarget::Global(_)
+                    | hir::AssignTarget::Constant(_)
+            ) && expr_can_transfer(program, *value, visiting)
         }
         ExprKind::Sequence(expressions) => expressions
             .iter()

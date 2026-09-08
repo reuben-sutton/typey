@@ -10,6 +10,12 @@ class CfgBodyTransfer
     mapping = {"value" => values.first}
     [values, mapping]
   end
+
+  def increment
+    value = 1
+    value += 2
+    value
+  end
 end
 
 CfgBodyTransfer.new.value
