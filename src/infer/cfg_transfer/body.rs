@@ -5,7 +5,7 @@ use super::super::{
     Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput, SourceSite,
 };
 use super::cfg_global_refinement_key;
-use super::patterns::{case_pattern_is_type_test, narrow_pattern_value, pattern_source_place};
+use super::patterns::{narrow_pattern_value, pattern_source_place};
 use super::preflight;
 use crate::cfg;
 use crate::hir::{self, Read};
@@ -98,88 +98,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             false,
         )?;
         Some(Type::Proc(signature.params, Box::new(body_result.type_)))
-    }
-
-    fn pattern_reachability(
-        &self,
-        pattern: &cfg::Pattern,
-        source: &Type,
-        state: &BlockState,
-    ) -> Option<(bool, bool, Type)> {
-        let (truthy, falsy) = match pattern {
-            cfg::Pattern::Truthy | cfg::Pattern::LogicalAnd | cfg::Pattern::LogicalOr => (
-                !source.truthy_part().is_never(),
-                !source.falsy_part().is_never(),
-            ),
-            cfg::Pattern::Nil => (
-                !source.meet(&Type::Nil).is_never(),
-                !source.without(&Type::Nil).is_never(),
-            ),
-            cfg::Pattern::Iteration => (true, true),
-            cfg::Pattern::Case {
-                condition: condition_id,
-                expression,
-            } => {
-                let condition = state.value(*condition_id).unwrap_or(Type::Any);
-                let is_type_test =
-                    case_pattern_is_type_test(self.analyzer, *expression, &condition);
-                let expected = Analyzer::class_object_value_type(&condition).unwrap_or(condition);
-                self.case_match_reachability(source, &expected, is_type_test)
-            }
-        };
-        let test_type = match (truthy, falsy) {
-            (true, true) => Type::union([Type::True, Type::False]),
-            (true, false) => Type::True,
-            (false, true) => Type::False,
-            (false, false) => Type::Never,
-        };
-        Some((truthy, falsy, test_type))
-    }
-
-    fn case_match_reachability(
-        &self,
-        source: &Type,
-        expected: &Type,
-        is_type_test: bool,
-    ) -> (bool, bool) {
-        if source.is_any() || expected.is_any() {
-            return (true, true);
-        }
-        if let Type::Union(members) = source {
-            return members
-                .iter()
-                .fold((false, false), |(truthy, falsy), member| {
-                    let (member_truthy, member_falsy) =
-                        self.case_match_reachability(member, expected, is_type_test);
-                    (truthy || member_truthy, falsy || member_falsy)
-                });
-        }
-        if !is_type_test {
-            return (
-                !self
-                    .analyzer
-                    .definitely_disjoint_class_types(source, expected),
-                true,
-            );
-        }
-        if self.analyzer.is_assignable(source, expected) {
-            (true, false)
-        } else if self.analyzer.is_assignable(expected, source)
-            || !self
-                .analyzer
-                .definitely_disjoint_class_types(source, expected)
-        {
-            (true, true)
-        } else {
-            (false, true)
-        }
-    }
-
-    fn truthiness_reachability(source: &Type) -> (bool, bool) {
-        (
-            !source.truthy_part().is_never(),
-            !source.falsy_part().is_never(),
-        )
     }
 
     fn suppress_internal_call_record(&self, operation: &cfg::Operation) -> bool {
@@ -276,13 +194,13 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             .map(|expression| &expression.kind)
         {
             let Some(name) = self.analyzer.program.hir_program.local_name(*local) else {
-                return Self::truthiness_reachability(source);
+                return super::patterns::truthiness_reachability(source);
             };
             if state.environment.is_inferred(name.as_str()) {
                 return (true, true);
             }
         }
-        Self::truthiness_reachability(source)
+        super::patterns::truthiness_reachability(source)
     }
 
     fn return_is_non_local(&self) -> bool {
@@ -705,9 +623,13 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     let source = next
                         .value(*value)
                         .ok_or_else(|| format!("missing pattern operand {:?}", value))?;
-                    let (_, _, type_) = self
-                        .pattern_reachability(pattern, &source, &next)
-                        .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
+                    let (_, _, type_) = super::patterns::pattern_reachability(
+                        self.analyzer,
+                        pattern,
+                        &source,
+                        &next,
+                    )
+                    .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
                     type_
                 }
                 cfg::OperationKind::MakeClosure { closure } => {
@@ -824,9 +746,13 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     .value(source_id.unwrap_or(*condition))
                     .ok_or_else(|| format!("missing branch operand {:?}", condition))?;
                 let (truthy_reachable, falsy_reachable) = if let Some(pattern) = pattern {
-                    let (truthy, falsy, _) = self
-                        .pattern_reachability(pattern, &source, &next)
-                        .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
+                    let (truthy, falsy, _) = super::patterns::pattern_reachability(
+                        self.analyzer,
+                        pattern,
+                        &source,
+                        &next,
+                    )
+                    .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
                     if matches!(pattern, cfg::Pattern::LogicalOr)
                         && matches!(
                             source_place,

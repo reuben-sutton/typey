@@ -116,3 +116,80 @@ pub(super) fn case_pattern_is_type_test(
         _ => false,
     }
 }
+
+pub(super) fn pattern_reachability(
+    analyzer: &Analyzer<'_>,
+    pattern: &cfg::Pattern,
+    source: &Type,
+    state: &BlockState,
+) -> Option<(bool, bool, Type)> {
+    let (truthy, falsy) = match pattern {
+        cfg::Pattern::Truthy | cfg::Pattern::LogicalAnd | cfg::Pattern::LogicalOr => (
+            !source.truthy_part().is_never(),
+            !source.falsy_part().is_never(),
+        ),
+        cfg::Pattern::Nil => (
+            !source.meet(&Type::Nil).is_never(),
+            !source.without(&Type::Nil).is_never(),
+        ),
+        cfg::Pattern::Iteration => (true, true),
+        cfg::Pattern::Case {
+            condition: condition_id,
+            expression,
+        } => {
+            let condition = state.value(*condition_id).unwrap_or(Type::Any);
+            let is_type_test = case_pattern_is_type_test(analyzer, *expression, &condition);
+            let expected = Analyzer::class_object_value_type(&condition).unwrap_or(condition);
+            case_match_reachability(analyzer, source, &expected, is_type_test)
+        }
+    };
+    let test_type = match (truthy, falsy) {
+        (true, true) => Type::union([Type::True, Type::False]),
+        (true, false) => Type::True,
+        (false, true) => Type::False,
+        (false, false) => Type::Never,
+    };
+    Some((truthy, falsy, test_type))
+}
+
+fn case_match_reachability(
+    analyzer: &Analyzer<'_>,
+    source: &Type,
+    expected: &Type,
+    is_type_test: bool,
+) -> (bool, bool) {
+    if source.is_any() || expected.is_any() {
+        return (true, true);
+    }
+    if let Type::Union(members) = source {
+        return members
+            .iter()
+            .fold((false, false), |(truthy, falsy), member| {
+                let (member_truthy, member_falsy) =
+                    case_match_reachability(analyzer, member, expected, is_type_test);
+                (truthy || member_truthy, falsy || member_falsy)
+            });
+    }
+    if !is_type_test {
+        return (
+            !analyzer.definitely_disjoint_class_types(source, expected),
+            true,
+        );
+    }
+    if analyzer.is_assignable(source, expected) {
+        (true, false)
+    } else if analyzer.is_assignable(expected, source)
+        || !analyzer.definitely_disjoint_class_types(source, expected)
+    {
+        (true, true)
+    } else {
+        (false, true)
+    }
+}
+
+pub(super) fn truthiness_reachability(source: &Type) -> (bool, bool) {
+    (
+        !source.truthy_part().is_never(),
+        !source.falsy_part().is_never(),
+    )
+}
