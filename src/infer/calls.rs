@@ -1042,6 +1042,22 @@ impl<'src> Analyzer<'src> {
                     .into_iter()
                     .filter_map(|instance| Self::named_type_name(&instance))
                     .collect::<Vec<_>>();
+                // Constants assigned from `Struct.new` are represented by
+                // their instance type (`Context`) rather than `Class[Context]`.
+                // Treat that nominal receiver as the constructed owner while
+                // retaining the class-object path for ordinary constants.
+                let owners = if owners.is_empty()
+                    && !matches!(
+                        &receiver_type,
+                        Type::Named(name, _)
+                            if name_matches(name, "Class") || name_matches(name, "Module")
+                    ) {
+                    Self::named_type_name(&receiver_type)
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                } else {
+                    owners
+                };
                 let mut constructed = Type::Never;
                 for owner in owners {
                     let candidate_receiver = Self::class_object_type(&owner);
