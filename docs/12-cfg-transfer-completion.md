@@ -84,6 +84,9 @@ The first modularization steps are now in place:
   and inline-assertion lookup for CFG paths;
 * `infer/environment.rs` owns the parser-independent abstract environment,
   including local provenance, refinements, self context, and path joins;
+* `infer/exceptions.rs` owns the Prism compatibility implementation for
+  `begin`/`rescue`/`ensure` and rescue modifiers, keeping legacy unwind
+  semantics separate from the analyzer coordinator and owned CFG transfer;
 * `infer/cfg_state.rs` owns CFG block state, body context, value joins, and
   pending exception state, leaving `infer/cfg_transfer.rs` focused on operation
   and terminator semantics;
