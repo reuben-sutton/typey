@@ -208,6 +208,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             }
         };
         let has_block = input.block.is_some();
+        let mut block_result = None;
         let (type_, untyped_origin) = if input.name.as_str() == "!" {
             // Unary negation is Ruby's boolean protocol, not a normal method
             // lookup. In particular, it must work for nilable block locals
@@ -223,7 +224,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 .observe_call(&key, &call_arguments, has_block)
                 .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
             {
-                let block_return_type = analyzer.cfg_block_return_type(
+                let callback_result = analyzer.cfg_block_return_type(
                     &input,
                     None,
                     &key,
@@ -233,6 +234,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     values,
                     environment,
                 );
+                let block_return_type = callback_result.as_ref().map(Analyzer::block_value_type);
                 let type_ = analyzer.invoke_signature_at(
                     input.site,
                     input.name.as_str(),
@@ -241,6 +243,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     Some(&receiver_type),
                     block_return_type.as_ref(),
                 );
+                block_result = callback_result;
                 let origin = analyzer
                     .resolve_method_key(&key)
                     .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
@@ -258,7 +261,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 .observe_call(&key, &call_arguments, has_block)
                 .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
             {
-                let block_return_type = analyzer.cfg_block_return_type(
+                let callback_result = analyzer.cfg_block_return_type(
                     &input,
                     None,
                     &key,
@@ -268,6 +271,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     values,
                     environment,
                 );
+                let block_return_type = callback_result.as_ref().map(Analyzer::block_value_type);
                 let type_ = analyzer.invoke_signature_at(
                     input.site,
                     input.name.as_str(),
@@ -276,6 +280,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     Some(&receiver_type),
                     block_return_type.as_ref(),
                 );
+                block_result = callback_result;
                 let origin = analyzer
                     .resolve_method_key(&key)
                     .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
@@ -332,7 +337,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                         .observe_call(&key, &call_arguments, has_block)
                         .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
                     {
-                        let block_return_type = analyzer.cfg_block_return_type(
+                        let callback_result = analyzer.cfg_block_return_type(
                             &input,
                             None,
                             &key,
@@ -342,6 +347,8 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                             values,
                             environment,
                         );
+                        let block_return_type =
+                            callback_result.as_ref().map(Analyzer::block_value_type);
                         let type_ = analyzer.invoke_signature_at(
                             input.site,
                             input.name.as_str(),
@@ -350,6 +357,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                             Some(&dispatch_receiver),
                             block_return_type.as_ref(),
                         );
+                        block_result = callback_result;
                         let type_ = if input.name.as_str() == "new"
                             && Analyzer::class_object_instance_type(&dispatch_receiver).is_some()
                         {
@@ -377,21 +385,36 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         } else {
             type_
         };
-        analyzer.remember_untyped_origin_at(input.site, &type_, untyped_origin);
-        let mut result = if type_.is_never() {
-            Eval::raised(type_)
-        } else {
-            Eval::value(type_)
-        };
-        let type_ = analyzer.apply_inline_assertion_in_environment_at(
-            input.site,
-            result.type_.clone(),
-            environment,
+        let call_can_return = !type_.is_never();
+        let has_normal_path = call_can_return
+            && block_result
+                .as_ref()
+                .is_none_or(|result| result.normal_type.is_some());
+        let callback_outcomes = block_result
+            .as_ref()
+            .map_or_else(OutcomeTypes::default, Eval::callback_outcomes);
+        let normal_type = has_normal_path.then_some(type_.clone());
+        let mut result = Eval::from_parts(
+            normal_type,
+            callback_outcomes,
+            if has_normal_path {
+                Flow::normal()
+            } else if !call_can_return {
+                Flow::abrupt(FlowKind::Raise)
+            } else {
+                Flow::empty()
+            },
         );
-        if result.normal_type.is_some() {
-            result.normal_type = Some(type_.clone());
+        result.flow = result.flow.union(result.abrupt.flow());
+        if let Some(normal_type) = result.normal_type.take() {
+            let normal_type = analyzer.apply_inline_assertion_in_environment_at(
+                input.site,
+                normal_type,
+                environment,
+            );
+            result = Eval::from_parts(Some(normal_type), result.abrupt, result.flow);
         }
-        result.type_ = type_;
+        analyzer.remember_untyped_origin_at(input.site, &result.type_, untyped_origin);
         Some(result)
     }
 
@@ -696,6 +719,27 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         }
         Self::truthiness_reachability(source)
     }
+
+    fn return_is_non_local(&self) -> bool {
+        matches!(self.context.closure_kind, Some(hir::ClosureKind::Block))
+    }
+
+    fn finish_outcome(&mut self, kind: FlowKind, type_: Type, environment: Environment) {
+        if kind == FlowKind::Return && !self.return_is_non_local() {
+            self.normal_type = if self.normal_type.is_never() {
+                type_
+            } else {
+                self.normal_type.join(&type_)
+            };
+            self.final_environment = Some(match self.final_environment.take() {
+                Some(current) => current.join(&environment),
+                None => environment,
+            });
+            return;
+        }
+        self.abrupt = self.abrupt.join(&OutcomeTypes::for_kind(kind, type_));
+        self.terminal_flow = self.terminal_flow.union(Flow::abrupt(kind));
+    }
 }
 
 impl<'src> Analyzer<'src> {
@@ -841,6 +885,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::BuildArray { .. }
                         | cfg::OperationKind::BuildHash { .. }
                         | cfg::OperationKind::Record { .. }
+                        | cfg::OperationKind::SetOutcome { .. }
                         | cfg::OperationKind::PatternTest { .. }
                         | cfg::OperationKind::BindForTarget { .. }
                 )
@@ -855,15 +900,24 @@ impl<'src> Analyzer<'src> {
         }
 
         let body = self.hir_program.body(body_id)?;
+        let closure_kind = match &body.owner {
+            hir::BodyOwner::Closure(closure) => self
+                .hir_program
+                .closure(*closure)
+                .map(|closure| closure.kind),
+            _ => None,
+        };
         let context = BodyContext {
             body: body_id,
             method: environment.method_key.clone(),
             self_type: environment.self_type.clone(),
             parameters: body.parameters.clone(),
             strictness: self.strictness_at(body.span.start as usize),
+            closure_kind,
         };
         let mut initial_environment = environment.clone();
         self.seed_cfg_global_state(&graph, &mut initial_environment);
+        let fallback_environment = initial_environment.clone();
         let initial = BlockState::with_values(initial_environment, Vec::new(), Flow::normal());
         let mut transfer = BodyTransfer {
             analyzer: self,
@@ -896,18 +950,23 @@ impl<'src> Analyzer<'src> {
         let normal_type = transfer.normal_type.clone();
         let abrupt = transfer.abrupt.clone();
         let terminal_flow = transfer.terminal_flow;
-        let mut final_environment = transfer.final_environment.clone()?;
+        let mut final_environment = transfer
+            .final_environment
+            .clone()
+            .unwrap_or(fallback_environment);
         drop(worklist);
         drop(transfer);
         self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);
         self.commit_cfg_global_state(&graph, &final_environment);
         Self::clear_cfg_global_state(&graph, &mut final_environment);
         *environment = final_environment;
-        let mut result = Eval::from_parts(
-            Some(normal_type),
-            abrupt,
-            Flow::normal().union(terminal_flow),
-        );
+        let normal_type = (!normal_type.is_never()).then_some(normal_type);
+        let flow = if normal_type.is_some() {
+            Flow::normal().union(terminal_flow)
+        } else {
+            terminal_flow
+        };
+        let mut result = Eval::from_parts(normal_type, abrupt, flow);
         if record_result {
             result.type_ = self.record_at(body_site, result.type_.clone(), false, None);
         }
@@ -999,6 +1058,11 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                                 self.terminal_flow.union(Flow::abrupt(FlowKind::Raise));
                         }
                     }
+                    let non_raise = result.abrupt.without(FlowKind::Raise);
+                    if !non_raise.all().is_never() {
+                        self.abrupt = self.abrupt.join(&non_raise);
+                        self.terminal_flow = self.terminal_flow.union(non_raise.flow());
+                    }
                     if !result.flow.contains(FlowKind::Normal) {
                         self.analyzer.record_at(
                             site,
@@ -1039,6 +1103,19 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     self.analyzer.record_at(site, type_.clone(), false, None);
                     type_
                 }
+                cfg::OperationKind::SetOutcome { kind, value } => {
+                    let type_ = next
+                        .value(*value)
+                        .ok_or_else(|| format!("missing outcome operand {:?}", value))?;
+                    let kind = match kind {
+                        cfg::OutcomeKind::Return => FlowKind::Return,
+                        cfg::OutcomeKind::Break => FlowKind::Break,
+                        cfg::OutcomeKind::Next => FlowKind::Next,
+                        cfg::OutcomeKind::Retry => FlowKind::Retry,
+                    };
+                    next.set_pending_outcome(kind, type_.clone());
+                    type_
+                }
                 cfg::OperationKind::PatternTest { value, pattern } => {
                     let source = next
                         .value(*value)
@@ -1063,6 +1140,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     operation.kind,
                     cfg::OperationKind::PatternTest { .. }
                         | cfg::OperationKind::Record { .. }
+                        | cfg::OperationKind::SetOutcome { .. }
                         | cfg::OperationKind::BindForTarget { .. }
                 )
             {
@@ -1096,16 +1174,20 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 let return_type = value
                     .and_then(|value| next.value(value))
                     .unwrap_or(Type::Nil);
-                self.normal_type = if self.normal_type.is_never() {
-                    return_type
+                if self.return_is_non_local() {
+                    self.finish_outcome(FlowKind::Return, return_type, next.environment);
                 } else {
-                    self.normal_type.join(&return_type)
-                };
-                self.final_environment = Some(match self.final_environment.take() {
-                    Some(environment) => environment.join(&next.environment),
-                    None => next.environment,
-                });
-                self.terminal_flow = self.terminal_flow.union(next.flow);
+                    self.normal_type = if self.normal_type.is_never() {
+                        return_type
+                    } else {
+                        self.normal_type.join(&return_type)
+                    };
+                    self.final_environment = Some(match self.final_environment.take() {
+                        Some(environment) => environment.join(&next.environment),
+                        None => next.environment,
+                    });
+                    self.terminal_flow = self.terminal_flow.union(next.flow);
+                }
                 Ok(Vec::new())
             }
             cfg::Terminator::Unreachable => Ok(Vec::new()),
@@ -1214,12 +1296,16 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 expression,
                 target,
                 arguments,
+                pending_target,
             } => {
                 let target_block = graph
                     .block(*target)
                     .ok_or_else(|| format!("missing ensure target {:?}", target))?;
                 let mut edges = Vec::new();
-                if next.flow.contains(FlowKind::Normal) {
+                if next.flow.contains(FlowKind::Normal)
+                    && next.pending_exception.is_none()
+                    && next.pending_outcomes.all().is_never()
+                {
                     let mut normal = next.clone();
                     normal.pending_exception = None;
                     normal.flow = normal.flow.without(FlowKind::Raise);
@@ -1241,6 +1327,31 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         }
                     }
                     edges.push(edge(*target, normal));
+                }
+                if !next.pending_outcomes.all().is_never() {
+                    for (kind, type_) in [
+                        (FlowKind::Return, next.pending_outcomes.return_type.clone()),
+                        (FlowKind::Break, next.pending_outcomes.break_type.clone()),
+                        (FlowKind::Next, next.pending_outcomes.next_type.clone()),
+                        (FlowKind::Retry, next.pending_outcomes.retry_type.clone()),
+                    ] {
+                        if type_.is_never() {
+                            continue;
+                        }
+                        if let Some(pending_target) = pending_target {
+                            let target_block = graph.block(*pending_target).ok_or_else(|| {
+                                format!("missing pending ensure target {:?}", pending_target)
+                            })?;
+                            let mut pending = next.clone();
+                            if let Some(parameter) = target_block.parameters.first() {
+                                pending.set_value(parameter.value, type_);
+                            }
+                            pending.flow = Flow::normal();
+                            edges.push(edge(*pending_target, pending));
+                        } else {
+                            self.finish_outcome(kind, type_, next.environment.clone());
+                        }
+                    }
                 }
                 if next.flow.contains(FlowKind::Raise) {
                     if let Some(exception) = next.pending_exception.clone() {

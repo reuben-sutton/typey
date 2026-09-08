@@ -242,6 +242,23 @@ impl Eval {
             (None, true) => Type::Never,
         }
     }
+
+    pub(super) fn callback_outcomes(&self) -> OutcomeTypes {
+        OutcomeTypes {
+            return_type: self.abrupt.return_type.clone(),
+            raise_type: self.abrupt.raise_type.clone(),
+            break_type: Type::Never,
+            next_type: Type::Never,
+            retry_type: self.abrupt.retry_type.clone(),
+        }
+    }
+
+    pub(super) fn callback_has_normal_path(&self) -> bool {
+        self.normal_type.is_some()
+            || (self.abrupt.return_type.is_never()
+                && self.abrupt.raise_type.is_never()
+                && self.abrupt.retry_type.is_never())
+    }
 }
 
 #[cfg(test)]

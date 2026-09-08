@@ -7,27 +7,26 @@
 use crate::hir::{self, ArrayElement, ExprKind, HashElement};
 use std::collections::HashSet;
 
-pub(super) fn body_can_transfer(program: &hir::Program, body: hir::BodyId) -> bool {
-    let Some(body) = program.body(body) else {
+pub(super) fn body_can_transfer(program: &hir::Program, body_id: hir::BodyId) -> bool {
+    let Some(body) = program.body(body_id) else {
         return false;
     };
     let mut visiting = HashSet::new();
-    expr_can_transfer(
+    let result = expr_can_transfer(
         program,
         body.root,
         &mut visiting,
         0,
-        body_allows_local_return(program, body),
-    )
+        body_allows_return(program, body),
+    );
+    result
 }
 
-fn body_allows_local_return(program: &hir::Program, body: &hir::Body) -> bool {
+fn body_allows_return(program: &hir::Program, body: &hir::Body) -> bool {
     match &body.owner {
         hir::BodyOwner::Method { .. } => true,
         hir::BodyOwner::TopLevel => false,
-        hir::BodyOwner::Closure(closure_id) => program
-            .closure(*closure_id)
-            .is_some_and(|closure| closure.kind == hir::ClosureKind::Lambda),
+        hir::BodyOwner::Closure(closure_id) => program.closure(*closure_id).is_some(),
         hir::BodyOwner::Class(_) | hir::BodyOwner::Module(_) | hir::BodyOwner::SingletonClass => {
             false
         }

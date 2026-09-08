@@ -1,4 +1,4 @@
-use super::{Environment, Flow, FlowKind, MethodKey, Strictness};
+use super::{Environment, Flow, FlowKind, MethodKey, OutcomeTypes, Strictness};
 use crate::cfg;
 use crate::hir;
 use crate::types::Type;
@@ -17,6 +17,10 @@ pub(super) struct BlockState {
     /// rescue handler consumes this fact on its matching branch; an
     /// unmatched branch keeps it until the next handler or outer unwind.
     pub(super) pending_exception: Option<Type>,
+    /// Non-local outcomes are carried through ensure bodies while the CFG
+    /// remains on its normal edge. The ensure terminator consumes or routes
+    /// these outcomes after the body has executed.
+    pub(super) pending_outcomes: OutcomeTypes,
 }
 
 impl BlockState {
@@ -30,6 +34,7 @@ impl BlockState {
             environment,
             flow,
             pending_exception: None,
+            pending_outcomes: OutcomeTypes::default(),
         }
     }
 
@@ -55,11 +60,13 @@ impl BlockState {
             (Some(exception), None) | (None, Some(exception)) => Some(exception.clone()),
             (None, None) => None,
         };
+        let pending_outcomes = self.pending_outcomes.join(&other.pending_outcomes);
         Self {
             values,
             environment,
             flow: self.flow.union(other.flow),
             pending_exception,
+            pending_outcomes,
         }
     }
 
@@ -77,7 +84,13 @@ impl BlockState {
 
     pub(super) fn route_exception(&mut self, exception: Type) {
         self.pending_exception = Some(exception);
+        self.pending_outcomes = OutcomeTypes::default();
         self.flow = Flow::abrupt(FlowKind::Raise);
+    }
+
+    pub(super) fn set_pending_outcome(&mut self, kind: FlowKind, type_: Type) {
+        self.pending_outcomes = OutcomeTypes::default();
+        self.pending_outcomes.set(kind, type_);
     }
 
     pub(super) fn handle_exception(&mut self) {
@@ -96,4 +109,5 @@ pub(super) struct BodyContext {
     pub(super) self_type: Type,
     pub(super) parameters: hir::Parameters,
     pub(super) strictness: Strictness,
+    pub(super) closure_kind: Option<hir::ClosureKind>,
 }

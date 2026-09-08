@@ -472,7 +472,7 @@ impl<'src> Analyzer<'src> {
                     .resolve_method_key(&key)
                     .and_then(|resolved| self.declarations.methods.get(&resolved))
                     .is_some_and(|state| state.explicit);
-                let block_return_type = self.observe_block_call(
+                let block_result = self.observe_block_call_eval(
                     &key,
                     block.as_ref(),
                     &signature,
@@ -480,6 +480,13 @@ impl<'src> Analyzer<'src> {
                     Some(&receiver_type),
                     environment,
                 );
+                if let Some(block_result) = block_result.as_ref() {
+                    let callback_outcomes = block_result.callback_outcomes();
+                    abrupt = abrupt.join(&callback_outcomes);
+                    abrupt_flow = abrupt_flow.union(callback_outcomes.flow());
+                    all_normal &= block_result.callback_has_normal_path();
+                }
+                let block_return_type = block_result.as_ref().map(Self::block_value_type);
                 let type_ = self.invoke_signature(
                     node,
                     &name,
@@ -868,7 +875,7 @@ impl<'src> Analyzer<'src> {
                             .resolve_method_key(&key)
                             .and_then(|resolved| self.declarations.methods.get(&resolved))
                             .is_some_and(|state| state.explicit);
-                        let block_return_type = self.observe_block_call(
+                        let block_result = self.observe_block_call_eval(
                             &key,
                             block.as_ref(),
                             &signature,
@@ -876,6 +883,13 @@ impl<'src> Analyzer<'src> {
                             Some(&dispatch_receiver_type),
                             environment,
                         );
+                        if let Some(block_result) = block_result.as_ref() {
+                            let callback_outcomes = block_result.callback_outcomes();
+                            abrupt = abrupt.join(&callback_outcomes);
+                            abrupt_flow = abrupt_flow.union(callback_outcomes.flow());
+                            all_normal &= block_result.callback_has_normal_path();
+                        }
+                        let block_return_type = block_result.as_ref().map(Self::block_value_type);
                         let type_ = if let Some(type_) = self.eval_node_helpers_method(
                             &dispatch_receiver_type,
                             &name,

@@ -4,7 +4,9 @@
 //! owned shapes here are the stable semantic vocabulary consumed by CFG
 //! transfer.
 
-use super::{optional_proc_type, proc_parts, Analyzer, Flow, MethodKey, OutcomeTypes, SourceSite};
+use super::{
+    optional_proc_type, proc_parts, Analyzer, Eval, Flow, MethodKey, OutcomeTypes, SourceSite,
+};
 use crate::cfg;
 use crate::hir;
 use crate::prism;
@@ -378,7 +380,7 @@ impl<'src> Analyzer<'src> {
         receiver_type: &Type,
         values: &[Option<Type>],
         environment: &mut super::Environment,
-    ) -> Option<Type> {
+    ) -> Option<Eval> {
         match input.block.as_ref()? {
             cfg::BlockOperand::Inline(closure) => {
                 if block_node.is_some() {
@@ -390,6 +392,7 @@ impl<'src> Analyzer<'src> {
                         Some(receiver_type),
                         environment,
                     )
+                    .map(Eval::value)
                 } else {
                     self.cfg_inline_block_return_type(
                         input,
@@ -407,13 +410,13 @@ impl<'src> Analyzer<'src> {
                 if let (Some(expected), Some(name)) =
                     (expected.as_ref(), self.cfg_passed_symbol_name(input))
                 {
-                    return Some(self.eval_symbol_passed_block_named(
+                    return Some(Eval::value(self.eval_symbol_passed_block_named(
                         None,
                         input.site,
                         &name,
                         expected,
                         environment,
-                    ));
+                    )));
                 }
                 if let (Some(block), Some(expected)) = (block_node, expected.as_ref()) {
                     if block
@@ -422,14 +425,18 @@ impl<'src> Analyzer<'src> {
                         .and_then(|expression| expression.as_symbol_node())
                         .is_some()
                     {
-                        return Some(self.eval_symbol_passed_block(block, expected, environment));
+                        return Some(Eval::value(self.eval_symbol_passed_block(
+                            block,
+                            expected,
+                            environment,
+                        )));
                     }
                 }
                 values
                     .get(value.0 as usize)
                     .and_then(Option::as_ref)
                     .and_then(proc_parts)
-                    .map(|(_, result)| result.clone())
+                    .map(|(_, result)| Eval::value(result.clone()))
             }
         }
     }

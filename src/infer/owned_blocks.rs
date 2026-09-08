@@ -6,8 +6,8 @@
 //! `cfg_transfer.rs` from growing another parser-shaped callback adapter.
 
 use super::{
-    optional_proc_type, proc_parts, Analyzer, CallArguments, Environment, MethodKey, MethodState,
-    OwnedCallInput, SourceSite,
+    optional_proc_type, proc_parts, Analyzer, CallArguments, Environment, Eval, MethodKey,
+    MethodState, OwnedCallInput, SourceSite,
 };
 use crate::hir;
 use crate::signature::MethodSig;
@@ -23,7 +23,7 @@ impl<'src> Analyzer<'src> {
         arguments: &CallArguments<'node>,
         receiver_type: &Type,
         environment: &mut Environment,
-    ) -> Option<Type> {
+    ) -> Option<Eval> {
         let key = self.resolve_method_key(key)?;
         if matches!(
             key.name.as_str(),
@@ -104,7 +104,7 @@ impl<'src> Analyzer<'src> {
             .or_else(|| self.rails_route_draw_block_receiver(&key, Some(receiver_type)))
             .or_else(|| self.active_support_ci_block_receiver(&key, Some(receiver_type)));
 
-        let block_type = match self.transfer_owned_closure_body(
+        let block_result = match self.transfer_owned_closure_body(
             closure_id,
             &expected,
             expected_return.as_ref(),
@@ -114,6 +114,7 @@ impl<'src> Analyzer<'src> {
             Some(block_type) => block_type,
             None => return None,
         };
+        let block_type = Self::block_value_type(&block_result);
         let closure_site = self
             .hir_program
             .closure(closure_id)
@@ -167,7 +168,7 @@ impl<'src> Analyzer<'src> {
         {
             self.fixpoint.changed_methods.insert(key);
         }
-        Some(block_type)
+        Some(block_result)
     }
 
     fn transfer_owned_closure_body(
@@ -177,7 +178,7 @@ impl<'src> Analyzer<'src> {
         expected_return: Option<&Type>,
         bound_receiver: Option<&Type>,
         outer: &mut Environment,
-    ) -> Option<Type> {
+    ) -> Option<Eval> {
         let closure = self.hir_program.closure(closure_id)?.clone();
         let captured = outer.clone();
         let mut closure_environment = outer.clone();
@@ -216,7 +217,7 @@ impl<'src> Analyzer<'src> {
         self.expected_return_type = previous_expected_return;
         let body_result = body_result?;
         self.propagate_block_locals(outer, &captured, &closure_environment);
-        Some(Self::block_value_type(&body_result))
+        Some(body_result)
     }
 }
 

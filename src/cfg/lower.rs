@@ -6,8 +6,8 @@
 
 use super::{
     ArgumentOperand, ArrayOperand, BasicBlock, BlockId, BlockOperand, BlockParameter, Cfg,
-    Conditional, HashOperand, Operation, OperationKind, Pattern, Place, ReceiverOperand,
-    Terminator, ValueId,
+    Conditional, HashOperand, Operation, OperationKind, OutcomeKind, Pattern, Place,
+    ReceiverOperand, Terminator, ValueId,
 };
 use crate::hir::{
     self, Argument, AssignOperator, AssignTarget, BeginExpr, BodyId, ExprId, ExprKind, LoopExpr,
@@ -119,6 +119,11 @@ struct RescueContext {
     retry_target: BlockId,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct EnsureContext {
+    entry: BlockId,
+}
+
 struct Builder<'program> {
     program: &'program Program,
     expressions_by_span: Option<&'program HashMap<(u32, u32), ExprId>>,
@@ -127,6 +132,7 @@ struct Builder<'program> {
     next_value: u32,
     loops: Vec<LoopContext>,
     rescues: Vec<RescueContext>,
+    ensures: Vec<EnsureContext>,
     retain_expression_values: bool,
     current_expression: Option<ExprId>,
 }
@@ -156,6 +162,7 @@ impl<'program> Builder<'program> {
             next_value: 0,
             loops: Vec::new(),
             rescues: Vec::new(),
+            ensures: Vec::new(),
             retain_expression_values,
             current_expression: None,
         }
@@ -1396,13 +1403,26 @@ impl<'program> Builder<'program> {
             )
             .expect("return seed produces a value")
         });
-        self.emit(
-            block,
-            self.span(expression),
-            OperationKind::Record { value: Some(value) },
-            false,
-        );
-        self.set_terminator(block, Terminator::Return(Some(value)));
+        if let Some(ensure) = self.ensures.last().copied() {
+            self.emit(
+                block,
+                self.span(expression),
+                OperationKind::SetOutcome {
+                    kind: OutcomeKind::Return,
+                    value,
+                },
+                false,
+            );
+            self.jump(block, ensure.entry, vec![value]);
+        } else {
+            self.emit(
+                block,
+                self.span(expression),
+                OperationKind::Record { value: Some(value) },
+                false,
+            );
+            self.set_terminator(block, Terminator::Return(Some(value)));
+        }
         self.abrupt(expression, block)
     }
 
@@ -1514,6 +1534,11 @@ impl<'program> Builder<'program> {
         let body_start = self.new_block_with_unwind(protected_unwind);
         self.jump(block, body_start, Vec::new());
 
+        if let Some(ensure_entry) = ensure_entry {
+            self.ensures.push(EnsureContext {
+                entry: ensure_entry,
+            });
+        }
         let body_flow = match begin.body {
             Some(body) => self.lower_expr(body, body_start),
             None => {
@@ -1646,6 +1671,10 @@ impl<'program> Builder<'program> {
             self.rescues.pop();
         }
 
+        if ensure_entry.is_some() {
+            self.ensures.pop();
+        }
+
         if let Some(ensure_entry) = ensure_entry {
             let ensure_flow = match begin.ensure {
                 Some(ensure_body) => self.lower_expr(ensure_body, ensure_entry),
@@ -1662,6 +1691,7 @@ impl<'program> Builder<'program> {
                         expression,
                         target: after,
                         arguments: vec![ensure_value.expect("ensure value")],
+                        pending_target: self.ensures.last().map(|ensure| ensure.entry),
                     },
                 );
             }

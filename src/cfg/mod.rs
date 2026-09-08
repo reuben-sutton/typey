@@ -140,6 +140,11 @@ pub enum OperationKind {
     Record {
         value: Option<ValueId>,
     },
+    /// Route a non-local control value through an active ensure region.
+    SetOutcome {
+        kind: OutcomeKind,
+        value: ValueId,
+    },
     PatternTest {
         value: ValueId,
         pattern: Pattern,
@@ -156,6 +161,16 @@ pub enum OperationKind {
     Unsupported {
         kind: Name,
     },
+}
+
+/// A control outcome that must run enclosing ensure bodies before it can
+/// terminate or continue to an outer control region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutcomeKind {
+    Return,
+    Break,
+    Next,
+    Retry,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,6 +249,8 @@ pub enum Terminator {
         expression: ExprId,
         target: BlockId,
         arguments: Vec<ValueId>,
+        /// The enclosing ensure entry for a pending non-local outcome.
+        pending_target: Option<BlockId>,
     },
     Unreachable,
 }

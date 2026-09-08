@@ -1242,7 +1242,7 @@ impl<'src> Analyzer<'src> {
         }
     }
 
-    fn observe_block_call<'node>(
+    fn observe_block_call_eval<'node>(
         &mut self,
         key: &MethodKey,
         block: Option<&Node<'node>>,
@@ -1250,7 +1250,7 @@ impl<'src> Analyzer<'src> {
         arguments: &CallArguments<'node>,
         receiver_type: Option<&Type>,
         environment: &mut Environment,
-    ) -> Option<Type> {
+    ) -> Option<Eval> {
         let Some(block) = block else {
             return None;
         };
@@ -1327,7 +1327,7 @@ impl<'src> Analyzer<'src> {
             .or_else(|| self.rails_application_configure_block_receiver(&key, receiver_type))
             .or_else(|| self.rails_route_draw_block_receiver(&key, receiver_type))
             .or_else(|| self.active_support_ci_block_receiver(&key, receiver_type));
-        let (block_type, passed_block_signature) = if block.as_block_argument_node().is_some() {
+        let (block_result, passed_block_signature) = if block.as_block_argument_node().is_some() {
             if let Some(expected_signature) = block_signature.as_ref().and_then(optional_proc_type)
             {
                 if block
@@ -1337,7 +1337,11 @@ impl<'src> Analyzer<'src> {
                     .is_some()
                 {
                     (
-                        self.eval_symbol_passed_block(block, &expected_signature, environment),
+                        Eval::value(self.eval_symbol_passed_block(
+                            block,
+                            &expected_signature,
+                            environment,
+                        )),
                         None,
                     )
                 } else {
@@ -1350,9 +1354,9 @@ impl<'src> Analyzer<'src> {
                     if let Some(signature) = Self::passed_block_signature(&expression_type) {
                         let return_type =
                             proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
-                        (return_type, Some(signature))
+                        (Eval::value(return_type), Some(signature))
                     } else {
-                        (Type::Any, None)
+                        (Eval::value(Type::Any), None)
                     }
                 }
             } else {
@@ -1364,9 +1368,9 @@ impl<'src> Analyzer<'src> {
                 if let Some(signature) = Self::passed_block_signature(&expression_type) {
                     let return_type =
                         proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
-                    (return_type, Some(signature))
+                    (Eval::value(return_type), Some(signature))
                 } else {
-                    (Type::Any, None)
+                    (Eval::value(Type::Any), None)
                 }
             }
         } else if matches!(
@@ -1378,15 +1382,18 @@ impl<'src> Analyzer<'src> {
             // so handle the body here before the ordinary callback path can
             // accidentally retain the lexical module/class self.
             self.eval_dynamic_method_body(&key.name, block, environment);
-            (Type::Any, None)
+            (Eval::value(Type::Any), None)
         } else {
-            let block_type = if let Some(receiver) = bound_receiver.as_ref() {
-                self.eval_bound_block_node(block, &expected, receiver, environment)
+            let block_result = if let Some(receiver) = bound_receiver.as_ref() {
+                self.eval_bound_block_node_result(block, &expected, receiver, environment)
+                    .0
             } else {
-                self.eval_block_node(block, &expected, environment)
+                self.eval_block_node_result_with_environment(block, &expected, environment)
+                    .0
             };
-            (block_type, None)
+            (block_result, None)
         };
+        let block_type = Self::block_value_type(&block_result);
         self.expected_return_type = previous_expected_return;
         let mut checked_bindings =
             self.infer_type_parameter_bindings(signature, arguments, Some(&block_type));
@@ -1456,7 +1463,20 @@ impl<'src> Analyzer<'src> {
         {
             self.fixpoint.changed_methods.insert(key);
         }
-        Some(block_type)
+        Some(block_result)
+    }
+
+    fn observe_block_call<'node>(
+        &mut self,
+        key: &MethodKey,
+        block: Option<&Node<'node>>,
+        signature: &MethodSig,
+        arguments: &CallArguments<'node>,
+        receiver_type: Option<&Type>,
+        environment: &mut Environment,
+    ) -> Option<Type> {
+        self.observe_block_call_eval(key, block, signature, arguments, receiver_type, environment)
+            .map(|result| Self::block_value_type(&result))
     }
 
     fn eval_symbol_passed_block<'node>(

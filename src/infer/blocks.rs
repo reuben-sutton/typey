@@ -24,13 +24,24 @@ impl<'src> Analyzer<'src> {
         expected: &[Type],
         outer: &mut Environment,
     ) -> (Type, Environment) {
+        let (result, block_environment) =
+            self.eval_block_node_result_with_environment(node, expected, outer);
+        (Self::block_value_type(&result), block_environment)
+    }
+
+    pub(super) fn eval_block_node_result_with_environment<'node>(
+        &mut self,
+        node: &Node<'node>,
+        expected: &[Type],
+        outer: &mut Environment,
+    ) -> (Eval, Environment) {
         let Some(block) = node.as_block_node() else {
-            return (Type::Any, outer.clone());
+            return (Eval::value(Type::Any), outer.clone());
         };
         let captured = outer.clone();
         let (result, block_environment) = self.eval_block_with_environment(&block, expected, outer);
         self.propagate_block_locals(outer, &captured, &block_environment);
-        (Self::block_value_type(&result), block_environment)
+        (result, block_environment)
     }
 
     pub(super) fn eval_bound_block_node<'node>(
@@ -40,8 +51,22 @@ impl<'src> Analyzer<'src> {
         receiver: &Type,
         outer: &mut Environment,
     ) -> Type {
+        Self::block_value_type(
+            &self
+                .eval_bound_block_node_result(node, expected, receiver, outer)
+                .0,
+        )
+    }
+
+    pub(super) fn eval_bound_block_node_result<'node>(
+        &mut self,
+        node: &Node<'node>,
+        expected: &[Type],
+        receiver: &Type,
+        outer: &mut Environment,
+    ) -> (Eval, Environment) {
         let Some(block) = node.as_block_node() else {
-            return Type::Any;
+            return (Eval::value(Type::Any), outer.clone());
         };
         let captured = outer.clone();
         let mut bound_outer = outer.clone();
@@ -61,7 +86,7 @@ impl<'src> Analyzer<'src> {
         let (result, block_environment) =
             self.eval_block_with_environment(&block, expected, &bound_outer);
         self.propagate_block_locals(outer, &captured, &block_environment);
-        Self::block_value_type(&result)
+        (result, block_environment)
     }
 
     pub(super) fn passed_block_expression_type<'node>(
