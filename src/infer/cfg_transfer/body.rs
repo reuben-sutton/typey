@@ -41,65 +41,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             )
     }
 
-    fn transfer_closure(
-        analyzer: &mut Analyzer<'src>,
-        closure_id: hir::ClosureId,
-        outer: &Environment,
-    ) -> Option<Type> {
-        let (body_id, parameters, span) = {
-            let closure = analyzer.program.hir_program.closure(closure_id)?;
-            (closure.body, closure.parameters.clone(), closure.span)
-        };
-        let signature = Analyzer::inferred_hir_block_signature(&parameters);
-        let mut closure_environment = outer.clone();
-        let mut positional_index = 0;
-        for parameter in &parameters.parameters {
-            let type_ = match parameter.kind {
-                hir::ParameterKind::Required
-                | hir::ParameterKind::Optional
-                | hir::ParameterKind::Post => {
-                    let type_ = signature
-                        .params
-                        .get(positional_index)
-                        .cloned()
-                        .unwrap_or(Type::Any);
-                    positional_index += 1;
-                    type_
-                }
-                hir::ParameterKind::Rest | hir::ParameterKind::Forwarded => {
-                    let type_ = signature
-                        .params
-                        .get(positional_index)
-                        .cloned()
-                        .unwrap_or(Type::Any);
-                    positional_index += 1;
-                    Type::Array(Box::new(type_))
-                }
-                hir::ParameterKind::RequiredKeyword | hir::ParameterKind::OptionalKeyword => {
-                    Type::Any
-                }
-                hir::ParameterKind::KeywordRest => {
-                    Type::Hash(Box::new(Type::Symbol), Box::new(Type::Any))
-                }
-                hir::ParameterKind::Block => Type::Proc(Vec::new(), Box::new(Type::Any)),
-                hir::ParameterKind::Anonymous => Type::Any,
-            };
-            if let Some(name) = &parameter.name {
-                closure_environment.bind(name.as_str().to_owned(), type_.clone());
-            }
-            if positional_index == 1 && parameter.name.is_none() {
-                closure_environment.bind("it", type_);
-            }
-        }
-        let body_result = analyzer.eval_cfg_body_owned(
-            SourceSite::from_span(span, None),
-            body_id,
-            &mut closure_environment,
-            false,
-        )?;
-        Some(Type::Proc(signature.params, Box::new(body_result.type_)))
-    }
-
     fn suppress_internal_call_record(&self, operation: &cfg::Operation) -> bool {
         // The parser-backed evaluator uses `!value` as a control-flow
         // predicate, so the source span remains associated with the operand
@@ -581,10 +522,10 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
                     type_
                 }
-                cfg::OperationKind::MakeClosure { closure } => {
-                    Self::transfer_closure(self.analyzer, *closure, &next.environment)
-                        .ok_or_else(|| format!("closure transfer failed at {:?}", operation.span))?
-                }
+                cfg::OperationKind::MakeClosure { closure } => self
+                    .analyzer
+                    .cfg_owned_closure_type(*closure, &next.environment)
+                    .ok_or_else(|| format!("closure transfer failed at {:?}", operation.span))?,
                 _ => return Err(format!("unsupported CFG operation at {:?}", operation.span)),
             };
             if let Some(result) = operation.result {

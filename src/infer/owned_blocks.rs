@@ -15,6 +15,65 @@ use crate::signature::MethodSig;
 use crate::types::Type;
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn cfg_owned_closure_type(
+        &mut self,
+        closure_id: hir::ClosureId,
+        outer: &Environment,
+    ) -> Option<Type> {
+        let (body_id, parameters, span) = {
+            let closure = self.program.hir_program.closure(closure_id)?;
+            (closure.body, closure.parameters.clone(), closure.span)
+        };
+        let signature = Analyzer::inferred_hir_block_signature(&parameters);
+        let mut closure_environment = outer.clone();
+        let mut positional_index = 0;
+        for parameter in &parameters.parameters {
+            let type_ = match parameter.kind {
+                hir::ParameterKind::Required
+                | hir::ParameterKind::Optional
+                | hir::ParameterKind::Post => {
+                    let type_ = signature
+                        .params
+                        .get(positional_index)
+                        .cloned()
+                        .unwrap_or(Type::Any);
+                    positional_index += 1;
+                    type_
+                }
+                hir::ParameterKind::Rest | hir::ParameterKind::Forwarded => {
+                    let type_ = signature
+                        .params
+                        .get(positional_index)
+                        .cloned()
+                        .unwrap_or(Type::Any);
+                    positional_index += 1;
+                    Type::Array(Box::new(type_))
+                }
+                hir::ParameterKind::RequiredKeyword | hir::ParameterKind::OptionalKeyword => {
+                    Type::Any
+                }
+                hir::ParameterKind::KeywordRest => {
+                    Type::Hash(Box::new(Type::Symbol), Box::new(Type::Any))
+                }
+                hir::ParameterKind::Block => Type::Proc(Vec::new(), Box::new(Type::Any)),
+                hir::ParameterKind::Anonymous => Type::Any,
+            };
+            if let Some(name) = &parameter.name {
+                closure_environment.bind(name.as_str().to_owned(), type_.clone());
+            }
+            if positional_index == 1 && parameter.name.is_none() {
+                closure_environment.bind("it", type_);
+            }
+        }
+        let body_result = self.eval_cfg_body_owned(
+            SourceSite::from_span(span, None),
+            body_id,
+            &mut closure_environment,
+            false,
+        )?;
+        Some(Type::Proc(signature.params, Box::new(body_result.type_)))
+    }
+
     /// `define_method` accepts a block value as a method body.  The ordinary
     /// method table is intentionally not used for this shape: a passed block
     /// has no parser node to bind at this call site, and the body is checked
