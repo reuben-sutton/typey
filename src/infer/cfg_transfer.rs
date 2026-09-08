@@ -1,6 +1,6 @@
 use super::{
-    ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, MethodKey,
-    OutcomeTypes, SharedKey, Strictness,
+    ivar_refinement_key, Analyzer, CallArguments, CallSite, Environment, Eval, Flow, FlowKind,
+    HirCallView, MethodKey, OutcomeTypes, SharedKey, Strictness,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
@@ -78,6 +78,11 @@ impl<'node> Visit<'node> for SpanNodeIndex<'node> {
         let span = prism::span(&node);
         self.nodes.entry(span).or_insert(node);
     }
+
+    fn visit_leaf_node_enter(&mut self, node: Node<'node>) {
+        let span = prism::span(&node);
+        self.nodes.entry(span).or_insert(node);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +125,29 @@ fn expr_can_transfer(
     };
     let supported = match &expr.kind {
         ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => true,
+        ExprKind::Call(call) => {
+            !call.safe_navigation
+                && call.block.is_none()
+                && match &call.receiver {
+                    hir::Receiver::Implicit | hir::Receiver::Explicit(_) => true,
+                    hir::Receiver::Super | hir::Receiver::Yield => false,
+                }
+                && match &call.receiver {
+                    hir::Receiver::Explicit(receiver) => {
+                        expr_can_transfer(program, *receiver, visiting)
+                    }
+                    _ => true,
+                }
+                && call.arguments.iter().all(|argument| match argument {
+                    hir::Argument::Positional(value) => {
+                        expr_can_transfer(program, *value, visiting)
+                    }
+                    hir::Argument::Splat(_)
+                    | hir::Argument::Keyword { .. }
+                    | hir::Argument::KeywordSplat(_)
+                    | hir::Argument::Forwarded => false,
+                })
+        }
         ExprKind::Assign {
             target,
             value,
@@ -331,6 +359,135 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             }
         }
     }
+
+    fn transfer_call(
+        analyzer: &mut Analyzer<'src>,
+        node: &Node<'node>,
+        operation: &cfg::OperationKind,
+        values: &[Option<Type>],
+        environment: &mut Environment,
+    ) -> Option<Eval> {
+        let cfg::OperationKind::Call {
+            receiver,
+            name,
+            arguments: operands,
+            block,
+            safe_navigation,
+        } = operation
+        else {
+            return None;
+        };
+        if block.is_some() || *safe_navigation {
+            return None;
+        }
+        let call = node.as_call_node()?;
+        let argument_nodes = call
+            .arguments()
+            .map(|arguments| arguments.arguments().into_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if argument_nodes.len() != operands.len() {
+            return None;
+        }
+        let mut call_arguments = CallArguments::default();
+        for (index, (operand, argument_node)) in operands.iter().zip(argument_nodes).enumerate() {
+            let cfg::ArgumentOperand::Positional(value) = operand else {
+                return None;
+            };
+            let type_ = values.get(value.0 as usize).cloned().flatten()?;
+            call_arguments.argument_nodes.push(argument_node);
+            call_arguments.argument_types.push(type_.clone());
+            call_arguments.argument_indices.push(index);
+            call_arguments.positional_indices.push(index);
+            call_arguments.positional_types.push(type_);
+        }
+
+        let receiver_node = call.receiver();
+        let receiver_type = match receiver {
+            cfg::ReceiverOperand::Implicit => environment.self_type.clone(),
+            cfg::ReceiverOperand::Value(value) => {
+                values.get(value.0 as usize).cloned().flatten()?
+            }
+            cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => return None,
+        };
+        let site = CallSite {
+            argument_nodes: &call_arguments.argument_nodes,
+            argument_types: &call_arguments.argument_types,
+            block: None,
+        };
+        let type_ = if matches!(receiver, cfg::ReceiverOperand::Implicit) {
+            let key = analyzer.implicit_method_key(name.as_str(), environment);
+            analyzer.record_method_dependency(&key, environment);
+            if let Some(signature) = analyzer
+                .observe_call(&key, &call_arguments, false)
+                .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
+            {
+                analyzer.invoke_signature(
+                    node,
+                    name.as_str(),
+                    &signature,
+                    &call_arguments,
+                    Some(&receiver_type),
+                    None,
+                )
+            } else {
+                analyzer.eval_global_call(
+                    node,
+                    name.as_str(),
+                    &call_arguments.argument_nodes,
+                    &call_arguments.argument_types,
+                    None,
+                    environment,
+                )
+            }
+        } else {
+            let dispatch_receiver = receiver_type.clone();
+            let key = analyzer.receiver_method_key(
+                receiver_node.as_ref(),
+                &dispatch_receiver,
+                name.as_str(),
+                environment,
+            );
+            if let Some(key) = key {
+                analyzer.record_method_dependency(&key, environment);
+                if let Some(signature) = analyzer
+                    .observe_call(&key, &call_arguments, false)
+                    .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
+                {
+                    let type_ = analyzer.invoke_signature(
+                        node,
+                        name.as_str(),
+                        &signature,
+                        &call_arguments,
+                        Some(&dispatch_receiver),
+                        None,
+                    );
+                    if name.as_str() == "new"
+                        && Analyzer::class_object_instance_type(&dispatch_receiver).is_some()
+                    {
+                        analyzer.instantiate_generic_class(type_)
+                    } else {
+                        type_
+                    }
+                } else {
+                    analyzer.eval_method_call(&dispatch_receiver, name.as_str(), &site, environment)
+                }
+            } else {
+                analyzer.eval_method_call(&dispatch_receiver, name.as_str(), &site, environment)
+            }
+        };
+        let mut result = if type_.is_never() {
+            Eval::raised(type_)
+        } else {
+            Eval::value(type_)
+        };
+        let type_ =
+            analyzer.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
+        if result.normal_type.is_some() {
+            result.normal_type = Some(type_.clone());
+        }
+        result.type_ = type_;
+        Some(result)
+    }
 }
 
 impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src, 'node> {
@@ -372,6 +529,23 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                 cfg::OperationKind::Write { place, value } => {
                     let actual = next.value(*value).ok_or(())?;
                     Self::transfer_write(self.analyzer, node, place, actual, &mut next.environment)
+                }
+                cfg::OperationKind::Call { .. } => {
+                    let result = Self::transfer_call(
+                        self.analyzer,
+                        node,
+                        &operation.kind,
+                        &next.values,
+                        &mut next.environment,
+                    )
+                    .ok_or(())?;
+                    self.abrupt = self.abrupt.join(&result.abrupt);
+                    if !result.flow.contains(FlowKind::Normal) {
+                        self.analyzer.record(node, result.type_.clone());
+                        return Ok(Vec::new());
+                    }
+                    next.flow = next.flow.union(result.flow.without(FlowKind::Normal));
+                    result.normal_type.ok_or(())?
                 }
                 _ => return Err(()),
             };
@@ -774,7 +948,7 @@ impl<'src> Analyzer<'src> {
     /// diagnostics or recorded types behind.
     pub(super) fn eval_cfg_body<'node>(
         &mut self,
-        node: &Node<'node>,
+        body_node: &Node<'node>,
         body_id: hir::BodyId,
         environment: &mut Environment,
     ) -> Option<Eval> {
@@ -787,7 +961,7 @@ impl<'src> Analyzer<'src> {
         // once per method.
         let graph = cfg::lower::build_for_index(&self.hir_program, body_id);
         let mut nodes = SpanNodeIndex::default();
-        nodes.visit(node);
+        nodes.visit(body_node);
         if graph.blocks.iter().any(|block| {
             block.unwind.is_some()
                 || block.operations.iter().any(|operation| {
@@ -797,6 +971,7 @@ impl<'src> Analyzer<'src> {
                             | cfg::OperationKind::Read { .. }
                             | cfg::OperationKind::ReadSpecial { .. }
                             | cfg::OperationKind::Write { .. }
+                            | cfg::OperationKind::Call { .. }
                     ) && !nodes
                         .nodes
                         .contains_key(&(operation.span.start as usize, operation.span.end as usize))
@@ -808,6 +983,7 @@ impl<'src> Analyzer<'src> {
                             | cfg::OperationKind::Read { .. }
                             | cfg::OperationKind::ReadSpecial { .. }
                             | cfg::OperationKind::Write { .. }
+                            | cfg::OperationKind::Call { .. }
                     )
                 })
                 || matches!(
@@ -850,8 +1026,7 @@ impl<'src> Analyzer<'src> {
             abrupt,
             Flow::normal().union(terminal_flow),
         );
-        let type_ = self.apply_inline_assertion(node, result.type_.clone());
-        result.type_ = self.record(node, type_);
+        result.type_ = self.record(body_node, result.type_.clone());
         Some(result)
     }
 

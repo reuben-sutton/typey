@@ -2,7 +2,7 @@ class CfgBodyTransfer
   def value
     local = 1
     @value = local
-    @value
+    @value.to_s
   end
 end
 

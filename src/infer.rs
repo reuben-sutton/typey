@@ -5491,7 +5491,7 @@ impl<'src> Analyzer<'src> {
                 self.hir_body_ids
                     .get(&prism::span(node))
                     .copied()
-                    .and_then(|body_id| self.eval_cfg_body(node, body_id, &mut method_environment))
+                    .and_then(|body_id| self.eval_cfg_body(&body, body_id, &mut method_environment))
                     .unwrap_or_else(|| self.eval_node(&body, &mut method_environment))
             } else {
                 self.eval_node(&body, &mut method_environment)
