@@ -5,7 +5,8 @@
 //! are supplied by the inference-side transfer implementation.
 
 use super::{BasicBlock, BlockId, Cfg};
-use std::collections::BTreeSet;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransferEdge<S> {
@@ -64,15 +65,18 @@ where
         .ok_or(WorklistError::InvalidBlock(cfg.entry))?;
     let _ = entry;
     let mut states = vec![None; cfg.blocks.len()];
-    let mut pending = BTreeSet::new();
+    let mut pending = BinaryHeap::new();
+    let mut queued = vec![false; cfg.blocks.len()];
     let (entry_state, changed) = transfer.join_state(None, initial);
     states[cfg.entry.0 as usize] = Some(entry_state);
     if changed {
-        pending.insert(cfg.entry);
+        pending.push(Reverse(cfg.entry));
+        queued[cfg.entry.0 as usize] = true;
     }
 
     let mut visit_order = Vec::new();
-    while let Some(block_id) = pending.pop_first() {
+    while let Some(Reverse(block_id)) = pending.pop() {
+        queued[block_id.0 as usize] = false;
         let Some(state) = states.get(block_id.0 as usize).and_then(Option::as_ref) else {
             return Err(WorklistError::InvalidBlock(block_id));
         };
@@ -91,7 +95,10 @@ where
                 transfer.join_state(states[edge.target.0 as usize].as_ref(), edge.state);
             if changed {
                 states[edge.target.0 as usize] = Some(joined);
-                pending.insert(edge.target);
+                if !queued[edge.target.0 as usize] {
+                    pending.push(Reverse(edge.target));
+                    queued[edge.target.0 as usize] = true;
+                }
             }
         }
     }
