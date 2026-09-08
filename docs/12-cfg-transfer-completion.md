@@ -90,6 +90,9 @@ The first modularization steps are now in place:
 * `infer/case_flow.rs` owns legacy Prism `case`/`case in` evaluation and its
   case-specific narrowing helpers; shared predicate semantics remain in
   `infer/predicate_flow.rs`;
+* `infer/framework_hooks.rs` isolates Rails and Active Support callback
+  receiver bindings from generic call dispatch, while exposing the same
+  contract to recursive and owned block inference;
 * `infer/cfg_state.rs` owns CFG block state, body context, value joins, and
   pending exception state, leaving `infer/cfg_transfer.rs` focused on operation
   and terminator semantics;
