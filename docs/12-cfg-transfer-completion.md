@@ -93,6 +93,9 @@ The first modularization steps are now in place:
 * `infer/framework_hooks.rs` isolates Rails and Active Support callback
   receiver bindings from generic call dispatch, while exposing the same
   contract to recursive and owned block inference;
+* `infer/intrinsics.rs` owns Sorbet `T.*` intrinsic contracts and implicit
+  global/builtin call results, so the coordinator no longer mixes those
+  language contracts with transfer and declaration orchestration;
 * `infer/cfg_state.rs` owns CFG block state, body context, value joins, and
   pending exception state, leaving `infer/cfg_transfer.rs` focused on operation
   and terminator semantics;
