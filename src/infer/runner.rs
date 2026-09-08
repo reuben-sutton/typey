@@ -21,6 +21,21 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    pub(super) fn record_inferred_raise(&mut self, key: MethodKey, actual: Type) {
+        if actual.is_never() {
+            return;
+        }
+        match self.fixpoint.pending_raises.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(actual);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let current = entry.get().clone();
+                entry.insert(current.join(&actual));
+            }
+        }
+    }
+
     pub(super) fn commit_inferred_returns(&mut self) {
         let pending_returns = std::mem::take(&mut self.fixpoint.pending_returns);
         for (key, (return_type, return_terminates)) in pending_returns {
@@ -33,6 +48,20 @@ impl<'src> Analyzer<'src> {
                     if changed {
                         self.fixpoint.changed_methods.insert(key);
                     }
+                }
+            }
+        }
+        let pending_raises = std::mem::take(&mut self.fixpoint.pending_raises);
+        for (key, raise_type) in pending_raises {
+            if let Some(state) = self.declarations.methods.get_mut(&key) {
+                let next = state
+                    .raise_type
+                    .as_ref()
+                    .map_or_else(|| raise_type.clone(), |current| current.join(&raise_type));
+                let changed = state.raise_type.as_ref() != Some(&next);
+                state.raise_type = Some(next);
+                if changed {
+                    self.fixpoint.changed_methods.insert(key);
                 }
             }
         }
@@ -83,6 +112,7 @@ impl<'src> Analyzer<'src> {
             eprintln!("[typey] seeding top-level call sites");
         }
         self.fixpoint.pending_returns.clear();
+        self.fixpoint.pending_raises.clear();
         self.fixpoint.collecting_returns = true;
         let seed_started = std::time::Instant::now();
         let mut environment = Environment::default();
@@ -134,6 +164,7 @@ impl<'src> Analyzer<'src> {
             // avoids source-order effects when a caller appears before its
             // callee or when conditional branches define the same method.
             self.fixpoint.pending_returns.clear();
+            self.fixpoint.pending_raises.clear();
             self.fixpoint.collecting_returns = true;
             let mut environment = Environment::default();
             self.eval_node(root, &mut environment);

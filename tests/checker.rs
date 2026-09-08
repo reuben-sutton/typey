@@ -225,6 +225,22 @@ fn transfers_optional_rbs_blocks_through_owned_proc_calls() {
 }
 
 #[test]
+fn transfers_rescue_after_noreturn_calls_without_losing_normal_completion() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_rescue_noreturn.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_union_callable_calls_without_recursive_fallback() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_callable_union.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());

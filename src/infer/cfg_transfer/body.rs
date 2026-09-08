@@ -399,6 +399,11 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             type_
         };
         let call_can_return = !type_.is_never();
+        let raise_type = if call_can_return {
+            Type::Never
+        } else {
+            analyzer.cfg_call_raise_type(&input, &receiver_type, environment, &type_)
+        };
         let has_normal_path = call_can_return
             && block_result
                 .as_ref()
@@ -409,7 +414,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         let normal_type = has_normal_path.then_some(type_.clone());
         let mut result = Eval::from_parts(
             normal_type,
-            callback_outcomes,
+            callback_outcomes.join(&OutcomeTypes::for_kind(FlowKind::Raise, raise_type)),
             if has_normal_path {
                 Flow::normal()
             } else if !call_can_return {
@@ -767,6 +772,40 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
 }
 
 impl<'src> Analyzer<'src> {
+    fn cfg_call_raise_type(
+        &self,
+        input: &OwnedCallInput,
+        receiver_type: &Type,
+        environment: &Environment,
+        return_type: &Type,
+    ) -> Type {
+        if !return_type.is_never() {
+            return Type::Never;
+        }
+        if matches!(&input.receiver, cfg::ReceiverOperand::Implicit) {
+            return match input.name.as_str() {
+                "exit" | "exit!" | "abort" => Type::named("SystemExit"),
+                "raise" | "fail" => Type::named("RuntimeError"),
+                _ => Type::Never,
+            };
+        }
+        let key = match &input.receiver {
+            cfg::ReceiverOperand::Super => environment
+                .method_key
+                .as_ref()
+                .and_then(|current| self.super_method_key(current)),
+            cfg::ReceiverOperand::Value(_) => {
+                self.receiver_method_key(None, receiver_type, input.name.as_str(), environment)
+            }
+            cfg::ReceiverOperand::Yield | cfg::ReceiverOperand::Implicit => None,
+        };
+        key.and_then(|key| self.resolve_method_key(&key))
+            .and_then(|key| self.declarations.methods.get(&key))
+            .and_then(|state| state.raise_type.clone())
+            .filter(|type_| !type_.is_never())
+            .unwrap_or_else(|| Type::named("StandardError"))
+    }
+
     fn seed_cfg_global_state(&self, graph: &cfg::Cfg, environment: &mut Environment) {
         for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
             let place = match &operation.kind {
@@ -1106,11 +1145,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     )
                     .ok_or_else(|| format!("call transfer failed at {:?}", operation.span))?;
                     if result.flow.contains(FlowKind::Raise) {
-                        let exception = if result.abrupt.raise_type.is_never() {
-                            Type::named("StandardError")
-                        } else {
-                            result.abrupt.raise_type.clone()
-                        };
+                        let exception = result.abrupt.raise_type.clone();
                         if let Some(edge) =
                             self.exception_edge(graph, block, next.clone(), exception.clone())
                         {

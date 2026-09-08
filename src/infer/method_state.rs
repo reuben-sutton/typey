@@ -25,6 +25,11 @@ pub(super) struct MethodState {
     pub(super) required_keywords: BTreeSet<String>,
     pub(super) return_type: Option<Type>,
     pub(super) return_terminates: bool,
+    /// The concrete exception type observed on an abrupt raise path. This is
+    /// separate from `return_type`: a method may return normally on one path
+    /// and raise on another, while a `T.noreturn` method still needs its
+    /// exception type when called from a rescue clause.
+    pub(super) raise_type: Option<Type>,
     pub(super) required_params: usize,
     pub(super) accepts_rest: bool,
     pub(super) accepts_keyword_rest: bool,
@@ -69,6 +74,7 @@ impl MethodState {
                 .collect(),
             return_type: Some(signature.return_type.clone()),
             return_terminates: signature.return_type.is_never(),
+            raise_type: None,
             required_params: signature.required_params,
             accepts_rest: signature.accepts_rest,
             accepts_keyword_rest: signature.accepts_keyword_rest,
@@ -127,6 +133,7 @@ impl MethodState {
                 required_keywords,
                 return_type: None,
                 return_terminates: false,
+                raise_type: None,
                 required_params,
                 accepts_rest,
                 accepts_keyword_rest: parameters.keyword_rest().is_some_and(|node| {
@@ -152,6 +159,7 @@ impl MethodState {
             required_keywords,
             return_type: None,
             return_terminates: false,
+            raise_type: None,
             required_params,
             accepts_rest: false,
             accepts_keyword_rest: false,

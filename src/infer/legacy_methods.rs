@@ -165,6 +165,9 @@ impl<'src> Analyzer<'src> {
         };
         self.expected_return_type = previous_expected_return;
         let inferred_return = body_result.method_return_type();
+        if self.fixpoint.collecting_returns {
+            self.record_inferred_raise(key.clone(), body_result.abrupt.raise_type.clone());
+        }
         if state.explicit && !state.is_void && !state.is_abstract && !self.is_rbi_definition(node) {
             let expected = self.substitute_method_signature(
                 &state.call_signature(),
