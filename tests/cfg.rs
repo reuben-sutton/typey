@@ -310,6 +310,23 @@ fn preserves_owned_call_identity_inside_rescue_sequences() {
 }
 
 #[test]
+fn lowers_ensure_completion_after_normal_and_unwind_paths() {
+    let graph = cfg(
+        "begin\n  raise \"boom\"\nrescue StandardError\n  \"recovered\"\nensure\n  \"cleanup\"\nend",
+    );
+    assert_eq!(graph.ensure_entries.len(), 1);
+    assert!(graph
+        .blocks
+        .iter()
+        .any(|block| { matches!(block.terminator, Terminator::EnsureComplete { .. }) }));
+    let ensure_entry = graph.ensure_entries[0];
+    assert!(graph
+        .blocks
+        .iter()
+        .any(|block| block.unwind == Some(ensure_entry)));
+}
+
+#[test]
 fn lowers_rescue_reference_retry_and_ensure_edges() {
     let graph = cfg(
         "begin\n  risky\nrescue StandardError => error\n  retry\nensure\n  cleanup(error)\nend",

@@ -141,6 +141,10 @@ mod tests {
                         state: state.saturating_add(2),
                     },
                 ],
+                super::super::Terminator::EnsureComplete { target, .. } => vec![TransferEdge {
+                    target,
+                    state: *state,
+                }],
                 _ => Vec::new(),
             })
         }
@@ -205,6 +209,7 @@ mod tests {
                 },
             ],
             conditionals: Vec::new(),
+            ensure_entries: Vec::new(),
             unsupported_spans: Vec::new(),
             expression_values: Vec::new(),
         }

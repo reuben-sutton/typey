@@ -230,7 +230,7 @@ fn expr_can_transfer(
             .closure(*closure)
             .and_then(|closure| program.body(closure.body))
             .is_some_and(|body| expr_can_transfer(program, body.root, visiting)),
-        ExprKind::Begin(begin) if begin.ensure.is_none() => {
+        ExprKind::Begin(begin) => {
             begin
                 .body
                 .is_none_or(|body| expr_can_transfer(program, body, visiting))
@@ -246,6 +246,9 @@ fn expr_can_transfer(
                             .body
                             .is_none_or(|body| expr_can_transfer(program, body, visiting))
                 })
+                && begin
+                    .ensure
+                    .is_none_or(|ensure| expr_can_transfer(program, ensure, visiting))
         }
         ExprKind::Assign {
             target,
@@ -441,6 +444,7 @@ fn conditional_graph() -> &'static cfg::Cfg {
             },
         ],
         conditionals: Vec::new(),
+        ensure_entries: Vec::new(),
         unsupported_spans: Vec::new(),
         expression_values: Vec::new(),
     })
@@ -492,6 +496,7 @@ fn loop_graph() -> &'static cfg::Cfg {
             },
         ],
         conditionals: Vec::new(),
+        ensure_entries: Vec::new(),
         unsupported_spans: Vec::new(),
         expression_values: Vec::new(),
     })
@@ -1289,6 +1294,55 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                     self.terminal_flow = self.terminal_flow.union(Flow::abrupt(FlowKind::Raise));
                 }
                 Ok(exception_edges)
+            }
+            cfg::Terminator::EnsureComplete {
+                expression,
+                target,
+                arguments,
+            } => {
+                let target_block = graph
+                    .block(*target)
+                    .ok_or_else(|| format!("missing ensure target {:?}", target))?;
+                let mut edges = Vec::new();
+                if next.flow.contains(FlowKind::Normal) {
+                    let mut normal = next.clone();
+                    normal.pending_exception = None;
+                    normal.flow = normal.flow.without(FlowKind::Raise);
+                    for (parameter, argument) in target_block.parameters.iter().zip(arguments) {
+                        let type_ = normal
+                            .value(*argument)
+                            .ok_or_else(|| format!("missing ensure operand {:?}", argument))?;
+                        normal.set_value(parameter.value, type_);
+                    }
+                    if let Some(value) = arguments.first().and_then(|value| normal.value(*value)) {
+                        if let Some(expression) = self.analyzer.hir_program.expression(*expression)
+                        {
+                            self.analyzer.record_at(
+                                SourceSite::from_span(expression.span, None),
+                                value,
+                                false,
+                                None,
+                            );
+                        }
+                    }
+                    edges.push(edge(*target, normal));
+                }
+                if next.flow.contains(FlowKind::Raise) {
+                    if let Some(exception) = next.pending_exception.clone() {
+                        if let Some(exception_edge) =
+                            self.exception_edge(graph, block, next, exception.clone())
+                        {
+                            edges.push(exception_edge);
+                        } else {
+                            self.abrupt = self
+                                .abrupt
+                                .join(&OutcomeTypes::for_kind(FlowKind::Raise, exception));
+                            self.terminal_flow =
+                                self.terminal_flow.union(Flow::abrupt(FlowKind::Raise));
+                        }
+                    }
+                }
+                Ok(edges)
             }
         }
     }

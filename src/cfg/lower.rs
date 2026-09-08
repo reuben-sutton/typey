@@ -147,6 +147,7 @@ impl<'program> Builder<'program> {
                 entry: BlockId(0),
                 blocks: Vec::new(),
                 conditionals: Vec::new(),
+                ensure_entries: Vec::new(),
                 unsupported_spans: Vec::new(),
                 expression_values: retain_expression_values
                     .then(|| vec![None; program.expressions.len()])
@@ -1326,10 +1327,15 @@ impl<'program> Builder<'program> {
             .ensure
             .as_ref()
             .map(|_| self.new_block_with_unwind(outer_unwind));
+        if let Some(ensure_entry) = ensure_entry {
+            self.cfg.ensure_entries.push(ensure_entry);
+        }
         let ensure_value = ensure_entry.map(|entry| self.add_parameter(entry));
+        let rescue_unwind = ensure_entry.or(outer_unwind);
         let rescue_entry =
-            (!begin.rescue.is_empty()).then(|| self.new_block_with_unwind(outer_unwind));
-        let body_start = self.new_block_with_unwind(rescue_entry);
+            (!begin.rescue.is_empty()).then(|| self.new_block_with_unwind(rescue_unwind));
+        let protected_unwind = rescue_entry.or(ensure_entry).or(outer_unwind);
+        let body_start = self.new_block_with_unwind(protected_unwind);
         self.jump(block, body_start, Vec::new());
 
         let body_flow = match begin.body {
@@ -1358,7 +1364,7 @@ impl<'program> Builder<'program> {
         if body_flow.reachable {
             let mut normal_flow = body_flow;
             if let Some(else_body) = begin.else_body {
-                let else_block = builder_new_block_like(self, normal_flow.block, outer_unwind);
+                let else_block = builder_new_block_like(self, normal_flow.block, rescue_unwind);
                 self.jump(normal_flow.block, else_block, Vec::new());
                 normal_flow = self.lower_expr(else_body, else_block);
             }
@@ -1380,11 +1386,11 @@ impl<'program> Builder<'program> {
             let mut test = rescue_entry;
             let rescue_count = begin.rescue.len();
             for (index, clause) in begin.rescue.into_iter().enumerate() {
-                let body = self.new_block_with_unwind(outer_unwind);
+                let body = self.new_block_with_unwind(rescue_unwind);
                 let next = if index + 1 == rescue_count {
                     None
                 } else {
-                    Some(self.new_block_with_unwind(outer_unwind))
+                    Some(self.new_block_with_unwind(rescue_unwind))
                 };
                 if clause.exceptions.is_empty() {
                     self.jump(test, body, Vec::new());
@@ -1411,9 +1417,9 @@ impl<'program> Builder<'program> {
                             true,
                         );
                         let false_target = if condition_index + 1 == clause.exceptions.len() {
-                            next.unwrap_or_else(|| self.new_block_with_unwind(outer_unwind))
+                            next.unwrap_or_else(|| self.new_block_with_unwind(rescue_unwind))
                         } else {
-                            self.new_block_with_unwind(outer_unwind)
+                            self.new_block_with_unwind(rescue_unwind)
                         };
                         self.branch(
                             condition_flow.block,
@@ -1475,10 +1481,13 @@ impl<'program> Builder<'program> {
                 ),
             };
             if ensure_flow.reachable {
-                self.jump(
+                self.set_terminator(
                     ensure_flow.block,
-                    after,
-                    vec![ensure_value.expect("ensure value")],
+                    Terminator::EnsureComplete {
+                        expression,
+                        target: after,
+                        arguments: vec![ensure_value.expect("ensure value")],
+                    },
                 );
             }
         }

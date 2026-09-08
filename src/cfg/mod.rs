@@ -34,6 +34,9 @@ pub struct Cfg {
     /// their branch and join blocks.  The IDs let the transfer phase execute
     /// a branch without rediscovering it from parser nodes.
     pub conditionals: Vec<Conditional>,
+    /// Entry blocks for ensure regions. The transfer phase uses this owned
+    /// marker to distinguish an ensure completion from an ordinary jump.
+    pub ensure_entries: Vec<BlockId>,
     /// Source spans where lowering required a transitional unsupported handoff.
     pub unsupported_spans: Vec<Span>,
     /// The value produced by each HIR expression, when it has a normally
@@ -210,5 +213,12 @@ pub enum Terminator {
     },
     Return(Option<ValueId>),
     Raise(ValueId),
+    /// Complete an ensure body. Normal state continues to `target`; a
+    /// pending raised outcome is routed through the block's unwind edge.
+    EnsureComplete {
+        expression: ExprId,
+        target: BlockId,
+        arguments: Vec<ValueId>,
+    },
     Unreachable,
 }
