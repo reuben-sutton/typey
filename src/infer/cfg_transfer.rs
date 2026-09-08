@@ -222,6 +222,15 @@ fn expr_can_transfer(
         ExprKind::Sequence(expressions) => expressions
             .iter()
             .all(|expression| expr_can_transfer(program, *expression, visiting)),
+        ExprKind::If {
+            condition,
+            then_body,
+            else_body,
+        } => {
+            expr_can_transfer(program, *condition, visiting)
+                && expr_can_transfer(program, *then_body, visiting)
+                && else_body.is_none_or(|else_body| expr_can_transfer(program, else_body, visiting))
+        }
         _ => false,
     };
     visiting.remove(&expression);
@@ -700,6 +709,36 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         };
         Some((truthy, falsy, test_type))
     }
+
+    fn truthiness_reachability(source: &Type) -> (bool, bool) {
+        (
+            !source.truthy_part().is_never(),
+            !source.falsy_part().is_never(),
+        )
+    }
+
+    fn narrow_conditional_branch(
+        &mut self,
+        graph: &cfg::Cfg,
+        block: cfg::BlockId,
+        truthy: bool,
+        environment: &mut Environment,
+    ) {
+        let Some(conditional) = graph.conditionals.iter().find(|conditional| {
+            (truthy && conditional.truthy == block) || (!truthy && conditional.falsy == block)
+        }) else {
+            return;
+        };
+        let Some(expression) = self.analyzer.hir_program.expression(conditional.condition) else {
+            return;
+        };
+        let span = (expression.span.start as usize, expression.span.end as usize);
+        let Some(node) = self.nodes.nodes.get(&span) else {
+            return;
+        };
+        self.analyzer
+            .narrow_from_predicate(node, environment, truthy);
+    }
 }
 
 impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src, 'node> {
@@ -814,23 +853,55 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                 truthy,
                 falsy,
             } => {
-                let operation = block
-                    .operations
-                    .iter()
-                    .find(|operation| operation.result == Some(*condition))
-                    .ok_or(())?;
-                let cfg::OperationKind::PatternTest { value, pattern } = &operation.kind else {
-                    return Err(());
+                let pattern =
+                    block
+                        .operations
+                        .iter()
+                        .find_map(|operation| match operation.result {
+                            Some(result) if result == *condition => {
+                                if let cfg::OperationKind::PatternTest { value, pattern } =
+                                    &operation.kind
+                                {
+                                    Some((Some(*value), Some(pattern)))
+                                } else {
+                                    Some((None, None))
+                                }
+                            }
+                            _ => None,
+                        });
+                let (source_id, pattern) = pattern.unwrap_or((None, None));
+                let source = next.value(source_id.unwrap_or(*condition)).ok_or(())?;
+                let (truthy_reachable, falsy_reachable) = if let Some(pattern) = pattern {
+                    let (truthy, falsy, _) =
+                        Self::pattern_reachability(pattern, &source).ok_or(())?;
+                    (truthy, falsy)
+                } else {
+                    Self::truthiness_reachability(&source)
                 };
-                let source = next.value(*value).ok_or(())?;
-                let (truthy_reachable, falsy_reachable, _) =
-                    Self::pattern_reachability(pattern, &source).ok_or(())?;
                 let mut edges = Vec::with_capacity(2);
                 if truthy_reachable {
-                    edges.push(edge(*truthy, next.clone()));
+                    let mut state = next.clone();
+                    if pattern.is_none() {
+                        self.narrow_conditional_branch(
+                            graph,
+                            *truthy,
+                            true,
+                            &mut state.environment,
+                        );
+                    }
+                    edges.push(edge(*truthy, state));
                 }
                 if falsy_reachable {
-                    edges.push(edge(*falsy, next));
+                    let mut state = next;
+                    if pattern.is_none() {
+                        self.narrow_conditional_branch(
+                            graph,
+                            *falsy,
+                            false,
+                            &mut state.environment,
+                        );
+                    }
+                    edges.push(edge(*falsy, state));
                 }
                 Ok(edges)
             }

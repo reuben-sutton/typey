@@ -38,6 +38,15 @@ class CfgBodyTransfer
   def keyword_call
     keyword_target(1, label: "ready")
   end
+
+  #: (String?) -> String
+  def conditional(value)
+    if value
+      value.upcase
+    else
+      "missing"
+    end
+  end
 end
 
 CfgBodyTransfer.new.value
