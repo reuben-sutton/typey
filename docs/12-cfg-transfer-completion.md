@@ -190,6 +190,10 @@ The first modularization steps are now in place:
 * Prism source recording, send classification, parser diagnostics, and type
   deduplication now share `infer/source.rs` with owned `SourceSite` recording;
   the analyzer no longer carries a second source-publication implementation.
+* CFG fallback telemetry now records parser call adapters as `legacy_bridge`,
+  preflight/operation failures as `unsupported_operation`, and malformed
+  worklist successors as `unsupported_edge`, including source spans when the
+  fallback originates from an owned body.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
   `BoundProc` `call`/`[]` operations from CFG values, including argument
   checking and optional RBS block contracts; the optional-block fixture also

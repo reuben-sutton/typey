@@ -1,5 +1,5 @@
 use super::cfg_state::BlockState;
-use super::{Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, OutcomeTypes};
+use super::{Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, OutcomeTypes, SourceSite};
 use crate::cfg;
 use crate::hir;
 use crate::prism;
@@ -68,11 +68,24 @@ impl<'src> Analyzer<'src> {
         kind: &str,
         fallback: CfgFallbackKind,
     ) {
+        self.record_cfg_fallback_at(
+            SourceSite::from_prism_span(prism::span(node)),
+            kind,
+            fallback,
+        );
+    }
+
+    pub(super) fn record_cfg_fallback_at(
+        &mut self,
+        site: SourceSite,
+        kind: &str,
+        fallback: CfgFallbackKind,
+    ) {
         self.cfg_transfer_fallbacks.record(fallback);
         if self.config.debug {
             eprintln!(
                 "[typey] CFG fallback for {kind} at {:?}: no owned transfer is available",
-                prism::span(node)
+                (site.start, site.end)
             );
         }
     }
@@ -84,6 +97,7 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         self.cfg_transfer_calls = self.cfg_transfer_calls.saturating_add(1);
+        self.record_cfg_fallback(node, "call", CfgFallbackKind::LegacyBridge);
         // The CFG supplies the dispatch name and argument-shape operation.
         // HirCallView retains only Prism child nodes so the existing transfer
         // machinery can evaluate child expressions until the owned value

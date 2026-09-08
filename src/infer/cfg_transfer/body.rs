@@ -748,6 +748,11 @@ impl<'src> Analyzer<'src> {
         record_result: bool,
     ) -> Option<Eval> {
         if !preflight::body_can_transfer(&self.hir_program, body_id) {
+            self.record_cfg_fallback_at(
+                body_site,
+                "body",
+                super::CfgFallbackKind::UnsupportedOperation,
+            );
             return None;
         }
         // The graph is syntax-only and immutable. It is lowered once when the
@@ -810,6 +815,11 @@ impl<'src> Analyzer<'src> {
                 )
             })
         }) {
+            self.record_cfg_fallback_at(
+                body_site,
+                "operation",
+                super::CfgFallbackKind::UnsupportedOperation,
+            );
             return None;
         }
 
@@ -833,7 +843,25 @@ impl<'src> Analyzer<'src> {
             terminal_flow: Flow::empty(),
             final_environment: None,
         };
-        let worklist = cfg::transfer::run(&graph, &mut transfer, initial).ok()?;
+        let worklist = match cfg::transfer::run(&graph, &mut transfer, initial) {
+            Ok(worklist) => worklist,
+            Err(cfg::transfer::WorklistError::InvalidBlock(_)) => {
+                transfer.analyzer.record_cfg_fallback_at(
+                    body_site,
+                    "edge",
+                    super::CfgFallbackKind::UnsupportedEdge,
+                );
+                return None;
+            }
+            Err(cfg::transfer::WorklistError::Transfer(_)) => {
+                transfer.analyzer.record_cfg_fallback_at(
+                    body_site,
+                    "operation",
+                    super::CfgFallbackKind::UnsupportedOperation,
+                );
+                return None;
+            }
+        };
         let normal_type = transfer.normal_type.clone();
         let abrupt = transfer.abrupt.clone();
         let terminal_flow = transfer.terminal_flow;
