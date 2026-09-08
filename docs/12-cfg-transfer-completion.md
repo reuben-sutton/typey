@@ -19,8 +19,8 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates are 18 CFG tests, 10 HIR tests, 344 checker tests, and
-171 conformance tests passing. The
+The current local gates are 18 CFG tests, 10 HIR tests, 346 checker tests, and
+173 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has semantic bridges in the
 legacy recursive path: call dispatch still uses Prism children for exact
@@ -157,8 +157,8 @@ The first modularization steps are now in place:
 * `MakeClosure` transfers from its owned `ClosureId` and closure span, so
   closure creation no longer performs a source-span lookup;
 * ordinary `while`/`until` bodies now pass CFG preflight, including local
-  value-carrying `break` and `next`; non-local block outcomes remain explicitly
-  deferred until the outcome state records their enclosing-expression type;
+  value-carrying `break` and `next`; block `return`, `break`, and `next` now
+  lower to explicit pending outcomes and preserve the enclosing call path;
 * simple `for` loops now lower collection iteration and target binding into
   owned CFG operations, preserving the zero-iteration path; unsupported
   multi-target forms remain explicit preflight fallbacks;
@@ -168,8 +168,8 @@ The first modularization steps are now in place:
   type-based narrowing;
 * method-local explicit `return` expressions now pass CFG preflight, join all
   terminal return values and environments, and record enclosing conditional
-  expressions on return paths; non-local returns from ordinary blocks remain
-  deferred until outcome routing is explicit;
+  expressions on return paths; non-local returns from ordinary blocks use the
+  same outcome algebra and run through active ensure regions;
 * CFG conditional transfer preserves both predicate edges for inferred local
   variables, matching the recursive evaluator's gradual-flow treatment even
   when a current method summary contains a concrete argument type;
@@ -177,8 +177,8 @@ The first modularization steps are now in place:
   handlers consume the pending exception and unmatched exceptions continue to
   the outer handler;
 * ensure regions have explicit entry metadata and an `EnsureComplete`
-  terminator, so normal and raised outcomes execute the ensure body before
-  continuing or re-raising; and
+  terminator, so normal, raised, and pending non-local outcomes execute the
+  ensure body before continuing, re-raising, or completing the outcome; and
 * retry is lowered to the protected body entry, and synthesized calls such as
   compound-assignment sends use owned CFG operands even without a HIR `Call`.
 * ordinary inline callback blocks now transfer from owned closure parameters,
@@ -253,10 +253,8 @@ dedicated legacy adapter; and
 semantics. Removing those requires moving their diagnostic and block contracts
 to owned source sites rather than weakening the checker. CFG fallback telemetry now
 distinguishes unsupported operations, unsupported edges, and legacy bridges;
-the latter two categories are wired for the exceptional-control-flow work but
-are not yet populated by the migrated ordinary-body path. Non-local `return`,
-`break`, and `next` outcomes still need explicit pending-outcome routing through
-ensure regions.
+the migrated ordinary-body path now uses explicit outcome routing for
+non-local `return`, `break`, and `next`, including through ensure regions.
 
 ## Design
 
@@ -400,7 +398,8 @@ because its Prism node was not found.
 3. Convert dynamic/logical/compound writes and closure/block transfer.
 4. Unify conditional, loop, and `for` state transfer on owned expression IDs.
 5. Implement rescue, retry, and ensure unwind routing. Non-local `return`,
-   `break`, and `next` outcomes remain the next control-flow slice.
+   `break`, and `next` outcome routing is now explicit; the remaining work is
+   to retire the parser-backed call and DSL bridges.
 6. Delete `CallNodeIndex` from CFG transfer and make `HirCallView` recursive
    only.
 7. Run CFG by default behind a temporary opt-out, then remove the opt-out once
