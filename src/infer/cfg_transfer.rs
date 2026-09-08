@@ -364,16 +364,18 @@ fn expr_can_transfer(
                 expr_can_transfer(program, else_body, visiting, loop_depth, local_return)
             })
         }
-        // Value-carrying break and next still need non-local outcome values
-        // in the transfer state. A valueless form is safe here because its
-        // outcome is the same nil value already materialized by lowering.
         ExprKind::Return(value) => {
             local_return
                 && value.is_none_or(|value| {
                     expr_can_transfer(program, value, visiting, loop_depth, local_return)
                 })
         }
-        ExprKind::Break(value) | ExprKind::Next(value) => loop_depth > 0 && value.is_none(),
+        ExprKind::Break(value) | ExprKind::Next(value) => {
+            loop_depth > 0
+                && value.is_none_or(|value| {
+                    expr_can_transfer(program, value, visiting, loop_depth, local_return)
+                })
+        }
         ExprKind::If {
             condition,
             then_body,
@@ -1212,6 +1214,33 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             .iter()
             .any(|candidate| candidate.unwind == Some(block))
     }
+
+    fn conditional_reachability(
+        &self,
+        graph: &cfg::Cfg,
+        truthy: cfg::BlockId,
+        falsy: cfg::BlockId,
+        source: &Type,
+        state: &BlockState,
+    ) -> (bool, bool) {
+        let condition = graph
+            .conditionals
+            .iter()
+            .find(|conditional| conditional.truthy == truthy && conditional.falsy == falsy)
+            .map(|conditional| conditional.condition);
+        if let Some(hir::ExprKind::Read(Read::Local(local))) = condition
+            .and_then(|condition| self.analyzer.hir_program.expression(condition))
+            .map(|expression| &expression.kind)
+        {
+            let Some(name) = self.analyzer.hir_program.local_name(*local) else {
+                return Self::truthiness_reachability(source);
+            };
+            if state.environment.is_inferred(name.as_str()) {
+                return (true, true);
+            }
+        }
+        Self::truthiness_reachability(source)
+    }
 }
 
 impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src, 'node> {
@@ -1424,7 +1453,7 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                         .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
                     (truthy, falsy)
                 } else {
-                    Self::truthiness_reachability(&source)
+                    self.conditional_reachability(graph, *truthy, *falsy, &source, &next)
                 };
                 let mut edges = Vec::with_capacity(2);
                 if truthy_reachable {
