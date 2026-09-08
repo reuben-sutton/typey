@@ -460,6 +460,38 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    pub(super) fn cfg_dynamic_instance_variable_name(
+        &self,
+        input: &OwnedCallInput,
+    ) -> Option<String> {
+        let expression = input
+            .expression
+            .and_then(|expression| self.hir_program.expression(expression))?;
+        let hir::ExprKind::Call(call) = &expression.kind else {
+            return None;
+        };
+        let hir::Argument::Positional(argument) = call.arguments.first()? else {
+            return None;
+        };
+        let expression = self.hir_program.expression(*argument)?;
+        let name = match &expression.kind {
+            hir::ExprKind::Literal(hir::Literal::Symbol(name)) => name.clone(),
+            // HIR string literals retain their source spelling. Dynamic ivar
+            // APIs conventionally receive symbols, but accept the ordinary
+            // quoted-string form as well when it is statically known.
+            hir::ExprKind::Literal(hir::Literal::String(name)) => name
+                .strip_prefix('"')
+                .and_then(|name| name.strip_suffix('"'))
+                .or_else(|| {
+                    name.strip_prefix('\'')
+                        .and_then(|name| name.strip_suffix('\''))
+                })
+                .map(str::to_owned)?,
+            _ => return None,
+        };
+        name.starts_with('@').then_some(name)
+    }
+
     pub(super) fn cfg_owned_hir_call_arguments(
         &mut self,
         input: &OwnedCallInput,

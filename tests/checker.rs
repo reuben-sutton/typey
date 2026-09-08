@@ -194,6 +194,23 @@ fn transfers_global_array_coercion_through_shared_intrinsic_semantics() {
 }
 
 #[test]
+fn transfers_known_dynamic_instance_variables_through_owned_calls() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_dynamic_instance_variable_get.rb")
+        .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_straight_line_method_bodies_without_changing_results() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_body_transfer.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());

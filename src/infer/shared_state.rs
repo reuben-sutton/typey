@@ -33,15 +33,31 @@ impl<'src> Analyzer<'src> {
         environment: &Environment,
         name: &str,
     ) -> Vec<IvarKey> {
-        if receiver_node.is_none()
-            || receiver_node.is_some_and(|node| node.as_self_node().is_some())
-        {
+        self.dynamic_ivar_keys_for_receiver(
+            receiver_node.is_none()
+                || receiver_node.is_some_and(|node| node.as_self_node().is_some()),
+            receiver_type,
+            environment,
+            name,
+        )
+    }
+
+    fn dynamic_ivar_keys_for_receiver(
+        &self,
+        receiver_is_self: bool,
+        receiver_type: &Type,
+        environment: &Environment,
+        name: &str,
+    ) -> Vec<IvarKey> {
+        if receiver_is_self {
             return self.ivar_key(environment, name).into_iter().collect();
         }
         if let Type::Union(members) = receiver_type {
             return members
                 .iter()
-                .flat_map(|member| self.dynamic_ivar_keys(receiver_node, member, environment, name))
+                .flat_map(|member| {
+                    self.dynamic_ivar_keys_for_receiver(false, member, environment, name)
+                })
                 .collect();
         }
         if let Some(instance) = Self::class_object_instance_type(receiver_type) {
@@ -71,6 +87,28 @@ impl<'src> Analyzer<'src> {
             })
             .into_iter()
             .collect()
+    }
+
+    pub(super) fn eval_dynamic_instance_variable_call_owned(
+        &mut self,
+        name: &str,
+        receiver_type: &Type,
+        receiver_is_self: bool,
+        ivar_name: Option<&str>,
+        argument_types: &[Type],
+        environment: &Environment,
+    ) -> Option<Type> {
+        let keys = ivar_name
+            .map(|name| {
+                self.dynamic_ivar_keys_for_receiver(
+                    receiver_is_self,
+                    receiver_type,
+                    environment,
+                    name,
+                )
+            })
+            .unwrap_or_default();
+        self.eval_dynamic_instance_variable_call_for_keys(name, keys, argument_types)
     }
 
     pub(super) fn begin_method_evaluation(&mut self, method: &MethodKey) {
@@ -195,6 +233,15 @@ impl<'src> Analyzer<'src> {
             .as_deref()
             .map(|name| self.dynamic_ivar_keys(receiver_node, receiver_type, environment, name))
             .unwrap_or_default();
+        self.eval_dynamic_instance_variable_call_for_keys(name, keys, argument_types)
+    }
+
+    fn eval_dynamic_instance_variable_call_for_keys(
+        &mut self,
+        name: &str,
+        keys: Vec<IvarKey>,
+        argument_types: &[Type],
+    ) -> Option<Type> {
         match name {
             "instance_variable_set" => {
                 let actual = argument_types.get(1).cloned().unwrap_or(Type::Any);

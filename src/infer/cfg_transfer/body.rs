@@ -222,7 +222,28 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         };
         let has_block = input.block.is_some();
         let mut block_result = None;
-        let (type_, untyped_origin) = if input.name.as_str() == "!" {
+        let dynamic_instance_variable_type = if matches!(
+            input.name.as_str(),
+            "instance_variable_get" | "instance_variable_set" | "instance_variable_defined?"
+        ) {
+            analyzer
+                .cfg_dynamic_instance_variable_name(&input)
+                .and_then(|name| {
+                    analyzer.eval_dynamic_instance_variable_call_owned(
+                        input.name.as_str(),
+                        &receiver_type,
+                        matches!(input.receiver, cfg::ReceiverOperand::Implicit),
+                        Some(&name),
+                        &call_arguments.argument_types,
+                        environment,
+                    )
+                })
+        } else {
+            None
+        };
+        let (type_, untyped_origin) = if let Some(type_) = dynamic_instance_variable_type {
+            (type_, UntypedOrigin::Propagated)
+        } else if input.name.as_str() == "!" {
             // Unary negation is Ruby's boolean protocol, not a normal method
             // lookup. In particular, it must work for nilable block locals
             // before flow narrowing has selected their non-nil branch.
