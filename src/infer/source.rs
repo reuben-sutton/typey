@@ -65,6 +65,17 @@ impl<'src> Analyzer<'src> {
         type_
     }
 
+    pub(super) fn remember_untyped_origin_at(
+        &mut self,
+        site: SourceSite,
+        type_: &Type,
+        origin: UntypedOrigin,
+    ) {
+        if type_.contains_any() {
+            self.untyped_origins.insert((site.start, site.end), origin);
+        }
+    }
+
     pub(super) fn error_at(&mut self, site: SourceSite, message: impl Into<String>) {
         if !self.report || self.suppress_diagnostics {
             return;

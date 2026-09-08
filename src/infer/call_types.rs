@@ -90,48 +90,87 @@ impl<'src> Analyzer<'src> {
             );
             let group = call.arguments.get(group_start..*group_end)?;
             if !group.is_empty()
-                && group
-                    .iter()
-                    .all(|argument| matches!(argument, hir::Argument::Keyword { .. }))
+                && group.iter().all(|argument| {
+                    matches!(
+                        argument,
+                        hir::Argument::Keyword { .. } | hir::Argument::KeywordSplat(_)
+                    )
+                })
             {
-                let keyword_value_nodes = argument_node
+                let keyword_entries = argument_node
                     .as_keyword_hash_node()?
                     .elements()
                     .into_iter()
                     .map(|element| {
-                        let assoc = element.as_assoc_node()?;
-                        self.record(&assoc.key(), Type::Symbol);
-                        Some(assoc.value())
+                        if let Some(assoc) = element.as_assoc_node() {
+                            self.record(&assoc.key(), Type::Symbol);
+                            Some((true, assoc.value()))
+                        } else if let Some(splat) = element.as_assoc_splat_node() {
+                            Some((false, splat.value()?))
+                        } else {
+                            None
+                        }
                     })
                     .collect::<Option<Vec<_>>>()?;
-                let mut keyword_value_nodes = keyword_value_nodes.into_iter();
+                let mut keyword_entries = keyword_entries.into_iter();
                 let mut key = Type::Never;
                 let mut value = Type::Never;
                 let mut keyword_arguments = Vec::with_capacity(group.len());
                 for argument in group {
-                    let hir::Argument::Keyword { name, value: _ } = argument else {
-                        return None;
-                    };
-                    let cfg::ArgumentOperand::Keyword {
-                        name: operand_name,
-                        value: cfg_value_id,
-                    } = input.arguments.get(operand_index)?
-                    else {
-                        return None;
-                    };
-                    let type_ = values.get(cfg_value_id.0 as usize).cloned().flatten()?;
-                    let value_node = keyword_value_nodes.next()?;
-                    if name.as_str() != operand_name.as_str() {
-                        return None;
+                    let (pair, value_node) = keyword_entries.next()?;
+                    match argument {
+                        hir::Argument::Keyword { name, value: _ } if pair => {
+                            let cfg::ArgumentOperand::Keyword {
+                                name: operand_name,
+                                value: cfg_value_id,
+                            } = input.arguments.get(operand_index)?
+                            else {
+                                return None;
+                            };
+                            let type_ = values.get(cfg_value_id.0 as usize).cloned().flatten()?;
+                            if name.as_str() != operand_name.as_str() {
+                                return None;
+                            }
+                            key = key.join(&Type::Symbol);
+                            value = value.join(&type_);
+                            keyword_arguments.push(KeywordArgument {
+                                name: name.as_str().to_owned(),
+                                node: value_node,
+                                type_,
+                            });
+                        }
+                        hir::Argument::KeywordSplat(_) if !pair => {
+                            let cfg::ArgumentOperand::KeywordSplat(value_id) =
+                                input.arguments.get(operand_index)?
+                            else {
+                                return None;
+                            };
+                            let type_ = values.get(value_id.0 as usize).cloned().flatten()?;
+                            call_arguments.has_keyword_splat = true;
+                            match type_ {
+                                Type::Hash(splat_key, splat_value) => {
+                                    key = key.join(&splat_key);
+                                    value = value.join(&splat_value);
+                                    call_arguments.has_dynamic_keyword_splat = true;
+                                }
+                                Type::Any => {
+                                    key = Type::Any;
+                                    value = Type::Any;
+                                    call_arguments.has_unknown_keyword_splat = true;
+                                }
+                                _ => {
+                                    key = Type::Any;
+                                    value = Type::Any;
+                                    call_arguments.has_dynamic_keyword_splat = true;
+                                }
+                            }
+                        }
+                        _ => return None,
                     }
-                    key = key.join(&Type::Symbol);
-                    value = value.join(&type_);
-                    keyword_arguments.push(KeywordArgument {
-                        name: name.as_str().to_owned(),
-                        node: value_node,
-                        type_,
-                    });
                     operand_index += 1;
+                }
+                if keyword_entries.next().is_some() {
+                    return None;
                 }
                 let key = if key.is_never() { Type::Any } else { key };
                 let value = if value.is_never() { Type::Any } else { value };

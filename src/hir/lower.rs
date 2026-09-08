@@ -574,7 +574,10 @@ impl<'src> Lowerer<'src> {
                 .map(|element| {
                     if let Some(splat) = element.as_splat_node() {
                         if let Some(value) = splat.expression() {
-                            ArrayElement::Splat(self.lower_node(&value))
+                            ArrayElement::Splat {
+                                value: self.lower_node(&value),
+                                span: self.span(&element),
+                            }
                         } else {
                             ArrayElement::Value(self.lower_node(&element))
                         }
@@ -1144,12 +1147,21 @@ impl<'src> Lowerer<'src> {
                     }
                 } else if let Some(splat) = child.as_assoc_splat_node() {
                     if let Some(value) = splat.value() {
-                        HashElement::Splat(self.lower_node(&value))
+                        HashElement::Splat {
+                            value: self.lower_node(&value),
+                            span: self.span(&child),
+                        }
                     } else {
-                        HashElement::Splat(self.lower_node(&child))
+                        HashElement::Splat {
+                            value: self.lower_node(&child),
+                            span: self.span(&child),
+                        }
                     }
                 } else {
-                    HashElement::Splat(self.lower_node(&child))
+                    HashElement::Splat {
+                        value: self.lower_node(&child),
+                        span: self.span(&child),
+                    }
                 }
             })
             .collect();

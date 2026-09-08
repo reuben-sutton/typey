@@ -302,13 +302,13 @@ pub enum BlockArgument {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArrayElement {
     Value(ExprId),
-    Splat(ExprId),
+    Splat { value: ExprId, span: Span },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HashElement {
     Pair { key: ExprId, value: ExprId },
-    Splat(ExprId),
+    Splat { value: ExprId, span: Span },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

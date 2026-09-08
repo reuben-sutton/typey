@@ -11,6 +11,12 @@ class CfgBodyTransfer
     [values, mapping]
   end
 
+  def collection_splats
+    values = [1, "two"]
+    mapping = {"value" => 1, **{"other" => 2}}
+    [[0, *values], mapping["value"]]
+  end
+
   def increment
     value = 1
     value += 2
@@ -37,6 +43,15 @@ class CfgBodyTransfer
 
   def keyword_call
     keyword_target(1, label: "ready")
+  end
+
+  def keyword_rest_target(**values)
+    values
+  end
+
+  def keyword_splat_call
+    values = {"count" => 1}
+    keyword_rest_target(**values)
   end
 
   #: (Integer, String) -> void

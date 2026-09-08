@@ -617,9 +617,9 @@ impl<'program> Builder<'program> {
         let mut block = block;
         let mut lowered = Vec::new();
         for element in elements {
-            let (value, splat) = match element {
-                hir::ArrayElement::Value(value) => (value, false),
-                hir::ArrayElement::Splat(value) => (value, true),
+            let (value, splat_span) = match element {
+                hir::ArrayElement::Value(value) => (value, None),
+                hir::ArrayElement::Splat { value, span } => (value, Some(span)),
             };
             let flow = self.lower_expr(value, block);
             if !flow.reachable {
@@ -627,10 +627,9 @@ impl<'program> Builder<'program> {
             }
             block = flow.block;
             let value = flow.value.expect("array element produces a value");
-            lowered.push(if splat {
-                ArrayOperand::Splat(value)
-            } else {
-                ArrayOperand::Value(value)
+            lowered.push(match splat_span {
+                Some(span) => ArrayOperand::Splat { value, span },
+                None => ArrayOperand::Value(value),
             });
         }
         let value = self.emit(
@@ -668,15 +667,16 @@ impl<'program> Builder<'program> {
                         value: value_flow.value.expect("hash value produces a value"),
                     });
                 }
-                hir::HashElement::Splat(value) => {
+                hir::HashElement::Splat { value, span } => {
                     let flow = self.lower_expr(value, block);
                     if !flow.reachable {
                         return self.abrupt(expression, flow.block);
                     }
                     block = flow.block;
-                    lowered.push(HashOperand::Splat(
-                        flow.value.expect("hash splat produces a value"),
-                    ));
+                    lowered.push(HashOperand::Splat {
+                        value: flow.value.expect("hash splat produces a value"),
+                        span,
+                    });
                 }
             }
         }

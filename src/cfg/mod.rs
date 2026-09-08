@@ -178,13 +178,13 @@ pub enum BlockOperand {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArrayOperand {
     Value(ValueId),
-    Splat(ValueId),
+    Splat { value: ValueId, span: Span },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HashOperand {
     Pair { key: ValueId, value: ValueId },
-    Splat(ValueId),
+    Splat { value: ValueId, span: Span },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

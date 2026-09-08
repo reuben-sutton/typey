@@ -1,6 +1,6 @@
 use super::{
     ivar_refinement_key, Analyzer, CallSite, Environment, Eval, Flow, FlowKind, HirCallView,
-    MethodKey, OutcomeTypes, OwnedCallInput, SharedKey, SourceSite, Strictness,
+    MethodKey, OutcomeTypes, OwnedCallInput, SharedKey, SourceSite, Strictness, UntypedOrigin,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
@@ -146,24 +146,22 @@ fn expr_can_transfer(
                     hir::Argument::Keyword { value, .. } => {
                         expr_can_transfer(program, *value, visiting)
                     }
-                    hir::Argument::KeywordSplat(_) | hir::Argument::Forwarded => false,
+                    hir::Argument::KeywordSplat(value) => {
+                        expr_can_transfer(program, *value, visiting)
+                    }
+                    hir::Argument::Forwarded => false,
                 })
         }
-        ExprKind::Array(elements) => elements.iter().all(|element| {
-            match element {
-                ArrayElement::Value(value) => expr_can_transfer(program, *value, visiting),
-                // The splat wrapper has its own source span and is not yet
-                // represented by an owned CFG operand.
-                ArrayElement::Splat(_) => false,
-            }
+        ExprKind::Array(elements) => elements.iter().all(|element| match element {
+            ArrayElement::Value(value) => expr_can_transfer(program, *value, visiting),
+            ArrayElement::Splat { value, .. } => expr_can_transfer(program, *value, visiting),
         }),
         ExprKind::Hash(elements) => elements.iter().all(|element| match element {
             HashElement::Pair { key, value } => {
                 expr_can_transfer(program, *key, visiting)
                     && expr_can_transfer(program, *value, visiting)
             }
-            // See the array-splat boundary above.
-            HashElement::Splat(_) => false,
+            HashElement::Splat { value, .. } => expr_can_transfer(program, *value, visiting),
         }),
         ExprKind::Assign {
             target,
@@ -456,30 +454,38 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
             argument_types: &call_arguments.argument_types,
             block: None,
         };
-        let type_ = if matches!(input.receiver, cfg::ReceiverOperand::Implicit) {
+        let (type_, untyped_origin) = if matches!(input.receiver, cfg::ReceiverOperand::Implicit) {
             let key = analyzer.implicit_method_key(input.name.as_str(), environment);
             analyzer.record_method_dependency(&key, environment);
             if let Some(signature) = analyzer
                 .observe_call(&key, &call_arguments, false)
                 .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
             {
-                analyzer.invoke_signature(
+                let type_ = analyzer.invoke_signature(
                     node,
                     input.name.as_str(),
                     &signature,
                     &call_arguments,
                     Some(&receiver_type),
                     None,
-                )
+                );
+                let origin = analyzer
+                    .resolve_method_key(&key)
+                    .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
+                    .is_some_and(|state| state.explicit)
+                    .then_some(UntypedOrigin::DeclaredSignature)
+                    .unwrap_or(UntypedOrigin::InferredMethod);
+                (type_, origin)
             } else {
-                analyzer.eval_global_call(
+                let type_ = analyzer.eval_global_call(
                     node,
                     input.name.as_str(),
                     &call_arguments.argument_nodes,
                     &call_arguments.argument_types,
                     None,
                     environment,
-                )
+                );
+                (type_, UntypedOrigin::FallbackCall)
             }
         } else {
             let dispatch_receiver = receiver_type.clone();
@@ -503,30 +509,50 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                         Some(&dispatch_receiver),
                         None,
                     );
-                    if input.name.as_str() == "new"
+                    let type_ = if input.name.as_str() == "new"
                         && Analyzer::class_object_instance_type(&dispatch_receiver).is_some()
                     {
                         analyzer.instantiate_generic_class(type_)
                     } else {
                         type_
-                    }
+                    };
+                    let origin = analyzer
+                        .resolve_method_key(&key)
+                        .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
+                        .is_some_and(|state| state.explicit)
+                        .then_some(UntypedOrigin::DeclaredSignature)
+                        .unwrap_or(UntypedOrigin::InferredMethod);
+                    (type_, origin)
                 } else {
-                    analyzer.eval_method_call(
+                    let type_ = analyzer.eval_method_call(
                         &dispatch_receiver,
                         input.name.as_str(),
                         &site,
                         environment,
-                    )
+                    );
+                    let origin = if dispatch_receiver.contains_any() {
+                        UntypedOrigin::Propagated
+                    } else {
+                        UntypedOrigin::FallbackCall
+                    };
+                    (type_, origin)
                 }
             } else {
-                analyzer.eval_method_call(
+                let type_ = analyzer.eval_method_call(
                     &dispatch_receiver,
                     input.name.as_str(),
                     &site,
                     environment,
-                )
+                );
+                let origin = if dispatch_receiver.contains_any() {
+                    UntypedOrigin::Propagated
+                } else {
+                    UntypedOrigin::FallbackCall
+                };
+                (type_, origin)
             }
         };
+        analyzer.remember_untyped_origin_at(input.site, &type_, untyped_origin);
         let mut result = if type_.is_never() {
             Eval::raised(type_)
         } else {
@@ -556,14 +582,21 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         let mut fixed_length = true;
         let mut element = Type::Never;
         for operand in elements {
-            let (value, splat) = match operand {
-                cfg::ArrayOperand::Value(value) => (value, false),
-                cfg::ArrayOperand::Splat(value) => (value, true),
+            let (value, splat_span) = match operand {
+                cfg::ArrayOperand::Value(value) => (value, None),
+                cfg::ArrayOperand::Splat { value, span } => (value, Some(*span)),
             };
             let type_ = values.get(value.0 as usize).cloned().flatten()?;
-            let type_ = if splat {
+            let type_ = if let Some(span) = splat_span {
                 fixed_length = false;
-                analyzer.array_element_type(&type_)
+                let element_type = analyzer.array_element_type(&type_);
+                analyzer.record_at(
+                    SourceSite::from_span(span, None),
+                    type_.clone(),
+                    false,
+                    None,
+                );
+                element_type
             } else {
                 type_
             };
@@ -608,19 +641,19 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                     key = key.join(&values.get(key_id.0 as usize).cloned().flatten()?);
                     value = value.join(&values.get(value_id.0 as usize).cloned().flatten()?);
                 }
-                cfg::HashOperand::Splat(value_id) => {
-                    match values.get(value_id.0 as usize).cloned().flatten()? {
-                        Type::Hash(splat_key, splat_value) => {
-                            key = key.join(&splat_key);
-                            value = value.join(&splat_value);
-                        }
-                        Type::Any => {
-                            key = Type::Any;
-                            value = Type::Any;
-                        }
-                        _ => {}
+                cfg::HashOperand::Splat {
+                    value: value_id, ..
+                } => match values.get(value_id.0 as usize).cloned().flatten()? {
+                    Type::Hash(splat_key, splat_value) => {
+                        key = key.join(&splat_key);
+                        value = value.join(&splat_value);
                     }
-                }
+                    Type::Any => {
+                        key = Type::Any;
+                        value = Type::Any;
+                    }
+                    _ => {}
+                },
             }
         }
         let key = if key.is_never() { Type::Any } else { key };
@@ -1255,7 +1288,7 @@ impl<'src> Analyzer<'src> {
                     .iter()
                     .map(|element| match element {
                         cfg::ArrayOperand::Value(value) => Some(*value),
-                        cfg::ArrayOperand::Splat(_) => None,
+                        cfg::ArrayOperand::Splat { .. } => None,
                     })
                     .collect::<Option<Vec<_>>>()?;
                 Some((result, elements))
@@ -1433,7 +1466,7 @@ impl<'src> Analyzer<'src> {
         for (hir_element, prism_element) in elements.into_iter().zip(prism_elements) {
             let (value_node, splat) = match hir_element {
                 ArrayElement::Value(_) => (prism_element, false),
-                ArrayElement::Splat(_) => {
+                ArrayElement::Splat { .. } => {
                     let value_node = prism_element
                         .as_splat_node()
                         .and_then(|splat| splat.expression())
@@ -1507,7 +1540,7 @@ impl<'src> Analyzer<'src> {
                     key = key.join(&self.eval_node(&assoc.key(), environment).type_);
                     value = value.join(&self.eval_node(&assoc.value(), environment).type_);
                 }
-                HashElement::Splat(_) => {
+                HashElement::Splat { .. } => {
                     let Some(splat) = prism_element.as_assoc_splat_node() else {
                         return Eval::value(self.record(node, Type::Any));
                     };
