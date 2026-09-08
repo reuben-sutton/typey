@@ -14,6 +14,7 @@ use typey::{check, check_workspace, load_workspace, CheckerConfig, UntypedOrigin
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut path = None;
     let mut debug = false;
+    let mut enable_cfg = false;
     let mut ignores = Vec::new();
     let mut expecting_ignore = false;
     for argument in env::args().skip(1) {
@@ -28,11 +29,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match argument.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "usage: typey [OPTIONS] [PATH]\n\nPATH may be a Ruby/RBI file or a repository directory.\n\nOptions:\n    -d, --debug             print analysis progress to stderr\n        --ignore PATTERN    ignore matching repository paths\n        --ignore=PATTERN     ignore matching repository paths"
+                    "usage: typey [OPTIONS] [PATH]\n\nPATH may be a Ruby/RBI file or a repository directory.\n\nOptions:\n    -d, --debug             print analysis progress to stderr\n        --cfg               enable the opt-in HIR-to-CFG transfer path\n        --ignore PATTERN    ignore matching repository paths\n        --ignore=PATTERN     ignore matching repository paths"
                 );
                 return Ok(());
             }
             "-d" | "--debug" => debug = true,
+            "--cfg" => enable_cfg = true,
             "--ignore" => expecting_ignore = true,
             _ if argument.starts_with("--ignore=") => {
                 let pattern = argument.trim_start_matches("--ignore=");
@@ -50,6 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let config = CheckerConfig {
         debug,
+        enable_cfg,
         ..CheckerConfig::default()
     };
     if let Some(path) = path {
