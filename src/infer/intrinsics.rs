@@ -198,10 +198,9 @@ impl<'src> Analyzer<'src> {
             "Float" => Type::Float,
             "String" | "__dir__" => Type::String,
             "Symbol" => Type::Symbol,
-            "Array" => argument_types.first().map_or_else(
-                || Type::Array(Box::new(Type::Any)),
-                |type_| Type::Array(Box::new(self.array_coercion_element_type(type_))),
-            ),
+            "Array" => self
+                .global_call_type(name, argument_types)
+                .unwrap_or(Type::Any),
             "Hash" => {
                 if let Some(block) = block {
                     let hash = Type::Hash(Box::new(Type::Any), Box::new(Type::Any));
@@ -293,6 +292,20 @@ impl<'src> Analyzer<'src> {
                 let _ = (node, argument_nodes, environment);
                 Type::Any
             }
+        }
+    }
+
+    /// Return the result of a global call whose contract is structural rather
+    /// than an ordinary method signature.  The CFG call transfer uses this
+    /// same semantic layer as the parser-facing evaluator so intrinsic calls
+    /// cannot drift from their legacy behavior.
+    pub(super) fn global_call_type(&self, name: &str, argument_types: &[Type]) -> Option<Type> {
+        match name {
+            "Array" => Some(argument_types.first().map_or_else(
+                || Type::Array(Box::new(Type::Any)),
+                |type_| Type::Array(Box::new(self.array_coercion_element_type(type_))),
+            )),
+            _ => None,
         }
     }
 }

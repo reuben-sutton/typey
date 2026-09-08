@@ -268,41 +268,48 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 (Type::Any, UntypedOrigin::FallbackCall)
             }
         } else if matches!(input.receiver, cfg::ReceiverOperand::Implicit) {
-            let key = analyzer.implicit_method_key(input.name.as_str(), environment);
-            analyzer.record_method_dependency(&key, environment);
-            if let Some(signature) = analyzer
-                .observe_call(&key, &call_arguments, has_block)
-                .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
+            if let Some(type_) =
+                analyzer.global_call_type(input.name.as_str(), &call_arguments.argument_types)
             {
-                let callback_result = analyzer.cfg_block_return_type(
-                    &input,
-                    None,
-                    &key,
-                    &signature,
-                    &call_arguments,
-                    &receiver_type,
-                    values,
-                    environment,
-                );
-                let block_return_type = callback_result.as_ref().map(Analyzer::block_value_type);
-                let type_ = analyzer.invoke_signature_at(
-                    input.site,
-                    input.name.as_str(),
-                    &signature,
-                    &call_arguments,
-                    Some(&receiver_type),
-                    block_return_type.as_ref(),
-                );
-                block_result = callback_result;
-                let origin = analyzer
-                    .resolve_method_key(&key)
-                    .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
-                    .is_some_and(|state| state.explicit)
-                    .then_some(UntypedOrigin::DeclaredSignature)
-                    .unwrap_or(UntypedOrigin::InferredMethod);
-                (type_, origin)
+                (type_, UntypedOrigin::Propagated)
             } else {
-                return None;
+                let key = analyzer.implicit_method_key(input.name.as_str(), environment);
+                analyzer.record_method_dependency(&key, environment);
+                if let Some(signature) = analyzer
+                    .observe_call(&key, &call_arguments, has_block)
+                    .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
+                {
+                    let callback_result = analyzer.cfg_block_return_type(
+                        &input,
+                        None,
+                        &key,
+                        &signature,
+                        &call_arguments,
+                        &receiver_type,
+                        values,
+                        environment,
+                    );
+                    let block_return_type =
+                        callback_result.as_ref().map(Analyzer::block_value_type);
+                    let type_ = analyzer.invoke_signature_at(
+                        input.site,
+                        input.name.as_str(),
+                        &signature,
+                        &call_arguments,
+                        Some(&receiver_type),
+                        block_return_type.as_ref(),
+                    );
+                    block_result = callback_result;
+                    let origin = analyzer
+                        .resolve_method_key(&key)
+                        .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
+                        .is_some_and(|state| state.explicit)
+                        .then_some(UntypedOrigin::DeclaredSignature)
+                        .unwrap_or(UntypedOrigin::InferredMethod);
+                    (type_, origin)
+                } else {
+                    return None;
+                }
             }
         } else {
             let dispatch_receiver = if input.safe_navigation {
