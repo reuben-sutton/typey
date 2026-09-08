@@ -194,6 +194,10 @@ The first modularization steps are now in place:
   preflight/operation failures as `unsupported_operation`, and malformed
   worklist successors as `unsupported_edge`, including source spans when the
   fallback originates from an owned body.
+* receiver-union/intersection dispatch, resolved invocation, private-call
+  checks, overridable-`noreturn` widening, and termination recognition now
+  live in `infer/call_dispatch.rs`; `calls.rs` retains argument evaluation and
+  the outer call protocol.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
   `BoundProc` `call`/`[]` operations from CFG values, including argument
   checking and optional RBS block contracts; the optional-block fixture also
