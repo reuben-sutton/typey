@@ -198,6 +198,9 @@ The first modularization steps are now in place:
   checks, overridable-`noreturn` widening, and termination recognition now
   live in `infer/call_dispatch.rs`; `calls.rs` retains argument evaluation and
   the outer call protocol.
+* parser-backed `if`/`unless` flow transfer now lives with the loop and `for`
+  compatibility routines in `infer/control_flow.rs`; predicate narrowing and
+  environment joins remain shared flow services rather than coordinator code.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
   `BoundProc` `call`/`[]` operations from CFG values, including unioned
   callable receivers, argument checking, and optional RBS block contracts;

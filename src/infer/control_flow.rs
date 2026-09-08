@@ -6,8 +6,155 @@
 //! become interleaved again.
 
 use super::*;
+use ruby_prism::{IfNode, UnlessNode};
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn eval_if<'node>(
+        &mut self,
+        node: &Node<'node>,
+        if_node: &IfNode<'node>,
+        environment: &mut Environment,
+    ) -> Eval {
+        let predicate = if_node.predicate();
+        let previous_defer_inline_assertions = self.defer_inline_assertions;
+        self.defer_inline_assertions = true;
+        let predicate_type = self
+            .eval_node(&predicate, environment)
+            .normal_type
+            .unwrap_or(Type::Never);
+        self.defer_inline_assertions = previous_defer_inline_assertions;
+        let (then_reachable, else_reachable) =
+            self.predicate_reachability(&predicate, environment, &predicate_type);
+        let report_unreachable = self.should_report_unreachable_branch(node)
+            && self.predicate_is_precise(&predicate, environment);
+
+        let mut then_environment = environment.clone();
+        self.narrow_from_predicate(&predicate, &mut then_environment, true);
+        let then_result = if let Some(statements) = if_node.statements() {
+            if !then_reachable && report_unreachable {
+                if let Some(first) = statements.body().into_iter().next() {
+                    self.error(&first, "This code is unreachable");
+                }
+            }
+            self.eval_statements(&statements, &mut then_environment)
+        } else {
+            Eval::value(Type::Nil)
+        };
+        let then_result = if then_reachable {
+            then_result
+        } else {
+            // Keep checking an unreachable branch for diagnostics and reveals,
+            // but do not let its flow affect the enclosing expression.
+            Eval::unreachable()
+        };
+
+        let mut else_environment = environment.clone();
+        self.narrow_from_predicate(&predicate, &mut else_environment, false);
+        let else_result = if let Some(subsequent) = if_node.subsequent() {
+            if !else_reachable && report_unreachable {
+                if let Some(else_clause) = subsequent.as_else_node() {
+                    if let Some(statements) = else_clause.statements() {
+                        if let Some(first) = statements.body().into_iter().next() {
+                            self.error(&first, "This code is unreachable");
+                        }
+                    }
+                }
+            }
+            self.eval_alternative(&subsequent, &mut else_environment)
+        } else {
+            Eval::value(Type::Nil)
+        };
+        let else_result = if else_reachable {
+            else_result
+        } else {
+            Eval::unreachable()
+        };
+
+        *environment = self.join_flow_environments(
+            &then_environment,
+            then_result.flow,
+            &else_environment,
+            else_result.flow,
+        );
+        let mut result = Eval::combine(&then_result, &else_result);
+        let type_ = self.apply_inline_assertion(node, result.type_.clone());
+        result.type_ = self.record(node, type_);
+        result
+    }
+
+    pub(super) fn eval_unless<'node>(
+        &mut self,
+        node: &Node<'node>,
+        unless: &UnlessNode<'node>,
+        environment: &mut Environment,
+    ) -> Eval {
+        let predicate = unless.predicate();
+        let previous_defer_inline_assertions = self.defer_inline_assertions;
+        self.defer_inline_assertions = true;
+        let predicate_type = self
+            .eval_node(&predicate, environment)
+            .normal_type
+            .unwrap_or(Type::Never);
+        self.defer_inline_assertions = previous_defer_inline_assertions;
+        let (predicate_truthy, predicate_falsy) =
+            self.predicate_reachability(&predicate, environment, &predicate_type);
+        let then_reachable = predicate_falsy;
+        let else_reachable = predicate_truthy;
+        let report_unreachable = self.should_report_unreachable_branch(node)
+            && self.predicate_is_precise(&predicate, environment);
+
+        let mut then_environment = environment.clone();
+        self.narrow_from_predicate(&predicate, &mut then_environment, false);
+        let then_result = if let Some(statements) = unless.statements() {
+            if !then_reachable && report_unreachable {
+                if let Some(first) = statements.body().into_iter().next() {
+                    self.error(&first, "This code is unreachable");
+                }
+            }
+            self.eval_statements(&statements, &mut then_environment)
+        } else {
+            Eval::value(Type::Nil)
+        };
+        let then_result = if then_reachable {
+            then_result
+        } else {
+            Eval::value(Type::Never)
+        };
+
+        let mut else_environment = environment.clone();
+        self.narrow_from_predicate(&predicate, &mut else_environment, true);
+        let else_result = if let Some(else_clause) = unless.else_clause() {
+            if let Some(statements) = else_clause.statements() {
+                if !else_reachable && report_unreachable {
+                    if let Some(first) = statements.body().into_iter().next() {
+                        self.error(&first, "This code is unreachable");
+                    }
+                }
+                self.eval_statements(&statements, &mut else_environment)
+            } else {
+                Eval::value(Type::Nil)
+            }
+        } else {
+            Eval::value(Type::Nil)
+        };
+        let else_result = if else_reachable {
+            else_result
+        } else {
+            Eval::value(Type::Never)
+        };
+
+        *environment = self.join_flow_environments(
+            &then_environment,
+            then_result.flow,
+            &else_environment,
+            else_result.flow,
+        );
+        let mut result = Eval::combine(&then_result, &else_result);
+        let type_ = self.apply_inline_assertion(node, result.type_.clone());
+        result.type_ = self.record(node, type_);
+        result
+    }
+
     pub(super) fn eval_control_arguments<'node>(
         &mut self,
         arguments: Option<ruby_prism::ArgumentsNode<'node>>,
