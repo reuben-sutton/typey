@@ -54,6 +54,11 @@ class CfgBodyTransfer
     keyword_rest_target(**values)
   end
 
+  #: (String?) -> String?
+  def safe_navigation(value)
+    value&.to_s
+  end
+
   #: (Integer, String) -> void
   def positional_target(one, two)
   end
@@ -77,3 +82,4 @@ class CfgBodyTransfer
 end
 
 CfgBodyTransfer.new.value
+T.reveal_type(CfgBodyTransfer.new.safe_navigation("text")) # note: Revealed type: `T.nilable(String)`

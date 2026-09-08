@@ -127,8 +127,7 @@ fn expr_can_transfer(
     let supported = match &expr.kind {
         ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => true,
         ExprKind::Call(call) => {
-            !call.safe_navigation
-                && call.block.is_none()
+            call.block.is_none()
                 && match &call.receiver {
                     hir::Receiver::Implicit | hir::Receiver::Explicit(_) => true,
                     hir::Receiver::Super | hir::Receiver::Yield => false,
@@ -271,6 +270,35 @@ struct ForTransfer<'analyzer, 'src, 'node, 'nodes> {
     abrupt: OutcomeTypes,
     break_type: Type,
     terminal_flow: Flow,
+}
+
+fn narrow_pattern_value(
+    state: &mut BlockState,
+    value: cfg::ValueId,
+    pattern: &cfg::Pattern,
+    truthy: bool,
+) {
+    let Some(source) = state.value(value) else {
+        return;
+    };
+    let narrowed = match pattern {
+        cfg::Pattern::Nil => {
+            if truthy {
+                source.meet(&Type::Nil)
+            } else {
+                source.without(&Type::Nil)
+            }
+        }
+        cfg::Pattern::Truthy => {
+            if truthy {
+                source.truthy_part()
+            } else {
+                source.falsy_part()
+            }
+        }
+        cfg::Pattern::Case { .. } => return,
+    };
+    state.set_value(value, narrowed);
 }
 
 fn conditional_graph() -> &'static cfg::Cfg {
@@ -428,7 +456,7 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
         environment: &mut Environment,
     ) -> Option<Eval> {
-        if input.block.is_some() || input.safe_navigation {
+        if input.block.is_some() {
             return None;
         }
         let call = input
@@ -488,41 +516,72 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                 (type_, UntypedOrigin::FallbackCall)
             }
         } else {
-            let dispatch_receiver = receiver_type.clone();
-            let key = analyzer.receiver_method_key(
-                receiver_node.as_ref(),
-                &dispatch_receiver,
-                input.name.as_str(),
-                environment,
-            );
-            if let Some(key) = key {
-                analyzer.record_method_dependency(&key, environment);
-                if let Some(signature) = analyzer
-                    .observe_call(&key, &call_arguments, false)
-                    .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
-                {
-                    let type_ = analyzer.invoke_signature(
-                        node,
-                        input.name.as_str(),
-                        &signature,
-                        &call_arguments,
-                        Some(&dispatch_receiver),
-                        None,
-                    );
-                    let type_ = if input.name.as_str() == "new"
-                        && Analyzer::class_object_instance_type(&dispatch_receiver).is_some()
+            let dispatch_receiver = if input.safe_navigation {
+                receiver_type.without(&Type::Nil)
+            } else {
+                receiver_type.clone()
+            };
+            if input.safe_navigation
+                && !receiver_type.is_any()
+                && !receiver_type.is_never()
+                && receiver_type.without(&Type::Nil) == receiver_type
+            {
+                analyzer.error_at(
+                    input.site,
+                    format!("Used `&.` operator on `{receiver_type}`, which can never be nil"),
+                );
+            }
+            if input.safe_navigation && dispatch_receiver.is_never() {
+                (Type::Nil, UntypedOrigin::FallbackCall)
+            } else {
+                let key = analyzer.receiver_method_key(
+                    receiver_node.as_ref(),
+                    &dispatch_receiver,
+                    input.name.as_str(),
+                    environment,
+                );
+                if let Some(key) = key {
+                    analyzer.record_method_dependency(&key, environment);
+                    if let Some(signature) = analyzer
+                        .observe_call(&key, &call_arguments, false)
+                        .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
                     {
-                        analyzer.instantiate_generic_class(type_)
+                        let type_ = analyzer.invoke_signature(
+                            node,
+                            input.name.as_str(),
+                            &signature,
+                            &call_arguments,
+                            Some(&dispatch_receiver),
+                            None,
+                        );
+                        let type_ = if input.name.as_str() == "new"
+                            && Analyzer::class_object_instance_type(&dispatch_receiver).is_some()
+                        {
+                            analyzer.instantiate_generic_class(type_)
+                        } else {
+                            type_
+                        };
+                        let origin = analyzer
+                            .resolve_method_key(&key)
+                            .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
+                            .is_some_and(|state| state.explicit)
+                            .then_some(UntypedOrigin::DeclaredSignature)
+                            .unwrap_or(UntypedOrigin::InferredMethod);
+                        (type_, origin)
                     } else {
-                        type_
-                    };
-                    let origin = analyzer
-                        .resolve_method_key(&key)
-                        .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
-                        .is_some_and(|state| state.explicit)
-                        .then_some(UntypedOrigin::DeclaredSignature)
-                        .unwrap_or(UntypedOrigin::InferredMethod);
-                    (type_, origin)
+                        let type_ = analyzer.eval_method_call(
+                            &dispatch_receiver,
+                            input.name.as_str(),
+                            &site,
+                            environment,
+                        );
+                        let origin = if dispatch_receiver.contains_any() {
+                            UntypedOrigin::Propagated
+                        } else {
+                            UntypedOrigin::FallbackCall
+                        };
+                        (type_, origin)
+                    }
                 } else {
                     let type_ = analyzer.eval_method_call(
                         &dispatch_receiver,
@@ -537,20 +596,12 @@ impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
                     };
                     (type_, origin)
                 }
-            } else {
-                let type_ = analyzer.eval_method_call(
-                    &dispatch_receiver,
-                    input.name.as_str(),
-                    &site,
-                    environment,
-                );
-                let origin = if dispatch_receiver.contains_any() {
-                    UntypedOrigin::Propagated
-                } else {
-                    UntypedOrigin::FallbackCall
-                };
-                (type_, origin)
             }
+        };
+        let type_ = if input.safe_navigation && !receiver_type.is_any() {
+            Type::union([Type::Nil, type_])
+        } else {
+            type_
         };
         analyzer.remember_untyped_origin_at(input.site, &type_, untyped_origin);
         let mut result = if type_.is_never() {
@@ -872,6 +923,13 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                             true,
                             &mut state.environment,
                         );
+                    } else if let Some(source_id) = source_id {
+                        narrow_pattern_value(
+                            &mut state,
+                            source_id,
+                            pattern.expect("pattern was present"),
+                            true,
+                        );
                     }
                     edges.push(edge(*truthy, state));
                 }
@@ -883,6 +941,13 @@ impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'anal
                             *falsy,
                             false,
                             &mut state.environment,
+                        );
+                    } else if let Some(source_id) = source_id {
+                        narrow_pattern_value(
+                            &mut state,
+                            source_id,
+                            pattern.expect("pattern was present"),
+                            false,
                         );
                     }
                     edges.push(edge(*falsy, state));
