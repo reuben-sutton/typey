@@ -100,6 +100,9 @@ The first modularization steps are now in place:
 * `infer/assignments.rs` owns HIR assignment transfer across locals,
   attributes, indexes, instance/class/global variables, and constants, while
   retaining the shared send and flow contracts used by both evaluators;
+* `infer/registration.rs` owns declaration graph registration, signature
+  validation, and attached-class declaration checks, leaving the coordinator
+  to orchestrate phases rather than implement declaration policy;
 * `infer/cfg_state.rs` owns CFG block state, body context, value joins, and
   pending exception state, leaving `infer/cfg_transfer.rs` focused on operation
   and terminator semantics;
