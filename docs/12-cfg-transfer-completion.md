@@ -98,8 +98,11 @@ The first modularization steps are now in place:
 * CFG argument materialization is isolated to that adapter, so the transfer
   host no longer reconstructs call shape directly from `CallNode` children;
 * source-span lookup retains all same-span Prism candidates and selects the
-  semantic call or closure node, so enclosing statement nodes cannot hide a
-  passed block from CFG dispatch; and
+  semantic call node, so enclosing statement nodes cannot hide a passed block
+  from CFG dispatch; and
+* `MakeClosure` now transfers from its owned `ClosureId` and closure span;
+  nested CFG bodies reuse the containing body's semantic node index, so
+  closure creation no longer performs a source-span lookup;
 * ordinary `while`/`until` bodies now pass CFG preflight, including valueless
   `break` and `next`; value-carrying non-local outcomes remain explicitly
   deferred until the outcome state records their enclosing-expression type;
@@ -116,11 +119,11 @@ The first modularization steps are now in place:
 * retry is lowered to the protected body entry, and synthesized calls such as
   compound-assignment sends use owned CFG operands even without a HIR `Call`.
 
-The remaining bridges are deliberate and measurable: legacy dispatch still
-needs parser nodes for exact argument diagnostics and builtin hooks, and the
+The remaining bridges are deliberate and measurable: call dispatch still needs
+parser nodes for exact argument diagnostics and builtin hooks, and the
 specialized conditional/loop helpers still consume parser nodes. Removing
 those requires moving their diagnostic and block contracts to owned source
-sites/closure IDs rather than weakening the checker. CFG fallback telemetry now
+sites rather than weakening the checker. CFG fallback telemetry now
 distinguishes unsupported operations, unsupported edges, and legacy bridges;
 the latter two categories are wired for the exceptional-control-flow work but
 are not yet populated by the migrated ordinary-body path. Non-local `return`,
