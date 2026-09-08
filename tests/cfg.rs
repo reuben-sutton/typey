@@ -7,6 +7,13 @@ fn cfg(source: &str) -> typey::cfg::Cfg {
     build(&program, body)
 }
 
+fn all_cfgs(source: &str) -> Vec<typey::cfg::Cfg> {
+    let program = lower(FileId(3), source.as_bytes());
+    (0..program.bodies.len())
+        .map(|index| build(&program, typey::hir::BodyId(index as u32)))
+        .collect()
+}
+
 fn operations(graph: &typey::cfg::Cfg) -> Vec<&typey::cfg::Operation> {
     graph
         .blocks
@@ -78,6 +85,65 @@ fn lowers_safe_navigation_to_nil_and_call_paths() {
 }
 
 #[test]
+fn preserves_special_call_receivers_and_forwarding_in_method_cfgs() {
+    let graphs = all_cfgs(
+        r#"def wrapper(...)
+  target(...)
+  super
+  yield(1)
+end
+"#,
+    );
+    let operations = graphs
+        .iter()
+        .flat_map(|graph| graph.blocks.iter())
+        .flat_map(|block| block.operations.iter())
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::Call {
+                receiver,
+                name,
+                arguments,
+                ..
+            } => Some((receiver, name.as_str(), arguments)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(operations.iter().any(|(receiver, name, arguments)| {
+        matches!(receiver, typey::cfg::ReceiverOperand::Implicit)
+            && *name == "target"
+            && matches!(arguments.as_slice(), [ArgumentOperand::Forwarded])
+    }));
+    assert!(operations.iter().any(|(receiver, name, _)| {
+        matches!(receiver, typey::cfg::ReceiverOperand::Super) && *name == "super"
+    }));
+    assert!(operations.iter().any(|(receiver, name, _)| {
+        matches!(receiver, typey::cfg::ReceiverOperand::Yield) && *name == "yield"
+    }));
+}
+
+#[test]
+fn lowers_inline_blocks_as_call_operands_without_executing_the_body() {
+    let graph = cfg("receiver.call(1) { |value| value }");
+    let has_inline_block = operations(&graph)
+        .iter()
+        .any(|operation| match &operation.kind {
+            OperationKind::Call {
+                name,
+                block: Some(typey::cfg::BlockOperand::Inline(_)),
+                ..
+            } if name.as_str() == "call" => true,
+            _ => false,
+        });
+    assert!(has_inline_block, "inline block call");
+    assert!(!graph.blocks.iter().any(|block| {
+        block
+            .operations
+            .iter()
+            .any(|operation| matches!(operation.kind, OperationKind::ReadSpecial { .. }))
+    }));
+}
+
+#[test]
 fn lowers_if_with_normal_join_and_value_parameter() {
     let graph = cfg("if condition\n  left\nelse\n  right\nend");
     let branch = graph
@@ -130,6 +196,20 @@ fn lowers_compound_assignment_to_read_branch_write_and_join() {
 }
 
 #[test]
+fn lowers_attribute_and_index_assignments_to_writer_calls() {
+    let graph = cfg("object.value = item\nvalues[index] = item");
+    let names = operations(&graph)
+        .iter()
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::Call { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"value="));
+    assert!(names.contains(&"[]="));
+}
+
+#[test]
 fn lowers_loops_with_header_back_edge_break_target_and_next_target() {
     let graph = cfg("while condition\n  next\nend");
     assert!(graph
@@ -173,6 +253,42 @@ fn lowers_rescue_and_ensure_with_unwind_and_handler_blocks() {
         .blocks
         .iter()
         .any(|block| { matches!(block.terminator, Terminator::Raise(_)) }));
+}
+
+#[test]
+fn lowers_rescue_reference_retry_and_ensure_edges() {
+    let graph = cfg(
+        "begin\n  risky\nrescue StandardError => error\n  retry\nensure\n  cleanup(error)\nend",
+    );
+    assert!(operations(&graph)
+        .iter()
+        .any(|operation| matches!(operation.kind, OperationKind::Write { .. })));
+    assert!(graph.blocks.iter().any(|block| {
+        matches!(&block.terminator, Terminator::Jump { target, arguments } if !arguments.is_empty() && graph.block(*target).is_some_and(|target| !target.parameters.is_empty()))
+    }));
+    assert!(
+        graph
+            .blocks
+            .iter()
+            .filter(|block| block.unwind.is_none())
+            .count()
+            >= 2
+    );
+}
+
+#[test]
+fn closes_returning_blocks_without_lowering_following_sequence_into_them() {
+    let graph = cfg("if flag\n  return value\nend\ntail");
+    let return_block = graph
+        .blocks
+        .iter()
+        .find(|block| matches!(block.terminator, Terminator::Return(Some(_))))
+        .expect("return block");
+    assert!(return_block
+        .operations
+        .iter()
+        .any(|operation| { matches!(operation.kind, OperationKind::Call { .. }) }));
+    assert!(!matches!(return_block.terminator, Terminator::Unreachable));
 }
 
 #[test]

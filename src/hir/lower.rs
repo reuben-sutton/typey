@@ -1412,6 +1412,11 @@ impl<'src> Lowerer<'src> {
                 reference
                     .as_local_variable_write_node()
                     .map(|write| self.local(&prism::constant_name(write.name())))
+                    .or_else(|| {
+                        reference
+                            .as_local_variable_target_node()
+                            .map(|target| self.local(&prism::constant_name(target.name())))
+                    })
             });
             rescue.push(RescueClause {
                 exceptions,
