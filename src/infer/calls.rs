@@ -1047,6 +1047,9 @@ impl<'src> Analyzer<'src> {
                 // Treat that nominal receiver as the constructed owner while
                 // retaining the class-object path for ordinary constants.
                 let owners = if owners.is_empty()
+                    && receiver_node
+                        .as_ref()
+                        .is_some_and(|receiver| self.constant_reference_name(receiver).is_some())
                     && !matches!(
                         &receiver_type,
                         Type::Named(name, _)
