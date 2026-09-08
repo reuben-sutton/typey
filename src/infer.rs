@@ -10,6 +10,7 @@ use ruby_prism::{
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 mod arguments;
 mod blocks;
@@ -1235,9 +1236,12 @@ pub(crate) fn check_with_policies(
     let parsed = prism::parse(bytes);
     let root = parsed.node();
     let hir_program = hir::lower(hir::FileId(0), bytes);
-    let cfg_index = config
+    let cfg_graphs = config
         .enable_cfg
-        .then(|| cfg::CfgIndex::from_program(&hir_program));
+        .then(|| Arc::<[cfg::Cfg]>::from(cfg::lower::build_all_for_index(&hir_program)));
+    let cfg_index = cfg_graphs
+        .as_deref()
+        .map(|graphs| cfg::CfgIndex::from_graphs(&hir_program, graphs));
     let mut hir_call_ids = HashMap::new();
     let mut hir_assignment_ids = HashMap::new();
     let mut hir_value_ids = HashMap::new();
@@ -1300,6 +1304,7 @@ pub(crate) fn check_with_policies(
         source: bytes,
         hir_program,
         cfg_index,
+        cfg_graphs,
         hir_call_ids,
         hir_assignment_ids,
         hir_value_ids,
@@ -1362,6 +1367,7 @@ struct Analyzer<'src> {
     source: &'src [u8],
     hir_program: hir::Program,
     cfg_index: Option<cfg::CfgIndex>,
+    cfg_graphs: Option<Arc<[cfg::Cfg]>>,
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_value_ids: HashMap<(usize, usize), hir::ExprId>,

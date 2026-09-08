@@ -1215,11 +1215,11 @@ impl<'src> Analyzer<'src> {
         if !body_can_transfer(&self.hir_program, body_id) {
             return None;
         }
-        // The full public builder creates a program-wide expression index for
-        // retained expression values. Body transfer only needs operations and
-        // spans, so use the no-index builder and avoid rescanning the program
-        // once per method.
-        let graph = cfg::lower::build_for_index(&self.hir_program, body_id);
+        // The graph is syntax-only and immutable. It is lowered once when the
+        // analyzer is created, then reused across seed, fixpoint, and final
+        // passes instead of rebuilding the same body for every method visit.
+        let graph_store = self.cfg_graphs.as_ref()?.clone();
+        let graph = graph_store.get(body_id.0 as usize)?;
         let mut nodes = SpanNodeIndex::default();
         nodes.visit(body_node);
         if graph.blocks.iter().any(|block| {

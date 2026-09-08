@@ -41,6 +41,18 @@ pub fn build_all(program: &Program) -> Vec<Cfg> {
         .collect()
 }
 
+/// Build all body-local graphs used by transfer without retaining the
+/// program-wide expression-value table. These graphs are immutable after
+/// lowering and can be cached for every inference pass.
+pub(crate) fn build_all_for_index(program: &Program) -> Vec<Cfg> {
+    program
+        .bodies
+        .iter()
+        .enumerate()
+        .map(|(index, _)| build_for_index(program, BodyId(index as u32)))
+        .collect()
+}
+
 pub(crate) fn expression_index(program: &Program) -> HashMap<(u32, u32), ExprId> {
     program
         .expressions
