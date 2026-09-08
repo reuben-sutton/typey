@@ -33,6 +33,7 @@ pub(super) struct OwnedCallInput {
     pub(super) arguments: Vec<cfg::ArgumentOperand>,
     pub(super) block: Option<cfg::BlockOperand>,
     pub(super) safe_navigation: bool,
+    pub(super) defer_inline_assertion: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -114,6 +115,7 @@ impl OwnedCallInput {
             arguments: arguments.clone(),
             block: block.clone(),
             safe_navigation: *safe_navigation,
+            defer_inline_assertion: operation.defer_inline_assertion,
         })
     }
 }

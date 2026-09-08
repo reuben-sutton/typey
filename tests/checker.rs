@@ -193,6 +193,23 @@ fn transfers_straight_line_method_bodies_without_changing_results() {
 }
 
 #[test]
+fn transfers_normal_inline_block_completion_without_erasing_generic_results() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/generic_block_inference.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_optional_rbs_blocks_through_owned_proc_calls() {
     let source = std::fs::read_to_string("tests/fixtures/optional_rbs_block.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());
@@ -261,6 +278,23 @@ fn transfers_logical_writes_for_owned_storage_places() {
     );
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
     assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
+fn preserves_ivar_or_assignment_narrowing_in_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_ivar_or_assignment.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
 }
 
 #[test]

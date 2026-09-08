@@ -97,6 +97,9 @@ pub struct Operation {
     /// join/seed operation.
     pub expression: Option<ExprId>,
     pub result: Option<ValueId>,
+    /// Logical-assignment RHS operations defer source inline assertions until
+    /// the assignment result is written, matching Ruby's expression scope.
+    pub defer_inline_assertion: bool,
     pub kind: OperationKind,
 }
 
@@ -117,6 +120,7 @@ pub enum OperationKind {
     Write {
         place: Place,
         value: ValueId,
+        logical: bool,
     },
     Call {
         receiver: ReceiverOperand,
@@ -242,6 +246,9 @@ pub enum Terminator {
         falsy: BlockId,
     },
     Return(Option<ValueId>),
+    /// An explicit Ruby `return` from a block, which exits the defining
+    /// method rather than completing the block normally.
+    NonLocalReturn(Option<ValueId>),
     Raise(ValueId),
     /// Complete an ensure body. Normal state continues to `target`; a
     /// pending raised outcome is routed through the block's unwind edge.

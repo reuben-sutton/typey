@@ -108,6 +108,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         site: SourceSite,
         place: &cfg::Place,
         actual: Type,
+        logical: bool,
         environment: &mut Environment,
     ) -> Type {
         match place {
@@ -118,6 +119,11 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     .map_or_else(String::new, |name| name.as_str().to_owned());
                 let type_ =
                     analyzer.apply_inline_assertion_in_environment_at(site, actual, environment);
+                let type_ = if logical {
+                    type_.without(&Type::Nil)
+                } else {
+                    type_
+                };
                 environment.bind(name, type_.clone());
                 type_
             }
@@ -125,6 +131,11 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 let name = name.as_str().to_owned();
                 let type_ =
                     analyzer.apply_inline_assertion_in_environment_at(site, actual, environment);
+                let type_ = if logical {
+                    type_.without(&Type::Nil)
+                } else {
+                    type_
+                };
                 analyzer.observe_ivar(environment, name.clone(), &type_, false);
                 environment.bind(ivar_refinement_key(&name), type_.clone());
                 type_
@@ -167,6 +178,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             site,
             &place,
             element_type,
+            false,
             environment,
         ))
     }
@@ -408,11 +420,15 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         );
         result.flow = result.flow.union(result.abrupt.flow());
         if let Some(normal_type) = result.normal_type.take() {
-            let normal_type = analyzer.apply_inline_assertion_in_environment_at(
-                input.site,
-                normal_type,
-                environment,
-            );
+            let normal_type = if input.defer_inline_assertion {
+                normal_type
+            } else {
+                analyzer.apply_inline_assertion_in_environment_at(
+                    input.site,
+                    normal_type,
+                    environment,
+                )
+            };
             result = Eval::from_parts(Some(normal_type), result.abrupt, result.flow);
         }
         analyzer.remember_untyped_origin_at(input.site, &result.type_, untyped_origin);
@@ -469,6 +485,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         elements: &[cfg::ArrayOperand],
         values: &[Option<Type>],
         preserve_fixed_shape: bool,
+        defer_inline_assertion: bool,
         environment: &mut Environment,
     ) -> Option<Type> {
         let mut element_types = Vec::with_capacity(elements.len());
@@ -516,7 +533,11 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         } else {
             Type::Array(Box::new(element))
         };
-        Some(analyzer.apply_inline_assertion_in_environment_at(site, inferred, environment))
+        Some(if defer_inline_assertion {
+            inferred
+        } else {
+            analyzer.apply_inline_assertion_in_environment_at(site, inferred, environment)
+        })
     }
 
     fn transfer_hash(
@@ -524,6 +545,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         site: SourceSite,
         elements: &[cfg::HashOperand],
         values: &[Option<Type>],
+        defer_inline_assertion: bool,
         environment: &mut Environment,
     ) -> Option<Type> {
         let mut key = Type::Never;
@@ -554,11 +576,12 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         }
         let key = if key.is_never() { Type::Any } else { key };
         let value = if value.is_never() { Type::Any } else { value };
-        Some(analyzer.apply_inline_assertion_in_environment_at(
-            site,
-            Type::Hash(Box::new(key), Box::new(value)),
-            environment,
-        ))
+        let inferred = Type::Hash(Box::new(key), Box::new(value));
+        Some(if defer_inline_assertion {
+            inferred
+        } else {
+            analyzer.apply_inline_assertion_in_environment_at(site, inferred, environment)
+        })
     }
 
     fn pattern_reachability(
@@ -992,9 +1015,14 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
         for operation in &block.operations {
             let site = SourceSite::from_span(operation.span, operation.expression);
             let type_ = match &operation.kind {
-                cfg::OperationKind::Const { value } => self
-                    .analyzer
-                    .apply_inline_assertion_at(site, Analyzer::cfg_literal_type(value)),
+                cfg::OperationKind::Const { value } => {
+                    let type_ = Analyzer::cfg_literal_type(value);
+                    if operation.defer_inline_assertion {
+                        type_
+                    } else {
+                        self.analyzer.apply_inline_assertion_at(site, type_)
+                    }
+                }
                 cfg::OperationKind::Read { place } => {
                     let read = match place {
                         cfg::Place::Local(local) => Read::Local(*local),
@@ -1003,18 +1031,54 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         cfg::Place::Global(name) => Read::Global(name.clone()),
                         cfg::Place::Constant(path) => Read::Constant(path.clone()),
                     };
-                    self.analyzer
-                        .transfer_cfg_read_at(site, read, &mut next.environment)
+                    if operation.defer_inline_assertion {
+                        let previous = self.analyzer.defer_inline_assertions;
+                        self.analyzer.defer_inline_assertions = true;
+                        let type_ =
+                            self.analyzer
+                                .transfer_cfg_read_at(site, read, &mut next.environment);
+                        self.analyzer.defer_inline_assertions = previous;
+                        type_
+                    } else {
+                        self.analyzer
+                            .transfer_cfg_read_at(site, read, &mut next.environment)
+                    }
                 }
                 cfg::OperationKind::ReadSpecial { read } => {
-                    self.analyzer
-                        .transfer_cfg_read_at(site, read.clone(), &mut next.environment)
+                    if operation.defer_inline_assertion {
+                        let previous = self.analyzer.defer_inline_assertions;
+                        self.analyzer.defer_inline_assertions = true;
+                        let type_ = self.analyzer.transfer_cfg_read_at(
+                            site,
+                            read.clone(),
+                            &mut next.environment,
+                        );
+                        self.analyzer.defer_inline_assertions = previous;
+                        type_
+                    } else {
+                        self.analyzer.transfer_cfg_read_at(
+                            site,
+                            read.clone(),
+                            &mut next.environment,
+                        )
+                    }
                 }
-                cfg::OperationKind::Write { place, value } => {
+                cfg::OperationKind::Write {
+                    place,
+                    value,
+                    logical,
+                } => {
                     let actual = next
                         .value(*value)
                         .ok_or_else(|| format!("missing write operand {:?}", value))?;
-                    Self::transfer_write(self.analyzer, site, place, actual, &mut next.environment)
+                    Self::transfer_write(
+                        self.analyzer,
+                        site,
+                        place,
+                        actual,
+                        *logical,
+                        &mut next.environment,
+                    )
                 }
                 cfg::OperationKind::BindForTarget { collection, target } => {
                     let collection_type = next.value(*collection).ok_or_else(|| {
@@ -1085,6 +1149,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     operation
                         .result
                         .is_some_and(|result| self.fixed_array_elements.contains_key(&result)),
+                    operation.defer_inline_assertion,
                     &mut next.environment,
                 )
                 .ok_or_else(|| format!("array transfer failed at {:?}", operation.span))?,
@@ -1093,6 +1158,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     site,
                     elements,
                     &next.values,
+                    operation.defer_inline_assertion,
                     &mut next.environment,
                 )
                 .ok_or_else(|| format!("hash transfer failed at {:?}", operation.span))?,
@@ -1175,20 +1241,28 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 let return_type = value
                     .and_then(|value| next.value(value))
                     .unwrap_or(Type::Nil);
-                if self.return_is_non_local() {
-                    self.finish_outcome(FlowKind::Return, return_type, next.environment);
+                // The CFG's terminal `Return` is ordinary completion of the
+                // body. An explicit Ruby `return` is lowered to a pending
+                // outcome and reaches `finish_outcome` through an unreachable
+                // block, where block closures correctly preserve its
+                // non-local behavior.
+                self.normal_type = if self.normal_type.is_never() {
+                    return_type
                 } else {
-                    self.normal_type = if self.normal_type.is_never() {
-                        return_type
-                    } else {
-                        self.normal_type.join(&return_type)
-                    };
-                    self.final_environment = Some(match self.final_environment.take() {
-                        Some(environment) => environment.join(&next.environment),
-                        None => next.environment,
-                    });
-                    self.terminal_flow = self.terminal_flow.union(next.flow);
-                }
+                    self.normal_type.join(&return_type)
+                };
+                self.final_environment = Some(match self.final_environment.take() {
+                    Some(environment) => environment.join(&next.environment),
+                    None => next.environment,
+                });
+                self.terminal_flow = self.terminal_flow.union(next.flow);
+                Ok(Vec::new())
+            }
+            cfg::Terminator::NonLocalReturn(value) => {
+                let return_type = value
+                    .and_then(|value| next.value(value))
+                    .unwrap_or(Type::Nil);
+                self.finish_outcome(FlowKind::Return, return_type, next.environment);
                 Ok(Vec::new())
             }
             cfg::Terminator::Unreachable => {

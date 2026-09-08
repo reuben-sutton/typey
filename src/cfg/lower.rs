@@ -136,6 +136,7 @@ struct Builder<'program> {
     closure_kind: Option<hir::ClosureKind>,
     retain_expression_values: bool,
     current_expression: Option<ExprId>,
+    defer_inline_assertions: bool,
 }
 
 impl<'program> Builder<'program> {
@@ -173,6 +174,7 @@ impl<'program> Builder<'program> {
             closure_kind,
             retain_expression_values,
             current_expression: None,
+            defer_inline_assertions: false,
         }
     }
 
@@ -252,6 +254,7 @@ impl<'program> Builder<'program> {
                     })
                 }),
                 result: value,
+                defer_inline_assertion: self.defer_inline_assertions,
                 kind,
             });
         value
@@ -831,7 +834,7 @@ impl<'program> Builder<'program> {
                 }
                 block = value_flow.block;
                 let value = value_flow.value.expect("assignment produces a value");
-                let result = self.write_runtime(block, span, runtime, value);
+                let result = self.write_runtime(block, span, runtime, value, false);
                 self.normal(expression, result.0, result.1)
             }
             AssignOperator::And | AssignOperator::Or => {
@@ -864,10 +867,14 @@ impl<'program> Builder<'program> {
                 }
                 self.jump(existing_block, join, vec![old]);
 
+                let previous_defer_inline_assertions = self.defer_inline_assertions;
+                self.defer_inline_assertions = true;
                 let rhs_flow = self.lower_expr(value, rhs_block);
+                self.defer_inline_assertions = previous_defer_inline_assertions;
                 if rhs_flow.reachable {
                     let rhs_value = rhs_flow.value.expect("assignment RHS produces a value");
-                    let written = self.write_runtime(rhs_flow.block, span, runtime, rhs_value);
+                    let written =
+                        self.write_runtime(rhs_flow.block, span, runtime, rhs_value, true);
                     self.jump(
                         written.0,
                         join,
@@ -907,7 +914,7 @@ impl<'program> Builder<'program> {
                     true,
                 );
                 let computed = computed.expect("binary assignment produces a value");
-                let written = self.write_runtime(rhs_flow.block, span, runtime, computed);
+                let written = self.write_runtime(rhs_flow.block, span, runtime, computed, false);
                 self.normal(expression, written.0, written.1)
             }
         }
@@ -1030,10 +1037,20 @@ impl<'program> Builder<'program> {
         span: Span,
         runtime: TargetRuntime,
         value: ValueId,
+        logical: bool,
     ) -> (BlockId, Option<ValueId>) {
         match runtime {
             TargetRuntime::Place(place) => {
-                let result = self.emit(block, span, OperationKind::Write { place, value }, false);
+                let result = self.emit(
+                    block,
+                    span,
+                    OperationKind::Write {
+                        place,
+                        value,
+                        logical,
+                    },
+                    false,
+                );
                 (block, result.or(Some(value)))
             }
             TargetRuntime::Attribute { receiver, name } => {
@@ -1429,7 +1446,12 @@ impl<'program> Builder<'program> {
                 OperationKind::Record { value: Some(value) },
                 false,
             );
-            self.set_terminator(block, Terminator::Return(Some(value)));
+            let terminator = if self.closure_kind == Some(hir::ClosureKind::Block) {
+                Terminator::NonLocalReturn(Some(value))
+            } else {
+                Terminator::Return(Some(value))
+            };
+            self.set_terminator(block, terminator);
         }
         self.abrupt(expression, block)
     }
@@ -1684,6 +1706,7 @@ impl<'program> Builder<'program> {
                         OperationKind::Write {
                             place: Place::Local(reference),
                             value: exception,
+                            logical: false,
                         },
                         false,
                     );
