@@ -201,6 +201,10 @@ The first modularization steps are now in place:
 * parser-backed `if`/`unless` flow transfer now lives with the loop and `for`
   compatibility routines in `infer/control_flow.rs`; predicate narrowing and
   environment joins remain shared flow services rather than coordinator code.
+* a fully representable top-level HIR body now attempts owned CFG transfer
+  before the recursive Prism statement walker; definitions and unsupported
+  top-level syntax still fall back as a whole through the transactional
+  preflight boundary.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
   `BoundProc` `call`/`[]` operations from CFG values, including unioned
   callable receivers, argument checking, and optional RBS block contracts;
