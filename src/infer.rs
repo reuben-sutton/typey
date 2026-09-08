@@ -392,9 +392,3 @@ struct Analyzer<'src> {
     cfg_transfer_values: usize,
     cfg_transfer_fallbacks: CfgFallbackCounters,
 }
-
-impl<'src> Analyzer<'src> {
-    fn normal_type(result: Eval) -> Type {
-        result.normal_type.unwrap_or(Type::Never)
-    }
-}

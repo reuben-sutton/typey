@@ -166,6 +166,10 @@ pub(super) struct Eval {
 }
 
 impl Eval {
+    pub(super) fn normal_type(self) -> Type {
+        self.normal_type.unwrap_or(Type::Never)
+    }
+
     pub(super) fn value(type_: Type) -> Self {
         Self {
             type_: type_.clone(),

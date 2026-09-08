@@ -229,7 +229,7 @@ impl<'src> Analyzer<'src> {
     ) -> Eval {
         match operator {
             hir::AssignOperator::Set => {
-                let actual = Self::normal_type(self.eval_node(&value_node, environment));
+                let actual = self.eval_node(&value_node, environment).normal_type();
                 let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
                 if let Some(alias) = self.predicate_alias_for_value(&value_node, environment) {
                     environment.bind_predicate_alias(name.clone(), type_.clone(), alias);
@@ -281,7 +281,7 @@ impl<'src> Analyzer<'src> {
                 let current = environment.get(&name);
                 let previous = self.defer_inline_assertions;
                 self.defer_inline_assertions = true;
-                let right = Self::normal_type(self.eval_node(&value_node, environment));
+                let right = self.eval_node(&value_node, environment).normal_type();
                 self.defer_inline_assertions = previous;
                 let actual = current.truthy_part().join(&right);
                 let declared =
@@ -314,7 +314,7 @@ impl<'src> Analyzer<'src> {
     ) -> Eval {
         match operator {
             hir::AssignOperator::Set => {
-                let actual = Self::normal_type(self.eval_node(&value_node, environment));
+                let actual = self.eval_node(&value_node, environment).normal_type();
                 let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
                 let type_ =
                     self.preserve_typed_empty_array_ivar(environment, name, &value_node, type_);
@@ -366,7 +366,7 @@ impl<'src> Analyzer<'src> {
                 let current = self.ivar_type(environment, name);
                 let previous = self.defer_inline_assertions;
                 self.defer_inline_assertions = true;
-                let right = Self::normal_type(self.eval_node(&value_node, environment));
+                let right = self.eval_node(&value_node, environment).normal_type();
                 self.defer_inline_assertions = previous;
                 let actual = current.truthy_part().join(&right);
                 let declared =
@@ -393,7 +393,7 @@ impl<'src> Analyzer<'src> {
     ) -> Eval {
         match operator {
             hir::AssignOperator::Set => {
-                let actual = Self::normal_type(self.eval_node(&value_node, environment));
+                let actual = self.eval_node(&value_node, environment).normal_type();
                 let type_ = self.apply_inline_assertion(node, actual);
                 self.observe_class_var(environment, name.to_owned(), &type_);
                 Eval::value(self.record(node, type_))
@@ -433,7 +433,7 @@ impl<'src> Analyzer<'src> {
                 let current = self.class_var_type(environment, name);
                 let previous = self.defer_inline_assertions;
                 self.defer_inline_assertions = true;
-                let right = Self::normal_type(self.eval_node(&value_node, environment));
+                let right = self.eval_node(&value_node, environment).normal_type();
                 self.defer_inline_assertions = previous;
                 let actual = current.truthy_part().join(&right);
                 let declared = self.apply_inline_assertion(node, actual);
@@ -458,7 +458,7 @@ impl<'src> Analyzer<'src> {
     ) -> Eval {
         match operator {
             hir::AssignOperator::Set => {
-                let actual = Self::normal_type(self.eval_node(&value_node, environment));
+                let actual = self.eval_node(&value_node, environment).normal_type();
                 let type_ = self.apply_inline_assertion(node, actual);
                 self.observe_global(name.to_owned(), &type_);
                 Eval::value(self.record(node, type_))
@@ -503,7 +503,7 @@ impl<'src> Analyzer<'src> {
                 let current = self.globals.get(name).cloned().unwrap_or(Type::Any);
                 let previous = self.defer_inline_assertions;
                 self.defer_inline_assertions = true;
-                let right = Self::normal_type(self.eval_node(&value_node, environment));
+                let right = self.eval_node(&value_node, environment).normal_type();
                 self.defer_inline_assertions = previous;
                 let actual = current.truthy_part().join(&right);
                 let declared = self.apply_inline_assertion(node, actual);
@@ -528,7 +528,7 @@ impl<'src> Analyzer<'src> {
     ) -> Eval {
         match operator {
             hir::AssignOperator::Set => {
-                let actual = Self::normal_type(self.eval_node(&value_node, environment));
+                let actual = self.eval_node(&value_node, environment).normal_type();
                 let struct_type = self.struct_subclass_type(environment, &value_node, name);
                 if let Some(struct_type) = struct_type.as_ref() {
                     self.eval_dynamic_struct_block(&value_node, struct_type, environment);

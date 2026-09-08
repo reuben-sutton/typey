@@ -82,6 +82,9 @@ The first modularization steps are now in place:
 
 * `infer/source.rs` owns source-site recording, diagnostics, strictness checks,
   and inline-assertion lookup for CFG paths;
+* `infer/source.rs` also owns strictness/RBI source policy and missing-API
+  reporting, so diagnostic eligibility is shared by recursive and owned
+  transfer without remaining in the analyzer shell;
 * `infer/environment.rs` owns the parser-independent abstract environment,
   including local provenance, refinements, self context, and path joins;
 * `infer/exceptions.rs` owns the Prism compatibility implementation for
@@ -119,6 +122,8 @@ The first modularization steps are now in place:
 * `infer/signature_calls.rs` owns signature invocation semantics, including
   generic bindings, argument-shape validation, splat checks, and specialized
   collection return types;
+* `infer/signature_calls.rs` also owns inferred-call observation and overload
+  selection, keeping method-summary updates beside signature matching;
 * `infer/method_lookup.rs` owns receiver/implicit method-key construction,
   ancestor and alias lookup, initializer/struct-constructor support, method
   dependencies, and recursive-call widening;
@@ -131,6 +136,9 @@ The first modularization steps are now in place:
 * `infer/legacy_eval.rs` owns the recursive Prism evaluator's expression and
   assignment dispatch, leaving the main inference host responsible for
   orchestration and shared state rather than syntax dispatch;
+* `infer/legacy_eval.rs` owns recursive statement sequencing and its
+  unreachable-flow policy, while `infer/legacy_patterns.rs` owns Prism
+  pattern binding and constraints;
 * `infer/control_flow.rs` owns the parser-backed loop, `for`, control-value,
   and loop-target transfer retained by the legacy evaluator;
 * `BodyTransfer` transfers literals, reads, writes, arrays, hashes, and
