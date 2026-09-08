@@ -91,8 +91,9 @@ The first modularization steps are now in place:
   case-specific narrowing helpers; shared predicate semantics remain in
   `infer/predicate_flow.rs`;
 * `infer/framework_hooks.rs` isolates Rails and Active Support callback
-  receiver bindings from generic call dispatch, while exposing the same
-  contract to recursive and owned block inference;
+  receiver bindings plus Ruby `include`/`extend` hook effects from generic
+  call dispatch, while exposing the same contract to recursive and owned
+  block inference;
 * `infer/intrinsics.rs` owns Sorbet `T.*` intrinsic contracts and implicit
   global/builtin call results, so the coordinator no longer mixes those
   language contracts with transfer and declaration orchestration;
