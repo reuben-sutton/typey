@@ -19,8 +19,8 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates are 18 CFG tests, 10 HIR tests, 343 checker tests, and
-170 conformance tests passing. The
+The current local gates are 18 CFG tests, 10 HIR tests, 344 checker tests, and
+171 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has semantic bridges in the
 legacy recursive path: call dispatch still uses Prism children for exact
