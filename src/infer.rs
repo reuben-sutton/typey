@@ -1241,6 +1241,17 @@ pub(crate) fn check_with_policies(
     let mut hir_call_ids = HashMap::new();
     let mut hir_assignment_ids = HashMap::new();
     let mut hir_value_ids = HashMap::new();
+    let hir_body_ids = hir_program
+        .bodies
+        .iter()
+        .enumerate()
+        .map(|(index, body)| {
+            (
+                (body.span.start as usize, body.span.end as usize),
+                hir::BodyId(index as u32),
+            )
+        })
+        .collect::<HashMap<_, _>>();
     for (index, expression) in hir_program.expressions.iter().enumerate() {
         let span = (expression.span.start as usize, expression.span.end as usize);
         match &expression.kind {
@@ -1292,6 +1303,7 @@ pub(crate) fn check_with_policies(
         hir_call_ids,
         hir_assignment_ids,
         hir_value_ids,
+        hir_body_ids,
         line_map: prism::LineMap::new(bytes),
         has_inline_assertions: !annotations.assertions.is_empty(),
         annotations,
@@ -1324,6 +1336,7 @@ pub(crate) fn check_with_policies(
         types: Vec::new(),
         untyped_origins: BTreeMap::new(),
         suppress_diagnostics: false,
+        cfg_transfer_bodies: 0,
         cfg_transfer_calls: 0,
         cfg_transfer_assignments: 0,
         cfg_transfer_conditionals: 0,
@@ -1352,6 +1365,7 @@ struct Analyzer<'src> {
     hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
     hir_value_ids: HashMap<(usize, usize), hir::ExprId>,
+    hir_body_ids: HashMap<(usize, usize), hir::BodyId>,
     line_map: prism::LineMap,
     has_inline_assertions: bool,
     annotations: AnnotationTable,
@@ -1384,6 +1398,7 @@ struct Analyzer<'src> {
     types: Vec<InferredType>,
     untyped_origins: BTreeMap<(usize, usize), UntypedOrigin>,
     suppress_diagnostics: bool,
+    cfg_transfer_bodies: usize,
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
     cfg_transfer_conditionals: usize,
@@ -2026,7 +2041,8 @@ impl<'src> Analyzer<'src> {
         });
         if self.config.debug {
             eprintln!(
-                "[typey] CFG transfers: {} calls, {} assignments, {} conditionals, {} loops, {} values, {} legacy fallbacks",
+                "[typey] CFG transfers: {} bodies, {} calls, {} assignments, {} conditionals, {} loops, {} values, {} legacy fallbacks",
+                self.cfg_transfer_bodies,
                 self.cfg_transfer_calls,
                 self.cfg_transfer_assignments,
                 self.cfg_transfer_conditionals,
@@ -5471,7 +5487,15 @@ impl<'src> Analyzer<'src> {
             None
         };
         let body_result = if let Some(body) = definition.body() {
-            self.eval_node(&body, &mut method_environment)
+            if self.config.enable_cfg {
+                self.hir_body_ids
+                    .get(&prism::span(node))
+                    .copied()
+                    .and_then(|body_id| self.eval_cfg_body(node, body_id, &mut method_environment))
+                    .unwrap_or_else(|| self.eval_node(&body, &mut method_environment))
+            } else {
+                self.eval_node(&body, &mut method_environment)
+            }
         } else {
             Eval::value(Type::Nil)
         };

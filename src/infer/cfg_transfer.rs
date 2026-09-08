@@ -1,12 +1,13 @@
 use super::{
-    ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, OutcomeTypes,
-    SharedKey,
+    ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, MethodKey,
+    OutcomeTypes, SharedKey, Strictness,
 };
 use crate::cfg;
 use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
 use crate::prism;
 use crate::types::Type;
-use ruby_prism::{IfNode, Node};
+use ruby_prism::{IfNode, Node, Visit};
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 /// The inference-side state at a CFG block boundary.
@@ -53,6 +54,96 @@ impl BlockState {
             flow: self.flow.union(other.flow),
         }
     }
+
+    fn value(&self, id: cfg::ValueId) -> Option<Type> {
+        self.values.get(id.0 as usize).cloned().flatten()
+    }
+
+    fn set_value(&mut self, id: cfg::ValueId, type_: Type) {
+        let index = id.0 as usize;
+        if self.values.len() <= index {
+            self.values.resize(index + 1, None);
+        }
+        self.values[index] = Some(type_);
+    }
+}
+
+#[derive(Default)]
+struct SpanNodeIndex<'node> {
+    nodes: HashMap<(usize, usize), Node<'node>>,
+}
+
+impl<'node> Visit<'node> for SpanNodeIndex<'node> {
+    fn visit_branch_node_enter(&mut self, node: Node<'node>) {
+        let span = prism::span(&node);
+        self.nodes.entry(span).or_insert(node);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BodyContext {
+    body: hir::BodyId,
+    method: Option<MethodKey>,
+    self_type: Type,
+    parameters: hir::Parameters,
+    strictness: Strictness,
+}
+
+struct BodyTransfer<'analyzer, 'src, 'node> {
+    analyzer: &'analyzer mut Analyzer<'src>,
+    context: BodyContext,
+    nodes: &'node SpanNodeIndex<'node>,
+    normal_type: Type,
+    abrupt: OutcomeTypes,
+    terminal_flow: Flow,
+    final_environment: Option<Environment>,
+}
+
+fn body_can_transfer(program: &hir::Program, body: hir::BodyId) -> bool {
+    let Some(body) = program.body(body) else {
+        return false;
+    };
+    let mut visiting = HashSet::new();
+    expr_can_transfer(program, body.root, &mut visiting)
+}
+
+fn expr_can_transfer(
+    program: &hir::Program,
+    expression: hir::ExprId,
+    visiting: &mut HashSet<hir::ExprId>,
+) -> bool {
+    if !visiting.insert(expression) {
+        return false;
+    }
+    let Some(expr) = program.expression(expression) else {
+        return false;
+    };
+    let supported = match &expr.kind {
+        ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => true,
+        ExprKind::Assign {
+            target,
+            value,
+            operator,
+            ..
+        } => {
+            matches!(operator, hir::AssignOperator::Set)
+                && matches!(
+                    target,
+                    hir::AssignTarget::Local(_)
+                        | hir::AssignTarget::InstanceVariable(_)
+                        | hir::AssignTarget::ClassVariable(_)
+                        | hir::AssignTarget::Global(_)
+                        | hir::AssignTarget::Constant(_)
+                )
+                && expr_can_transfer(program, *value, visiting)
+        }
+        ExprKind::Sequence(expressions) => expressions
+            .iter()
+            .all(|expression| expr_can_transfer(program, *expression, visiting)),
+        _ => false,
+    };
+    visiting.remove(&expression);
+    supported
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,6 +285,137 @@ fn loop_graph() -> &'static cfg::Cfg {
         unsupported_spans: Vec::new(),
         expression_values: Vec::new(),
     })
+}
+
+impl<'analyzer, 'src, 'node> BodyTransfer<'analyzer, 'src, 'node> {
+    fn transfer_write(
+        analyzer: &mut Analyzer<'src>,
+        node: &Node<'node>,
+        place: &cfg::Place,
+        actual: Type,
+        environment: &mut Environment,
+    ) -> Type {
+        match place {
+            cfg::Place::Local(local) => {
+                let name = analyzer
+                    .hir_program
+                    .local_name(*local)
+                    .map_or_else(String::new, |name| name.as_str().to_owned());
+                let type_ =
+                    analyzer.apply_inline_assertion_in_environment(node, actual, environment);
+                environment.bind(name, type_.clone());
+                type_
+            }
+            cfg::Place::InstanceVariable(name) => {
+                let name = name.as_str().to_owned();
+                let type_ =
+                    analyzer.apply_inline_assertion_in_environment(node, actual, environment);
+                analyzer.observe_ivar(environment, name.clone(), &type_, false);
+                environment.bind(ivar_refinement_key(&name), type_.clone());
+                type_
+            }
+            cfg::Place::ClassVariable(name) => {
+                let type_ = analyzer.apply_inline_assertion(node, actual);
+                analyzer.observe_class_var(environment, name.as_str().to_owned(), &type_);
+                type_
+            }
+            cfg::Place::Global(name) => {
+                let type_ = analyzer.apply_inline_assertion(node, actual);
+                analyzer.observe_global(name.as_str().to_owned(), &type_);
+                type_
+            }
+            cfg::Place::Constant(path) => {
+                let type_ = analyzer.apply_inline_assertion(node, actual);
+                analyzer.observe_constant(environment, path.as_str().to_owned(), &type_);
+                type_
+            }
+        }
+    }
+}
+
+impl<'analyzer, 'src, 'node> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src, 'node> {
+    type State = BlockState;
+    type Error = ();
+
+    fn transfer_block(
+        &mut self,
+        graph: &cfg::Cfg,
+        block: &cfg::BasicBlock,
+        state: &Self::State,
+    ) -> Result<Vec<cfg::transfer::TransferEdge<Self::State>>, Self::Error> {
+        debug_assert_eq!(graph.body, self.context.body);
+        let _strictness = self.context.strictness;
+        let mut next = state.clone();
+        let nodes = self.nodes;
+        for operation in &block.operations {
+            let node = nodes
+                .nodes
+                .get(&(operation.span.start as usize, operation.span.end as usize))
+                .ok_or(())?;
+            let type_ = match &operation.kind {
+                cfg::OperationKind::Const { value } => Analyzer::cfg_literal_type(value),
+                cfg::OperationKind::Read { place } => {
+                    let read = match place {
+                        cfg::Place::Local(local) => Read::Local(*local),
+                        cfg::Place::InstanceVariable(name) => Read::InstanceVariable(name.clone()),
+                        cfg::Place::ClassVariable(name) => Read::ClassVariable(name.clone()),
+                        cfg::Place::Global(name) => Read::Global(name.clone()),
+                        cfg::Place::Constant(path) => Read::Constant(path.clone()),
+                    };
+                    self.analyzer
+                        .transfer_cfg_read(node, read, &mut next.environment)
+                }
+                cfg::OperationKind::ReadSpecial { read } => {
+                    self.analyzer
+                        .transfer_cfg_read(node, read.clone(), &mut next.environment)
+                }
+                cfg::OperationKind::Write { place, value } => {
+                    let actual = next.value(*value).ok_or(())?;
+                    Self::transfer_write(self.analyzer, node, place, actual, &mut next.environment)
+                }
+                _ => return Err(()),
+            };
+            if let Some(result) = operation.result {
+                next.set_value(result, type_.clone());
+            }
+            self.analyzer.record(node, type_);
+        }
+
+        let edge = |target, state| cfg::transfer::TransferEdge { target, state };
+        match &block.terminator {
+            cfg::Terminator::Jump { target, arguments } => {
+                let target_block = graph.block(*target).ok_or(())?;
+                for (parameter, argument) in target_block.parameters.iter().zip(arguments) {
+                    let type_ = next.value(*argument).ok_or(())?;
+                    next.set_value(parameter.value, type_);
+                }
+                Ok(vec![edge(*target, next)])
+            }
+            cfg::Terminator::Return(value) => {
+                self.normal_type = value
+                    .and_then(|value| next.value(value))
+                    .unwrap_or(Type::Nil);
+                self.final_environment = Some(next.environment);
+                self.terminal_flow = self.terminal_flow.union(next.flow);
+                Ok(Vec::new())
+            }
+            cfg::Terminator::Unreachable => Ok(Vec::new()),
+            cfg::Terminator::Branch { .. } | cfg::Terminator::Raise(_) => Err(()),
+        }
+    }
+
+    fn join_state(
+        &mut self,
+        current: Option<&Self::State>,
+        incoming: Self::State,
+    ) -> (Self::State, bool) {
+        let Some(current) = current else {
+            return (incoming, true);
+        };
+        let joined = current.join(&incoming);
+        let changed = joined != *current;
+        (joined, changed)
+    }
 }
 
 impl<'analyzer, 'src, 'node, 'nodes> cfg::transfer::BlockTransfer
@@ -545,6 +767,94 @@ impl<'analyzer, 'src, 'node, 'nodes> cfg::transfer::BlockTransfer
 }
 
 impl<'src> Analyzer<'src> {
+    /// Run the generic CFG transfer over a complete, straight-line method
+    /// body. Bodies with dispatch, branches, or exceptional control flow stay
+    /// on the recursive evaluator until their owned transfer exists; the
+    /// preflight is important because a failed transfer must not leave partial
+    /// diagnostics or recorded types behind.
+    pub(super) fn eval_cfg_body<'node>(
+        &mut self,
+        node: &Node<'node>,
+        body_id: hir::BodyId,
+        environment: &mut Environment,
+    ) -> Option<Eval> {
+        if !body_can_transfer(&self.hir_program, body_id) {
+            return None;
+        }
+        // The full public builder creates a program-wide expression index for
+        // retained expression values. Body transfer only needs operations and
+        // spans, so use the no-index builder and avoid rescanning the program
+        // once per method.
+        let graph = cfg::lower::build_for_index(&self.hir_program, body_id);
+        let mut nodes = SpanNodeIndex::default();
+        nodes.visit(node);
+        if graph.blocks.iter().any(|block| {
+            block.unwind.is_some()
+                || block.operations.iter().any(|operation| {
+                    matches!(
+                        operation.kind,
+                        cfg::OperationKind::Const { .. }
+                            | cfg::OperationKind::Read { .. }
+                            | cfg::OperationKind::ReadSpecial { .. }
+                            | cfg::OperationKind::Write { .. }
+                    ) && !nodes
+                        .nodes
+                        .contains_key(&(operation.span.start as usize, operation.span.end as usize))
+                })
+                || block.operations.iter().any(|operation| {
+                    !matches!(
+                        operation.kind,
+                        cfg::OperationKind::Const { .. }
+                            | cfg::OperationKind::Read { .. }
+                            | cfg::OperationKind::ReadSpecial { .. }
+                            | cfg::OperationKind::Write { .. }
+                    )
+                })
+                || matches!(
+                    block.terminator,
+                    cfg::Terminator::Branch { .. } | cfg::Terminator::Raise(_)
+                )
+        }) {
+            return None;
+        }
+
+        let body = self.hir_program.body(body_id)?;
+        let context = BodyContext {
+            body: body_id,
+            method: environment.method_key.clone(),
+            self_type: environment.self_type.clone(),
+            parameters: body.parameters.clone(),
+            strictness: self.strictness_at(body.span.start as usize),
+        };
+        let initial = BlockState::with_values(environment.clone(), Vec::new(), Flow::normal());
+        let mut transfer = BodyTransfer {
+            analyzer: self,
+            context,
+            nodes: &nodes,
+            normal_type: Type::Never,
+            abrupt: OutcomeTypes::default(),
+            terminal_flow: Flow::empty(),
+            final_environment: None,
+        };
+        let worklist = cfg::transfer::run(&graph, &mut transfer, initial).ok()?;
+        let normal_type = transfer.normal_type.clone();
+        let abrupt = transfer.abrupt.clone();
+        let terminal_flow = transfer.terminal_flow;
+        let final_environment = transfer.final_environment.clone()?;
+        drop(worklist);
+        drop(transfer);
+        self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);
+        *environment = final_environment;
+        let mut result = Eval::from_parts(
+            Some(normal_type),
+            abrupt,
+            Flow::normal().union(terminal_flow),
+        );
+        let type_ = self.apply_inline_assertion(node, result.type_.clone());
+        result.type_ = self.record(node, type_);
+        Some(result)
+    }
+
     /// Transfer value-producing HIR operations whose semantics do not depend
     /// on a method dispatch. The Prism node is retained only for source
     /// recording and inline assertions; the operation kind and read place
