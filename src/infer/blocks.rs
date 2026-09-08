@@ -9,6 +9,39 @@ use ruby_prism::{Node, ParametersNode};
 use std::collections::BTreeMap;
 
 impl<'src> Analyzer<'src> {
+    /// `define_method` binds its block to instances of the receiver's class.
+    /// Preserve that runtime fact when an inferred helper such as a test DSL
+    /// forwards `&block`; otherwise a class-level declaration block is checked
+    /// with the declaring class object as `self` instead of the eventual
+    /// instance.
+    pub(super) fn observe_define_method_binding(
+        &mut self,
+        name: &str,
+        arguments: &CallArguments<'_>,
+        block: Option<&Node<'_>>,
+        environment: &Environment,
+    ) {
+        if name != "define_method"
+            || (block.is_none()
+                && !arguments
+                    .argument_nodes
+                    .iter()
+                    .any(|argument| argument.as_block_argument_node().is_some()))
+        {
+            return;
+        }
+        let Some(current) = environment.method_key.as_ref() else {
+            return;
+        };
+        let Some(state) = self.declarations.methods.get_mut(current) else {
+            return;
+        };
+        if !state.explicit && !state.binds_block_to_receiver {
+            state.binds_block_to_receiver = true;
+            self.fixpoint.changed_methods.insert(current.clone());
+        }
+    }
+
     pub(super) fn eval_block_node<'node>(
         &mut self,
         node: &Node<'node>,

@@ -1,6 +1,41 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn eval_statements<'node>(
+        &mut self,
+        statements: &ruby_prism::StatementsNode<'node>,
+        environment: &mut Environment,
+    ) -> Eval {
+        let mut flow = Flow::normal();
+        let mut normal_type = Some(Type::Nil);
+        let mut abrupt = OutcomeTypes::default();
+        let body = statements.body();
+        let report_unreachable = environment.method_key.is_some();
+        for child in &body {
+            if flow.is_terminated() {
+                if report_unreachable {
+                    self.error(
+                        &child,
+                        "This expression appears after an unconditional return",
+                    );
+                }
+                // Sorbet still typechecks dead syntax for diagnostics and
+                // reveals. Preserve the enclosing terminated flow while
+                // evaluating the child for its own effects.
+                let _ = self.eval_node(&child, environment);
+                continue;
+            }
+            let result = self.eval_node(&child, environment);
+            abrupt = abrupt.join(&result.abrupt);
+            flow = flow.without(FlowKind::Normal).union(result.flow);
+            normal_type = result.normal_type;
+            if result.flow.is_terminated() {
+                normal_type = None;
+            }
+        }
+        Eval::from_parts(normal_type, abrupt, flow)
+    }
+
     pub(super) fn eval_compound_assignment<'node>(
         &mut self,
         receiver: Type,

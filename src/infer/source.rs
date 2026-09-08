@@ -1,6 +1,6 @@
 //! Source locations used by inference paths that no longer need parser nodes.
 
-use super::{strictness_rank, Analyzer, InferredType, Strictness, UntypedOrigin};
+use super::{strictness_rank, Analyzer, Environment, InferredType, Strictness, UntypedOrigin};
 use crate::diagnostic::Diagnostic;
 use crate::hir;
 use crate::prism;
@@ -38,6 +38,93 @@ impl SourceSite {
 }
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn strictness_at(&self, offset: usize) -> Strictness {
+        let mut strictness = self.config.strictness;
+        for (start, end, candidate) in &self.strictness_ranges {
+            if offset < *start || offset >= *end {
+                continue;
+            }
+            if strictness_rank(*candidate) > strictness_rank(strictness) {
+                strictness = *candidate;
+            }
+        }
+        strictness
+    }
+
+    pub(super) fn reports_missing_api<'node>(&self, node: &Node<'node>) -> bool {
+        let (start, _) = prism::span(node);
+        strictness_rank(self.strictness_at(start)) >= strictness_rank(Strictness::True)
+            && !self.is_rbi_definition(node)
+    }
+
+    pub(super) fn report_missing_method_if_needed<'node>(
+        &mut self,
+        node: &Node<'node>,
+        receiver: &Type,
+        name: &str,
+        resolved: bool,
+    ) {
+        if resolved
+            || !self.reports_missing_api(node)
+            || receiver.is_any()
+            || receiver.contains_any()
+            || receiver.is_never()
+            || matches!(receiver, Type::Anything)
+        {
+            return;
+        }
+        self.error(
+            node,
+            format!("Method `{name}` does not exist on `{receiver}`"),
+        );
+    }
+
+    pub(super) fn constant_is_known(&self, environment: &Environment, name: &str) -> bool {
+        let name = name.trim_start_matches("::");
+        if name == "T" || name.starts_with("T::") {
+            return true;
+        }
+        let owner = self.lexical_owner(environment);
+        let resolved = self.resolve_name(name, owner.as_deref());
+        self.declarations.classes.contains_key(&resolved)
+            || self.declarations.constants.contains_key(&resolved)
+            || self.declarations.type_aliases.contains_key(&resolved)
+            || self.known_nominal_name(name)
+            || self.declarations.class_name_suffixes.contains_key(name)
+            || self.declarations.constant_name_suffixes.contains_key(name)
+    }
+
+    pub(super) fn report_missing_constant_if_needed<'node>(
+        &mut self,
+        node: &Node<'node>,
+        environment: &Environment,
+        name: &str,
+    ) {
+        if !self.reports_missing_api(node) || self.constant_is_known(environment, name) {
+            return;
+        }
+        self.error(
+            node,
+            format!(
+                "Unable to resolve constant `{}`",
+                name.trim_start_matches("::")
+            ),
+        );
+    }
+
+    pub(super) fn is_rbi_definition(&self, node: &Node<'_>) -> bool {
+        let (start, end) = prism::span(node);
+        self.rbi_ranges
+            .iter()
+            .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
+    }
+
+    pub(super) fn is_rbi_offset(&self, offset: usize) -> bool {
+        self.rbi_ranges
+            .iter()
+            .any(|(range_start, range_end)| offset >= *range_start && offset < *range_end)
+    }
+
     pub(super) fn record<'node>(&mut self, node: &Node<'node>, type_: Type) -> Type {
         let (start, end) = prism::span(node);
         let untyped_origin = if type_.contains_any() {
