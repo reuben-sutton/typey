@@ -2,7 +2,7 @@ use super::{
     ivar_refinement_key, Analyzer, Environment, Eval, Flow, FlowKind, HirCallView, SharedKey,
 };
 use crate::cfg;
-use crate::hir::{self, ExprKind, Literal, Read};
+use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
 use crate::prism;
 use crate::types::Type;
 use ruby_prism::{IfNode, Node};
@@ -65,7 +65,11 @@ impl<'src> Analyzer<'src> {
     ) -> Option<Eval> {
         let kind = self.hir_value_kind_for_node(node)?;
         match kind {
-            ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => {
+            ExprKind::Nil
+            | ExprKind::Literal(_)
+            | ExprKind::Read(_)
+            | ExprKind::Array(_)
+            | ExprKind::Hash(_) => {
                 self.cfg_transfer_values = self.cfg_transfer_values.saturating_add(1);
                 Some(self.transfer_cfg_value(node, kind, environment))
             }
@@ -78,9 +82,11 @@ impl<'src> Analyzer<'src> {
         let expression_id = self.hir_value_ids.get(&span)?;
         let expression = self.hir_program.expression(*expression_id)?;
         match &expression.kind {
-            ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => {
-                Some(expression.kind.clone())
-            }
+            ExprKind::Nil
+            | ExprKind::Literal(_)
+            | ExprKind::Read(_)
+            | ExprKind::Array(_)
+            | ExprKind::Hash(_) => Some(expression.kind.clone()),
             _ => None,
         }
     }
@@ -95,8 +101,140 @@ impl<'src> Analyzer<'src> {
             ExprKind::Nil => Type::Nil,
             ExprKind::Literal(literal) => Self::cfg_literal_type(&literal),
             ExprKind::Read(read) => self.transfer_cfg_read(node, read, environment),
+            ExprKind::Array(elements) => {
+                return self.transfer_cfg_array(node, elements, environment);
+            }
+            ExprKind::Hash(elements) => {
+                return self.transfer_cfg_hash(node, elements, environment);
+            }
             _ => unreachable!("non-value HIR operation reached CFG value transfer"),
         };
+        Eval::value(self.record(node, type_))
+    }
+
+    fn transfer_cfg_array<'node>(
+        &mut self,
+        node: &Node<'node>,
+        elements: Vec<ArrayElement>,
+        environment: &mut Environment,
+    ) -> Eval {
+        let Some(array) = node.as_array_node() else {
+            return Eval::value(self.record(node, Type::Any));
+        };
+        let prism_elements = array.elements().into_iter().collect::<Vec<_>>();
+        if prism_elements.len() != elements.len() {
+            return Eval::value(self.record(node, Type::Any));
+        }
+
+        let tuple_depth = self.literal_tuple_depth;
+        self.literal_tuple_depth += 1;
+        let mut element_types = Vec::new();
+        let mut fixed_length = true;
+        let mut element = Type::Never;
+        for (hir_element, prism_element) in elements.into_iter().zip(prism_elements) {
+            let (value_node, splat) = match hir_element {
+                ArrayElement::Value(_) => (prism_element, false),
+                ArrayElement::Splat(_) => {
+                    let value_node = prism_element
+                        .as_splat_node()
+                        .and_then(|splat| splat.expression())
+                        .unwrap_or(prism_element);
+                    (value_node, true)
+                }
+            };
+            let child_type = self.eval_node(&value_node, environment).type_;
+            let child_type = if splat {
+                fixed_length = false;
+                self.array_element_type(&child_type)
+            } else {
+                child_type
+            };
+            element_types.push(child_type.clone());
+            element = element.join(&child_type);
+        }
+        self.literal_tuple_depth = tuple_depth;
+        let element = if element.is_never() {
+            if (self.preserve_literal_tuples || self.preserve_nested_literal_tuples)
+                && tuple_depth > 0
+            {
+                Type::Never
+            } else {
+                Type::Any
+            }
+        } else {
+            element
+        };
+        let inferred = if fixed_length
+            && ((self.preserve_literal_tuples && tuple_depth == 0)
+                || (self.preserve_nested_literal_tuples && tuple_depth > 0)
+                || self.expected_return_type.as_ref().is_some_and(|expected| {
+                    tuple_depth == 0
+                        && matches!(expected, Type::Tuple(elements) if elements.len() == element_types.len())
+                }))
+        {
+            Type::Tuple(element_types)
+        } else {
+            Type::Array(Box::new(element))
+        };
+        let type_ = self.apply_inline_assertion_in_environment(node, inferred, environment);
+        Eval::value(self.record(node, type_))
+    }
+
+    fn transfer_cfg_hash<'node>(
+        &mut self,
+        node: &Node<'node>,
+        elements: Vec<HashElement>,
+        environment: &mut Environment,
+    ) -> Eval {
+        let prism_elements = if let Some(hash) = node.as_hash_node() {
+            hash.elements().into_iter().collect::<Vec<_>>()
+        } else if let Some(hash) = node.as_keyword_hash_node() {
+            hash.elements().into_iter().collect::<Vec<_>>()
+        } else {
+            return Eval::value(self.record(node, Type::Any));
+        };
+        if prism_elements.len() != elements.len() {
+            return Eval::value(self.record(node, Type::Any));
+        }
+
+        let mut key = Type::Never;
+        let mut value = Type::Never;
+        for (hir_element, prism_element) in elements.into_iter().zip(prism_elements) {
+            match hir_element {
+                HashElement::Pair { .. } => {
+                    let Some(assoc) = prism_element.as_assoc_node() else {
+                        return Eval::value(self.record(node, Type::Any));
+                    };
+                    key = key.join(&self.eval_node(&assoc.key(), environment).type_);
+                    value = value.join(&self.eval_node(&assoc.value(), environment).type_);
+                }
+                HashElement::Splat(_) => {
+                    let Some(splat) = prism_element.as_assoc_splat_node() else {
+                        return Eval::value(self.record(node, Type::Any));
+                    };
+                    if let Some(expression) = splat.value() {
+                        match self.eval_node(&expression, environment).type_ {
+                            Type::Hash(splat_key, splat_value) => {
+                                key = key.join(&splat_key);
+                                value = value.join(&splat_value);
+                            }
+                            Type::Any => {
+                                key = Type::Any;
+                                value = Type::Any;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        let key = if key.is_never() { Type::Any } else { key };
+        let value = if value.is_never() { Type::Any } else { value };
+        let type_ = self.apply_inline_assertion_in_environment(
+            node,
+            Type::Hash(Box::new(key), Box::new(value)),
+            environment,
+        );
         Eval::value(self.record(node, type_))
     }
 
