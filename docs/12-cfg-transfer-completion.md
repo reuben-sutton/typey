@@ -163,6 +163,9 @@ The first modularization steps are now in place:
 * the owned-body eligibility walk now lives in `infer/cfg_transfer/preflight.rs`;
   it is a parser-free HIR capability check separate from transfer state and
   inference results.
+* pattern reachability, case-test recognition, and environment narrowing now
+  live in `infer/cfg_transfer/patterns.rs`, keeping owned predicate semantics
+  independent from the worklist coordinator.
 
 The remaining bridges are deliberate and measurable: the legacy call adapter
 still needs parser nodes for exact argument diagnostics and builtin hooks; the
