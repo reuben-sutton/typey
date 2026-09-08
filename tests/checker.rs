@@ -7202,6 +7202,62 @@ fn transfers_inline_dynamic_method_bodies_through_cfg() {
 }
 
 #[test]
+fn compares_passed_dynamic_method_blocks_through_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/dynamic_define_method_bound_block.rb")
+        .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    let start = source.find("assert_equal 1, 1").expect("passed block send");
+    assert!(baseline
+        .types
+        .iter()
+        .any(|inferred| inferred.start == start && inferred.is_send));
+    assert!(cfg
+        .types
+        .iter()
+        .any(|inferred| inferred.start == start && inferred.is_send));
+}
+
+#[test]
+fn transfers_passed_dynamic_method_body_with_bound_receiver() {
+    let path = "tests/fixtures/cfg_passed_dynamic_method.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let baseline = check_fixture(path);
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    let start = source.find("only_instance\nend").expect("passed body");
+    assert!(
+        baseline
+            .types
+            .iter()
+            .any(|inferred| inferred.start == start && inferred.is_send),
+        "baseline types: {:?}",
+        baseline.types
+    );
+    assert!(
+        cfg.types
+            .iter()
+            .any(|inferred| inferred.start == start && inferred.is_send),
+        "cfg types: {:?}",
+        cfg.types
+    );
+}
+
+#[test]
 fn does_not_treat_concern_class_methods_as_module_instances() {
     check_fixture("tests/fixtures/concern_class_methods_self.rb");
 }

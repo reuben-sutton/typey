@@ -197,15 +197,14 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                 _ => None,
             });
         let call_arguments = if let Some(call) = call {
-            analyzer
-                .cfg_owned_hir_call_arguments(
-                    &input,
-                    &call,
-                    values,
-                    fixed_array_elements,
-                    environment,
-                )?
-                .into_call_arguments()
+            let arguments = analyzer.cfg_owned_hir_call_arguments(
+                &input,
+                &call,
+                values,
+                fixed_array_elements,
+                environment,
+            )?;
+            arguments.into_call_arguments()
         } else {
             analyzer.cfg_owned_call_arguments(&input, values, fixed_array_elements)?
         };
@@ -324,6 +323,10 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                         .then_some(UntypedOrigin::DeclaredSignature)
                         .unwrap_or(UntypedOrigin::InferredMethod);
                     (type_, origin)
+                } else if let Some(type_) =
+                    analyzer.cfg_passed_dynamic_method_type(&input, &receiver_type, environment)
+                {
+                    (type_, UntypedOrigin::Propagated)
                 } else {
                     return None;
                 }

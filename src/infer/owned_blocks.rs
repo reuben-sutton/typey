@@ -14,6 +14,48 @@ use crate::signature::MethodSig;
 use crate::types::Type;
 
 impl<'src> Analyzer<'src> {
+    /// `define_method` accepts a block value as a method body.  The ordinary
+    /// method table is intentionally not used for this shape: a passed block
+    /// has no parser node to bind at this call site, and the body is checked
+    /// through the enclosing caller's block contract instead.  Keep the
+    /// language-level return contract here so owned CFG transfer does not
+    /// fall back merely because the RBI cannot describe the dynamic binding.
+    pub(super) fn cfg_passed_dynamic_method_type(
+        &mut self,
+        input: &OwnedCallInput,
+        receiver_type: &Type,
+        environment: &Environment,
+    ) -> Option<Type> {
+        if input.name.as_str() != "define_method"
+            || !matches!(input.block, Some(crate::cfg::BlockOperand::Passed(_)))
+        {
+            return None;
+        }
+        let receiver = match input.receiver {
+            crate::cfg::ReceiverOperand::Implicit => &environment.self_type,
+            crate::cfg::ReceiverOperand::Value(_) => receiver_type,
+            crate::cfg::ReceiverOperand::Super | crate::cfg::ReceiverOperand::Yield => return None,
+        };
+        if Self::class_object_instance_type(receiver).is_none() && !receiver.is_any() {
+            return None;
+        }
+        self.observe_cfg_define_method_binding(environment);
+        Some(Type::Symbol)
+    }
+
+    fn observe_cfg_define_method_binding(&mut self, environment: &Environment) {
+        let Some(current) = environment.method_key.as_ref() else {
+            return;
+        };
+        let Some(state) = self.declarations.methods.get_mut(current) else {
+            return;
+        };
+        if !state.explicit && !state.binds_block_to_receiver {
+            state.binds_block_to_receiver = true;
+            self.fixpoint.changed_methods.insert(current.clone());
+        }
+    }
+
     pub(super) fn cfg_inline_block_return_type<'node>(
         &mut self,
         input: &OwnedCallInput,
