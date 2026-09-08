@@ -19,10 +19,13 @@ impl<'src> Analyzer<'src> {
                         "This expression appears after an unconditional return",
                     );
                 }
-                // Sorbet still typechecks dead syntax for diagnostics and
-                // reveals. Preserve the enclosing terminated flow while
-                // evaluating the child for its own effects.
+                // Sorbet still traverses dead syntax for source/type
+                // accounting, but does not report ordinary missing-method
+                // or contract errors from a path that cannot execute.
+                let previous_suppression = self.suppress_diagnostics;
+                self.suppress_diagnostics = true;
                 let _ = self.eval_node(&child, environment);
+                self.suppress_diagnostics = previous_suppression;
                 continue;
             }
             let result = self.eval_node(&child, environment);

@@ -7287,6 +7287,11 @@ fn preserves_instance_new_overrides() {
 }
 
 #[test]
+fn suppresses_dead_code_api_errors_but_reports_unreachable_code() {
+    check_fixture("tests/fixtures/unreachable_dead_api.rb");
+}
+
+#[test]
 fn does_not_treat_concern_class_methods_as_module_instances() {
     check_fixture("tests/fixtures/concern_class_methods_self.rb");
 }
