@@ -184,6 +184,9 @@ impl<'src> Analyzer<'src> {
             .collect::<HashMap<_, _>>();
         if graph.blocks.iter().any(|block| {
             block.operations.iter().any(|operation| {
+                if self.is_rbi_offset(operation.span.start as usize) {
+                    return false;
+                }
                 !matches!(
                     operation.kind,
                     cfg::OperationKind::Const { .. }
@@ -340,6 +343,16 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
         let mut next = state.clone();
         let mut exception_edges = Vec::new();
         for operation in &block.operations {
+            // Vendored RBI files are declaration input, not executable Ruby.
+            // Their combined top-level graph can still contain parser-shaped
+            // operations such as `undef` or placeholder assignments; ignore
+            // those operations just as declaration bodies are ignored.
+            if self.analyzer.is_rbi_offset(operation.span.start as usize) {
+                if let Some(result) = operation.result {
+                    next.set_value(result, Type::Nil);
+                }
+                continue;
+            }
             let site = SourceSite::from_span(operation.span, operation.expression);
             let previous_suppression = self.analyzer.reporting.suppress_diagnostics;
             if operation.suppress_diagnostics {

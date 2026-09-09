@@ -421,6 +421,7 @@ impl<'program> Builder<'program> {
             ExprKind::Break(value) => self.lower_break(expression, block, value),
             ExprKind::Next(value) => self.lower_next(expression, block, value),
             ExprKind::Retry => self.lower_retry(expression, block, span),
+            ExprKind::Undef(_) => self.lower_literal(expression, block, span, hir::Literal::Nil),
             ExprKind::Definition(declaration) => {
                 let value_expression = self.program.declaration(declaration).and_then(
                     |declaration| match &declaration.kind {

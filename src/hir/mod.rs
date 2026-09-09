@@ -280,6 +280,9 @@ pub enum ExprKind {
     Break(Option<ExprId>),
     Next(Option<ExprId>),
     Retry,
+    /// Remove one or more statically named methods from the current owner.
+    /// The expression evaluates to `nil` like Ruby's `undef` keyword.
+    Undef(Vec<Name>),
     Definition(DeclId),
     Unsupported(Unsupported),
 }

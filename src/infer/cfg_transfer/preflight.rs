@@ -35,6 +35,7 @@ fn failure(
     }
 }
 
+#[cfg(test)]
 pub(super) fn body_transfer_failure(
     program: &hir::Program,
     body_id: hir::BodyId,
@@ -184,7 +185,8 @@ fn has_top_level_legacy_control(
             | ExprKind::Next(None)
             | ExprKind::Retry
             | ExprKind::Definition(_)
-            | ExprKind::Unsupported(_) => false,
+            | ExprKind::Unsupported(_)
+            | ExprKind::Undef(_) => false,
         };
         visiting.remove(&expression_id);
         result
@@ -238,7 +240,11 @@ fn expr_transfer_failure(
                         let Some(closure) = program.closure(*closure) else {
                             return Err(failure(program, expression, "missing inline closure"));
                         };
-                        if let Some(failure) = body_transfer_failure(program, closure.body) {
+                        if let Some(failure) = body_transfer_failure_ignoring_ranges(
+                            program,
+                            closure.body,
+                            context.ignored_ranges,
+                        ) {
                             return Err(failure);
                         }
                     }
@@ -309,7 +315,9 @@ fn expr_transfer_failure(
             let Some(closure) = program.closure(*closure) else {
                 return Err(failure(program, expression, "missing closure"));
             };
-            if let Some(failure) = body_transfer_failure(program, closure.body) {
+            if let Some(failure) =
+                body_transfer_failure_ignoring_ranges(program, closure.body, context.ignored_ranges)
+            {
                 Err(failure)
             } else {
                 Ok(())
@@ -420,7 +428,7 @@ fn expr_transfer_failure(
             }
             Ok(())
         }
-        ExprKind::Retry => Ok(()),
+        ExprKind::Retry | ExprKind::Undef(_) => Ok(()),
         ExprKind::Loop(loop_expr) => {
             match loop_expr.kind {
                 hir::LoopKind::For => {
@@ -515,7 +523,8 @@ fn expr_transfer_failure(
             };
             match declaration.kind {
                 hir::DeclarationKind::Method { body, .. } => {
-                    body_transfer_failure(program, body).map_or(Ok(()), Err)
+                    body_transfer_failure_ignoring_ranges(program, body, context.ignored_ranges)
+                        .map_or(Ok(()), Err)
                 }
                 hir::DeclarationKind::Class {
                     superclass, body, ..
@@ -524,7 +533,11 @@ fn expr_transfer_failure(
                         expr_transfer_failure(program, superclass, visiting, loop_depth, context)?;
                     }
                     if let Some(body) = body {
-                        if let Some(failure) = body_transfer_failure(program, body) {
+                        if let Some(failure) = body_transfer_failure_ignoring_ranges(
+                            program,
+                            body,
+                            context.ignored_ranges,
+                        ) {
                             return Err(failure);
                         }
                     }
@@ -533,7 +546,11 @@ fn expr_transfer_failure(
                 hir::DeclarationKind::Module { body, .. }
                 | hir::DeclarationKind::SingletonClass { body, .. } => {
                     if let Some(body) = body {
-                        if let Some(failure) = body_transfer_failure(program, body) {
+                        if let Some(failure) = body_transfer_failure_ignoring_ranges(
+                            program,
+                            body,
+                            context.ignored_ranges,
+                        ) {
                             return Err(failure);
                         }
                     }

@@ -717,6 +717,41 @@ fn transfers_mixed_forwarding_through_owned_cfg() {
 }
 
 #[test]
+fn transfers_static_undef_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_undef.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    let undef_start = source.find("undef :removed").expect("undef expression");
+    let undef_end = undef_start + "undef :removed".len();
+    assert!(
+        baseline.types.iter().any(|inferred| {
+            inferred.start == undef_start
+                && inferred.end == undef_end
+                && inferred.type_ == Type::Any
+        }),
+        "legacy undef result unexpectedly became concrete: {:?}",
+        baseline.types
+    );
+    assert!(
+        cfg.types.iter().any(|inferred| {
+            inferred.start == undef_start
+                && inferred.end == undef_end
+                && inferred.type_ == Type::Nil
+        }),
+        "CFG did not give undef its concrete nil result: {:?}",
+        cfg.types
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn refines_double_bang_operands_in_owned_logical_cfg() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_logical_double_bang.rb").expect("fixture");

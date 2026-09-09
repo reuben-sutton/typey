@@ -319,6 +319,22 @@ impl<'src> Lowerer<'src> {
             return self.push_expr(node, ExprKind::Defined { value });
         }
 
+        if let Some(undef) = node.as_undef_node() {
+            let names = undef
+                .names()
+                .into_iter()
+                .map(|name| {
+                    name.as_symbol_node().map(|symbol| {
+                        Name::new(String::from_utf8_lossy(symbol.unescaped()).into_owned())
+                    })
+                })
+                .collect::<Option<Vec<_>>>();
+            if let Some(names) = names {
+                return self.push_expr(node, ExprKind::Undef(names));
+            }
+            return self.unsupported(node);
+        }
+
         if let Some(alias) = node.as_alias_method_node() {
             let new_name_node = alias.new_name();
             let old_name_node = alias.old_name();
