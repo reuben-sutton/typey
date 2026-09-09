@@ -87,6 +87,26 @@ pub(super) fn transfer_intrinsic_call(
         }
         "must" => (actual.without(&Type::Nil), UntypedOrigin::Propagated),
         "unsafe" => (Type::Any, UntypedOrigin::Unsafe),
+        "noreturn" => (Type::Never, UntypedOrigin::Propagated),
+        "untyped" | "self_type" => (Type::Any, UntypedOrigin::Propagated),
+        "class_of" => {
+            match arguments.argument_types.len() {
+                0 => analyzer.error_at(input.site, "Not enough arguments"),
+                1 => {}
+                _ => analyzer.error_at(input.site, "Too many arguments"),
+            }
+            let instance = arguments
+                .argument_types
+                .first()
+                .map(|type_| {
+                    Analyzer::class_object_value_type(type_).unwrap_or_else(|| type_.clone())
+                })
+                .unwrap_or(Type::Anything);
+            (
+                Type::Named("Class".to_owned(), vec![instance]),
+                UntypedOrigin::Propagated,
+            )
+        }
         _ => return None,
     };
     Some(result)

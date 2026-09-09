@@ -171,6 +171,13 @@ pub(super) fn transfer_builtin_call(
                 Type::Integer,
             ])))),
             "gcdlcm" | "digits" => Some(Type::Array(Box::new(Type::Integer))),
+            "round" | "ceil" | "floor" | "truncate" => {
+                Some(if arguments.argument_types.is_empty() {
+                    Type::Integer
+                } else {
+                    Type::Float
+                })
+            }
             "to_f" => Some(Type::Float),
             "to_i" | "to_int" => Some(Type::Integer),
             "to_s" | "inspect" => Some(Type::String),

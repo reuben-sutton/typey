@@ -1089,7 +1089,7 @@ impl<'src> Lowerer<'src> {
             };
             return Some(AssignTarget::Attribute {
                 receiver,
-                name: Name::new(prism::constant_name(target.name())),
+                name: Name::new(prism::constant_name(target.name()).trim_end_matches('=')),
             });
         }
         if let Some(target) = node.as_index_target_node() {

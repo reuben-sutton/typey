@@ -26,4 +26,4 @@ class CfgUnionImplicitSelfB < CfgUnionImplicitSelfBase
   end
 end
 
-T.reveal_type(CfgUnionImplicitSelfA.new.value_from_self) # note: Revealed type: T::Array[T.any(Integer, String)]
+T.reveal_type(CfgUnionImplicitSelfA.new.value_from_self) # note: Revealed type: `T.any(String, T::Array[T.any(Integer, String)])`

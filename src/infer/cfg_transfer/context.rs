@@ -223,10 +223,24 @@ pub(super) fn transfer_implicit_call(
             untyped_origin: UntypedOrigin::Propagated,
         });
     }
-    Err(format!(
-        "implicit call `{}` has no method or owned dynamic-method contract",
-        input.name.as_str()
-    ))
+
+    // An unresolved implicit call is a gradual call, not an unsupported CFG
+    // operation. The recursive evaluator reports it when the file is typed
+    // strictly and otherwise continues with `T.untyped`; keep visiting an
+    // inline block with an unknown contract so the enclosing body can remain
+    // on the owned path.
+    analyzer.report_missing_method_if_needed_at(input.site, receiver, input.name.as_str(), false);
+    let block_result = match input.block.as_ref() {
+        Some(cfg::BlockOperand::Inline(closure)) => {
+            analyzer.transfer_owned_closure_body(*closure, &[Type::Any], None, None, environment)
+        }
+        Some(cfg::BlockOperand::Passed(_)) | None => None,
+    };
+    Ok(ContextTransfer {
+        type_: Type::Any,
+        block_result,
+        untyped_origin: UntypedOrigin::FallbackCall,
+    })
 }
 
 pub(super) fn owned_mixin_module_name(

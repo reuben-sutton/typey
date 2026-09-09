@@ -239,7 +239,11 @@ impl Environment {
                 })
                 .collect(),
             hash_shapes: BTreeMap::new(),
-            self_type: self.self_type.clone(),
+            // `self` is flow-sensitive too: a predicate may narrow it on one
+            // branch, and a join must retain the union of all feasible
+            // receiver types rather than whichever branch happened to be
+            // visited first.
+            self_type: lattice.join(&self.self_type, &other.self_type),
             method_key: self.method_key.clone(),
         };
         for name in self.locals.keys().chain(other.locals.keys()) {

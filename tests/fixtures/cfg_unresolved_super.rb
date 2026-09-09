@@ -4,4 +4,4 @@ class CfgUnresolvedSuper
   end
 end
 
-T.reveal_type(CfgUnresolvedSuper.new.value) # note: Revealed type: T.untyped
+T.reveal_type(CfgUnresolvedSuper.new.value) # note: Revealed type: `T.untyped`

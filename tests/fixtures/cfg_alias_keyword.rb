@@ -6,4 +6,4 @@ class CfgAliasKeyword
   alias renamed original
 end
 
-T.reveal_type(CfgAliasKeyword.new.renamed("value")) # note: Revealed type: String
+T.reveal_type(CfgAliasKeyword.new.renamed("value")) # note: Revealed type: `String`

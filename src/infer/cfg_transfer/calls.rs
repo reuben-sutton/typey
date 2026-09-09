@@ -151,6 +151,11 @@ pub(super) fn transfer_call(
         environment,
     ) {
         result
+    } else if let Some((type_, declaration_block)) =
+        analyzer.cfg_declaration_call(&input, &receiver_type, values, environment)
+    {
+        block_result = declaration_block;
+        (type_, UntypedOrigin::Propagated)
     } else if let Some(type_) = dynamic_instance_variable_type {
         (type_, UntypedOrigin::Propagated)
     } else if input.name.as_str() == "!" {
@@ -210,6 +215,14 @@ pub(super) fn transfer_call(
             environment,
             receiver_hash_shape.as_ref(),
         )?;
+        if receiver.missing_method && !is_static_type_receiver(&dispatch_receiver) {
+            analyzer.report_missing_method_if_needed_at(
+                input.site,
+                &dispatch_receiver,
+                input.name.as_str(),
+                false,
+            );
+        }
         block_result = receiver.block_result;
         (receiver.type_, receiver.untyped_origin)
     };
@@ -231,6 +244,23 @@ pub(super) fn transfer_call(
         environment,
     );
     Ok(result)
+}
+
+fn is_static_type_receiver(receiver: &Type) -> bool {
+    match receiver {
+        Type::Named(name, _) | Type::TypeVar(name)
+            if name == "T" || name.starts_with("T::Types::") =>
+        {
+            true
+        }
+        _ => Analyzer::class_object_instance_type(receiver).is_some_and(|instance| {
+            matches!(
+                instance,
+                Type::Named(name, _) | Type::TypeVar(name)
+                    if name == "T" || name.starts_with("T::Types::")
+            )
+        }),
+    }
 }
 
 fn update_hash_shape_after_call(

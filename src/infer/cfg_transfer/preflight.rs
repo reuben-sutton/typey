@@ -562,7 +562,7 @@ mod tests {
 
     #[test]
     fn reports_the_owned_span_and_reason_for_unsupported_hir() {
-        let program = hir::lower(hir::FileId(3), b"alias foo bar");
+        let program = hir::lower(hir::FileId(3), b"BEGIN { 1 }");
         let body = program.root.expect("root body");
         let failure = body_transfer_failure(&program, body).expect("unsupported expression");
         let expression = program.body(body).expect("body").root;

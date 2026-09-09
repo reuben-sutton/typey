@@ -25,6 +25,6 @@ class CfgMultiWriteTargets
   end
 end
 
-T.reveal_type(CfgMultiWriteTargets.new.assign) # note: Revealed type: Integer
-T.reveal_type(CfgMultiWriteTargets.new.indexed) # note: Revealed type: Integer
-T.reveal_type(CfgMultiWriteTargets.new.indexed_with_rights) # note: Revealed type: Integer
+T.reveal_type(CfgMultiWriteTargets.new.assign) # note: Revealed type: `Integer`
+T.reveal_type(CfgMultiWriteTargets.new.indexed) # note: Revealed type: `Integer`
+T.reveal_type(CfgMultiWriteTargets.new.indexed_with_rights) # note: Revealed type: `Integer`

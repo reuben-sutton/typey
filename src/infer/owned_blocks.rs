@@ -15,6 +15,82 @@ use crate::signature::MethodSig;
 use crate::types::Type;
 
 impl<'src> Analyzer<'src> {
+    /// Transfer Module/Class declaration DSL calls without requiring the
+    /// core RBI to describe every metaprogramming entry point. These calls
+    /// are real Ruby sends, but their runtime effect is already represented
+    /// by declaration registration or by the owned dynamic-method contract.
+    pub(super) fn cfg_declaration_call(
+        &mut self,
+        input: &OwnedCallInput,
+        receiver: &Type,
+        _values: &[Option<Type>],
+        environment: &mut Environment,
+    ) -> Option<(Type, Option<Eval>)> {
+        let class_object = Self::class_object_instance_type(receiver);
+        let name = input.name.as_str();
+        let is_declaration = matches!(
+            name,
+            "alias_method"
+                | "attr_reader"
+                | "attr_writer"
+                | "attr_accessor"
+                | "private"
+                | "protected"
+                | "public"
+                | "module_function"
+                | "private_class_method"
+                | "has_attached_class!"
+                | "type_member"
+                | "type_template"
+                | "mixes_in_class_methods"
+                | "private_constant"
+                | "public_constant"
+                | "refine"
+        );
+        if class_object.is_none() {
+            return None;
+        }
+
+        if name == "alias_method" && matches!(input.receiver, cfg::ReceiverOperand::Value(_)) {
+            // Explicit class-object calls retain the dispatch-layer alias
+            // mutation contract below; implicit class-body `alias_method`
+            // calls are handled as declaration DSL.
+            return None;
+        }
+
+        if matches!(name, "define_method" | "define_singleton_method") {
+            let bound_receiver = if name == "define_method" {
+                class_object
+            } else {
+                Some(receiver.clone())
+            };
+            match input.block.as_ref() {
+                Some(cfg::BlockOperand::Inline(closure)) => {
+                    let binding = if name == "define_method" {
+                        BlockReceiverBinding::Instance
+                    } else {
+                        BlockReceiverBinding::Receiver
+                    };
+                    self.observe_cfg_define_method_binding(binding, environment);
+                    let _ = self.transfer_owned_closure_body(
+                        *closure,
+                        &[Type::Any],
+                        None,
+                        bound_receiver.as_ref(),
+                        environment,
+                    );
+                }
+                Some(cfg::BlockOperand::Passed(_)) => {
+                    let _ = self.cfg_passed_dynamic_method_type(input, receiver, environment);
+                }
+                None => {}
+            }
+            return Some((Type::Symbol, None));
+        }
+
+        is_declaration.then_some((Type::Nil, None))
+    }
+
     /// `class_eval`/`module_eval` and their siblings have a block-only Ruby
     /// form that is represented by a separate RBI overload. Dispatching that
     /// overload through ordinary positional arity checking is incorrect: the
@@ -177,7 +253,7 @@ impl<'src> Analyzer<'src> {
         Some(Type::Symbol)
     }
 
-    fn observe_cfg_define_method_binding(
+    pub(super) fn observe_cfg_define_method_binding(
         &mut self,
         binding: BlockReceiverBinding,
         environment: &Environment,
