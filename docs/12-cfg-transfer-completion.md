@@ -326,22 +326,22 @@ matches the legacy run: 18 malformed Minitest shim diagnostics and four
 legitimate NodeHelpers array-index nilability findings.
 
 The latest full ActiveSupport run is the current large-component boundary:
-27,099 HIR bodies were compiled and 9,701 bodies, 36,323 calls, 3,081
-assignments, and 30,702 values transferred across six worklist rounds. There
-were zero unsupported-edge and zero legacy-bridge fallbacks, but 501
+27,099 HIR bodies were compiled and 11,019 bodies, 39,538 calls, 3,350
+assignments, and 33,759 values transferred across seven worklist rounds. There
+were zero unsupported-edge and zero legacy-bridge fallbacks, but 338
 unsupported-operation records remain across 149 unique source spans, plus two
-unsupported HIR handoffs. The largest remaining groups are unresolved
-`super` contracts, missing implicit-call contracts, unavailable owned argument
-shapes, and definition/closure handoffs. The owned run reports 399 diagnostics
-and 12,626 application-library send sites, of which 7,964 (63.1%) are unknown;
-it completes in 159.6 seconds including final reporting after narrowing method
-resolution invalidation to affected dependents. The fresh legacy recursive run
-on the same checkout reports 724 diagnostics in 164.5 seconds. Comparing the
-unique diagnostic messages gives 379 in common, 20 CFG-only findings, and 345
-legacy-only findings. The CFG path is therefore faster than the legacy path on
-this component, but it is not yet a replacement: the remaining work is
-primarily call contract/bridge parity, fallback classification, and
-differential type coverage.
+unsupported HIR handoffs. Unresolved parent `super` calls now follow the
+gradual recursive behavior instead of forcing a body fallback; the largest
+remaining groups are missing implicit-call contracts, unavailable owned
+argument shapes, and definition/closure handoffs. The owned run reports 394
+diagnostics and 12,626 application-library send sites, of which 7,976 (63.2%)
+are unknown; it completes in 167.1 seconds including final reporting after
+narrowing method resolution invalidation to affected dependents. The fresh
+legacy recursive run on the same checkout reports 724 diagnostics in 164.5
+seconds. Comparing the unique diagnostic messages gives 375 in common, 19
+CFG-only findings, and 349 legacy-only findings. The CFG path is not yet a
+replacement: the remaining work is primarily call contract/bridge parity,
+fallback classification, and differential type coverage.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
