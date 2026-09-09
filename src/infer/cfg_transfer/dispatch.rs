@@ -138,6 +138,27 @@ pub(super) fn transfer_receiver_call(
             missing_method: false,
         });
     }
+    if let Type::Tuple(elements) = receiver {
+        if arguments.argument_types.is_empty() {
+            let type_ = match name {
+                // A tuple is a fixed-shape Array, so the generic Array RBI
+                // contract (`Array::Elem`) is not the right result here.
+                // Keep the concrete component just as the recursive
+                // dispatcher does for tuple receivers.
+                "first" => elements.first().cloned().unwrap_or(Type::Nil),
+                "last" => elements.last().cloned().unwrap_or(Type::Nil),
+                _ => Type::Never,
+            };
+            if !type_.is_never() {
+                return Ok(ReceiverTransfer {
+                    type_,
+                    block_result: None,
+                    untyped_origin: UntypedOrigin::InferredMethod,
+                    missing_method: false,
+                });
+            }
+        }
+    }
     if input.safe_navigation && receiver.is_never() {
         return Ok(ReceiverTransfer {
             type_: Type::Nil,
