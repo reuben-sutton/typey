@@ -19,7 +19,7 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, 415 checker tests,
+The current local gates include 22 CFG tests, 12 HIR tests, 419 checker tests,
 226 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
 checker, local conformance, and upstream smoke gates pass; the upstream suite
 takes about 66 seconds because each fixture reloads the bundled RBI set. The
@@ -305,11 +305,10 @@ The first modularization steps are now in place:
 
 The latest release Spoom CFG run transferred 8,722 bodies and 34,569 calls with
 zero unsupported-operation fallbacks, zero unsupported edges, and zero legacy
-bridges. It reports 10 diagnostics in 2.33 seconds including repository
-checking (1.65 seconds through the checker); the legacy path reports three.
-The CFG-only findings are concentrated in missing `YAML.dump`, Prism location
-accessors, and a union-dispatch case, while the legacy-only findings are an
-unreachable-code diagnostic and a nilable return mismatch. The run reached
+bridges. It reports 2 diagnostics in 1.91 seconds including repository
+checking (1.36 seconds through the checker); the legacy path reports 4. There
+are now no CFG-only findings. The two remaining differences are legacy-only:
+an unreachable-code diagnostic and a nilable return mismatch. The run reached
 final convergence in four worklist rounds.
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
@@ -319,12 +318,14 @@ builtin hooks, while forwarded or passed blocks supplied to
 semantics in some receiver contexts. On the latest Packwerk regression run,
 the owned path transferred 8,894 bodies and 38,026 calls with zero
 unsupported-operation fallbacks, zero unsupported edges, and zero legacy
-bridges. It reports 33 diagnostics in 1.26 seconds through the checker (2.08
-seconds including repository discovery and reporting), while the legacy path
-reports 22. All 11 additional CFG findings are calls to `YAML.load_file` or
-`YAML.dump`: the vendored Psych RBI declares `Psych`, and the standard-library
-`YAML = Psych` alias is not currently being applied by the project-RBI loading
-path.
+bridges. Its substantive diagnostics match the legacy path (the current totals
+are 22 owned versus 23 recursive because of an unrelated reporting-count
+difference). The `YAML = Psych` standard-library alias is now modeled through
+the owned declaration path, so the earlier 11 YAML diagnostics are gone. The
+remaining Packwerk difference is accounting: the owned path has 119
+application sends without a recorded type, while the recursive path records
+all 1,578 application sends. This is a publication/send-tracking gap, not
+evidence that the owned path is more correct.
 
 The latest full ActiveSupport run is the current large-component boundary:
 27,099 HIR bodies were compiled and 14,198 bodies and 46,124 calls transferred
@@ -335,9 +336,10 @@ run reports 583 diagnostics and completes in 164.1 seconds; the fresh legacy
 recursive run reports 700 diagnostics in 162.3 seconds. Runtime is therefore
 approximately at parity, but the 117-diagnostic difference and the reduced CFG
 type publication still require differential classification. The CFG path is
-not yet a replacement: remaining work is primarily diagnostic/type parity,
-standard-library alias modeling, complete `undef` method-removal semantics,
-and making CFG the default only after those gates agree.
+not yet a replacement: remaining work is primarily the 117-diagnostic/type-
+publication difference, complete `undef` method-removal semantics, the
+remaining parser-backed call and passed/forwarded-block bridges, and making
+CFG the default only after those gates agree.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
