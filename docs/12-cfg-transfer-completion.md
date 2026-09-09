@@ -326,19 +326,20 @@ matches the legacy run: 18 malformed Minitest shim diagnostics and four
 legitimate NodeHelpers array-index nilability findings.
 
 The latest full ActiveSupport run is the current large-component boundary:
-27,099 HIR bodies were compiled, 13,418 bodies, 49,899 calls, 3,836
-assignments, and 35,611 values transferred across six worklist rounds. There
-were zero unsupported-edge and zero legacy-bridge fallbacks, but 1,086
-unsupported-operation records remain across 218 unique source spans: 144 call
-contract failures, 54 unresolved `super` contracts, 11 definition handoffs,
-three closure handoffs, two assignment handoffs, and five other cases. The
-owned run reports 495 diagnostics and 12,626 application-library send sites,
-of which 7,958 (63.0%) are unknown; it completes in about 275 seconds
-including final reporting. This is not yet an accepted parity checkpoint: the
-legacy recursive run on the same checkout reports 724 diagnostics in about
-164 seconds, with 446 exact diagnostic matches, 49 CFG-only findings, and 278
-legacy-only findings. The extra owned paths therefore need classification and
-fixes before the CFG result can replace the legacy result.
+27,099 HIR bodies were compiled and 14,240 bodies, 52,785 calls, 3,359
+assignments, and 32,735 values transferred across six worklist rounds. There
+were zero unsupported-edge and zero legacy-bridge fallbacks, but 751
+unsupported-operation records remain across 150 unique source spans, plus two
+unsupported HIR handoffs. The largest remaining groups are unresolved `super`
+contracts (54 unique spans), missing implicit-call contracts, five unavailable
+owned argument shapes, and definition/closure handoffs. The owned run reports
+425 diagnostics and 12,626 application-library send sites, of which 7,968
+(63.1%) are unknown; it completes in 273.3 seconds including final reporting.
+The fresh legacy recursive run on the same checkout reports 724 diagnostics in
+164.5 seconds: 393 diagnostics match exactly, with 32 CFG-only findings and
+331 legacy-only findings. The CFG path is therefore transferring most method
+bodies, but it is not yet a replacement: the remaining work is primarily call
+contract/bridge parity and convergence cost, not basic CFG construction.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
