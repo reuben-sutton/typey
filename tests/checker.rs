@@ -87,6 +87,23 @@ fn preserves_positional_hash_argument_shape_through_hir_calls() {
 }
 
 #[test]
+fn transfers_owned_builtin_receiver_contracts() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_builtin_receiver_contracts.rb")
+        .expect("fixture");
+    let baseline = check_fixture("tests/fixtures/cfg_builtin_receiver_contracts.rb");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn compiles_cfg_bodies_without_changing_checker_results() {
     let source = "value = 1\nif value\n  value.to_s\nend\n";
     let baseline = check(source, CheckerConfig::default());

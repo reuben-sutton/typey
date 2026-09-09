@@ -4,7 +4,7 @@
 //! transfer. This layer supplies the structural contracts that the recursive
 //! evaluator historically obtained from Prism-backed builtin hooks.
 
-use super::super::{Analyzer, CallArguments, Environment, Eval, OwnedCallInput};
+use super::super::{name_matches, Analyzer, CallArguments, Environment, Eval, OwnedCallInput};
 use crate::types::Type;
 use crate::{hir, signature};
 
@@ -50,6 +50,21 @@ pub(super) fn transfer_builtin_call(
         }
     }
 
+    if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
+        if let Type::Named(class, _) = &instance {
+            if name_matches(class, "ActiveSupport::Inflector") {
+                return Some((
+                    match name {
+                        "classify" | "camelize" | "underscore" | "humanize" => Type::String,
+                        "inflections" => Type::named("ActiveSupport::Inflector::Inflections"),
+                        _ => return None,
+                    },
+                    None,
+                ));
+            }
+        }
+    }
+
     let mut callback = |parameters: &[Type]| {
         analyzer.cfg_owned_block_return_type(
             input,
@@ -66,6 +81,7 @@ pub(super) fn transfer_builtin_call(
             | "swapcase" | "scrub" | "force_encoding" | "+" | "*" | "delete_prefix"
             | "delete_suffix" => Some(Type::String),
             "length" | "size" | "bytesize" | "count" | "ord" => Some(Type::Integer),
+            "hash" => Some(Type::Integer),
             "empty?" | "start_with?" | "end_with?" | "include?" | "match?" => Some(Type::bool()),
             "to_i" | "to_int" => Some(Type::Integer),
             "to_f" => Some(Type::Float),
@@ -151,6 +167,22 @@ pub(super) fn transfer_builtin_call(
                 value.as_ref().clone(),
             ])))),
             "==" | "!=" => Some(Type::bool()),
+            _ => None,
+        },
+        Type::Named(class, _arguments) if name_matches(class, "ENV") => match name {
+            "[]" | "fetch" | "[]=" => Some(Type::union([Type::Nil, Type::String])),
+            _ => None,
+        },
+        Type::Named(class, arguments) if name_matches(class, "Enumerator") => match name {
+            "map" | "collect" => {
+                if input.block.is_none() {
+                    Some(Type::Named(class.clone(), arguments.clone()))
+                } else {
+                    let element = arguments.first().cloned().unwrap_or(Type::Any);
+                    let callback = callback(std::slice::from_ref(&element))?;
+                    Some(Type::Array(Box::new(Analyzer::block_value_type(&callback))))
+                }
+            }
             _ => None,
         },
         Type::Nil | Type::True | Type::False | Type::Symbol | Type::Object | Type::Named(_, _)
