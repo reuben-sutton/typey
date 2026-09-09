@@ -305,11 +305,19 @@ impl<'src> Analyzer<'src> {
                 || Type::Array(Box::new(Type::Any)),
                 |type_| Type::Array(Box::new(self.array_coercion_element_type(type_))),
             )),
+            "__dir__" => Some(Type::String),
+            "gem" => Some(Type::named("Gem::Specification")),
+            "require" | "require_relative" | "load" => Some(Type::bool()),
             // These are Kernel-level control transfers rather than ordinary
             // receiver method calls. Returning `Never` here lets the owned
             // CFG outcome protocol route their raised type without needing a
             // parser-backed implicit-method lookup.
             "raise" | "fail" | "abort" | "exit" | "exit!" => Some(Type::Never),
+            // Sorbet's `sig { ... }` declaration is registered before
+            // inference and evaluates to nil at runtime. The owned CFG path
+            // must still recognize its call without requiring an application
+            // method or a parser-backed DSL bridge.
+            "sig" => Some(Type::Nil),
             _ => None,
         }
     }

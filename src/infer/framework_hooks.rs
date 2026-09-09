@@ -7,6 +7,74 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn observe_mixin_hook_owned(
+        &mut self,
+        site: SourceSite,
+        module_name: String,
+        base_type: &Type,
+        environment: &mut Environment,
+        extend: bool,
+    ) {
+        let Some(base_types) = Self::class_object_instance_types(base_type) else {
+            return;
+        };
+        for base_type in base_types {
+            let Some(base_type) = Self::named_type_name(&base_type) else {
+                continue;
+            };
+            let info = self
+                .declarations
+                .classes
+                .entry(base_type.clone())
+                .or_default();
+            let changed = if extend {
+                if info.extends.contains(&module_name) {
+                    false
+                } else {
+                    info.extends.push(module_name.clone());
+                    true
+                }
+            } else if info.includes.contains(&module_name) {
+                false
+            } else {
+                info.includes.push(module_name.clone());
+                true
+            };
+            if changed {
+                self.method_resolution_cache.borrow_mut().clear();
+                self.instance_self_type_cache.borrow_mut().clear();
+                self.fixpoint
+                    .changed_methods
+                    .extend(self.declarations.methods.keys().cloned());
+            }
+            let hook = MethodKey {
+                owner: Some(module_name.clone()),
+                name: if extend { "extended" } else { "included" }.to_owned(),
+                singleton: true,
+            };
+            let mut hook_arguments = CallArguments::default();
+            hook_arguments
+                .argument_types
+                .push(Self::class_object_type(&base_type));
+            hook_arguments
+                .positional_types
+                .push(Self::class_object_type(&base_type));
+            let Some(signature) = self.observe_call(&hook, &hook_arguments, false) else {
+                continue;
+            };
+            self.record_method_dependency(&hook, environment);
+            let receiver_type = Self::class_object_type(&module_name);
+            let _ = self.invoke_signature_at(
+                site,
+                if extend { "extended" } else { "included" },
+                &signature,
+                &hook_arguments,
+                Some(&receiver_type),
+                None,
+            );
+        }
+    }
+
     /// Rails initializers are stored as callbacks and later executed with
     /// `Rails::Initializable::Initializer#run`, which uses `instance_exec` on
     /// the engine or railtie instance. The generated Rails RBI does not encode

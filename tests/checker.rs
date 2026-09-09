@@ -74,6 +74,99 @@ fn checks_rbs_comments_and_trailing_assertions() {
 #[test]
 fn checks_sorbet_sig_calls() {
     check_fixture("tests/fixtures/sorbet_sig.rb");
+    let source = std::fs::read_to_string("tests/fixtures/sorbet_sig.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
+fn transfers_kernel_require_calls_through_owned_hir() {
+    let source = r#"
+T.reveal_type(require("library"))
+T.reveal_type(require_relative("library"))
+T.reveal_type(load("library"))
+T.reveal_type(__dir__)
+T.reveal_type(gem("library"))
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn transfers_lambda_outcomes_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_lambda_outcomes.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(baseline
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("T.untyped")));
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Integer")));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn transfers_mixin_calls_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_mixin_calls.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn transfers_dynamic_alias_methods_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_dynamic_alias_method.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(baseline
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("does not exist")));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
 }
 
 #[test]
@@ -448,6 +541,7 @@ T.reveal_type(always_raises)
         },
     );
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
     assert!(cfg
         .diagnostics
         .iter()
@@ -2209,6 +2303,48 @@ fn models_array_comparison() {
 #[test]
 fn keeps_array_index_results_nilable() {
     check_fixture("tests/fixtures/array_index_nilable.rb");
+}
+
+#[test]
+fn preserves_enumerator_entries_element_types_through_owned_cfg() {
+    let source = r#"
+values = T.let(T.unsafe(nil), T::Enumerator[Integer])
+T.reveal_type(values.entries[1])
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(baseline.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Method `entries` does not exist")));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("T.nilable(Integer)")));
+}
+
+#[test]
+fn preserves_nilable_array_indexing_through_owned_cfg() {
+    let source = r#"
+values = [1]
+T.reveal_type(values[1])
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
 }
 
 #[test]
@@ -4346,6 +4482,22 @@ T.reveal_type(__ENCODING__)
             "missing {expected} in {notes:?}"
         );
     }
+}
+
+#[test]
+fn transfers_source_file_pseudo_expression_through_owned_hir() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_source_file.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
 }
 
 #[test]

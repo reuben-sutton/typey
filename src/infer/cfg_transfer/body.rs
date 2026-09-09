@@ -125,8 +125,12 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
         record_result: bool,
     ) -> Option<Eval> {
-        if let Some(failure) = preflight::body_transfer_failure(&self.program.hir_program, body_id)
-        {
+        let body = self.program.hir_program.body(body_id)?;
+        if let Some(failure) = preflight::body_transfer_failure_ignoring_ranges(
+            &self.program.hir_program,
+            body_id,
+            &self.rbi_ranges,
+        ) {
             self.record_cfg_fallback_detail_at(
                 SourceSite::from_span(failure.span, None),
                 "body",
@@ -211,7 +215,6 @@ impl<'src> Analyzer<'src> {
             return None;
         }
 
-        let body = self.program.hir_program.body(body_id)?;
         let closure_kind = match &body.owner {
             hir::BodyOwner::Closure(closure) => self
                 .program

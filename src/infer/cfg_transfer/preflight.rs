@@ -8,9 +8,10 @@ use crate::hir::{self, ArrayElement, ExprKind, HashElement};
 use std::collections::HashSet;
 
 #[derive(Clone, Copy)]
-struct ControlContext {
+struct ControlContext<'a> {
     allow_return: bool,
     allow_block_outcomes: bool,
+    ignored_ranges: &'a [(usize, usize)],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,9 +39,17 @@ pub(super) fn body_transfer_failure(
     program: &hir::Program,
     body_id: hir::BodyId,
 ) -> Option<PreflightFailure> {
+    body_transfer_failure_ignoring_ranges(program, body_id, &[])
+}
+
+pub(super) fn body_transfer_failure_ignoring_ranges(
+    program: &hir::Program,
+    body_id: hir::BodyId,
+    ignored_ranges: &[(usize, usize)],
+) -> Option<PreflightFailure> {
     let body = program.body(body_id)?;
     if matches!(body.owner, hir::BodyOwner::TopLevel)
-        && has_top_level_legacy_control(program, body.root)
+        && has_top_level_legacy_control(program, body.root, ignored_ranges)
     {
         return Some(failure(
             program,
@@ -56,17 +65,25 @@ pub(super) fn body_transfer_failure(
             hir::BodyOwner::Closure(closure_id)
                 if program
                     .closure(*closure_id)
-                .is_some_and(|closure| closure.kind == hir::ClosureKind::Block)
+                    .is_some_and(|closure| {
+                        matches!(closure.kind, hir::ClosureKind::Block | hir::ClosureKind::Lambda)
+                    })
         ),
+        ignored_ranges,
     };
     expr_transfer_failure(program, body.root, &mut visiting, 0, context).err()
 }
 
-fn has_top_level_legacy_control(program: &hir::Program, expression: hir::ExprId) -> bool {
+fn has_top_level_legacy_control(
+    program: &hir::Program,
+    expression: hir::ExprId,
+    ignored_ranges: &[(usize, usize)],
+) -> bool {
     fn visit(
         program: &hir::Program,
         expression_id: hir::ExprId,
         visiting: &mut HashSet<hir::ExprId>,
+        ignored_ranges: &[(usize, usize)],
     ) -> bool {
         if !visiting.insert(expression_id) {
             return false;
@@ -75,73 +92,87 @@ fn has_top_level_legacy_control(program: &hir::Program, expression: hir::ExprId)
             visiting.remove(&expression_id);
             return false;
         };
+        if ignored_ranges.iter().any(|(start, end)| {
+            expression.span.start as usize >= *start && (expression.span.start as usize) < *end
+        }) {
+            visiting.remove(&expression_id);
+            return false;
+        }
         let result = match &expression.kind {
             ExprKind::Assign { value, .. }
             | ExprKind::Defined { value }
             | ExprKind::Splat(value)
             | ExprKind::Return(Some(value))
             | ExprKind::Break(Some(value))
-            | ExprKind::Next(Some(value)) => visit(program, *value, visiting),
-            ExprKind::MultiAssign { value, .. } => visit(program, *value, visiting),
+            | ExprKind::Next(Some(value)) => visit(program, *value, visiting, ignored_ranges),
+            ExprKind::MultiAssign { value, .. } => visit(program, *value, visiting, ignored_ranges),
             ExprKind::Call(call) => {
                 let receiver = match &call.receiver {
-                    hir::Receiver::Explicit(receiver) => visit(program, *receiver, visiting),
+                    hir::Receiver::Explicit(receiver) => {
+                        visit(program, *receiver, visiting, ignored_ranges)
+                    }
                     _ => false,
                 };
                 let arguments = call.arguments.iter().any(|argument| match argument {
                     hir::Argument::Positional(value)
                     | hir::Argument::Splat(value)
                     | hir::Argument::KeywordSplat(value)
-                    | hir::Argument::Keyword { value, .. } => visit(program, *value, visiting),
+                    | hir::Argument::Keyword { value, .. } => {
+                        visit(program, *value, visiting, ignored_ranges)
+                    }
                     hir::Argument::Forwarded => false,
                 });
                 receiver || arguments
             }
             ExprKind::Array(elements) => elements.iter().any(|element| match element {
                 ArrayElement::Value(value) | ArrayElement::Splat { value, .. } => {
-                    visit(program, *value, visiting)
+                    visit(program, *value, visiting, ignored_ranges)
                 }
             }),
             ExprKind::Hash(elements) => elements.iter().any(|element| match element {
                 HashElement::Pair { key, value, .. } => {
-                    visit(program, *key, visiting) || visit(program, *value, visiting)
+                    visit(program, *key, visiting, ignored_ranges)
+                        || visit(program, *value, visiting, ignored_ranges)
                 }
-                HashElement::Splat { value, .. } => visit(program, *value, visiting),
+                HashElement::Splat { value, .. } => {
+                    visit(program, *value, visiting, ignored_ranges)
+                }
             }),
-            ExprKind::Interpolated { parts, .. } => {
-                parts.iter().any(|part| visit(program, *part, visiting))
-            }
+            ExprKind::Interpolated { parts, .. } => parts
+                .iter()
+                .any(|part| visit(program, *part, visiting, ignored_ranges)),
             ExprKind::Range { left, right, .. } => left
                 .iter()
                 .chain(right.iter())
-                .any(|value| visit(program, *value, visiting)),
+                .any(|value| visit(program, *value, visiting, ignored_ranges)),
             ExprKind::Logical { left, right, .. } => {
-                visit(program, *left, visiting) || visit(program, *right, visiting)
+                visit(program, *left, visiting, ignored_ranges)
+                    || visit(program, *right, visiting, ignored_ranges)
             }
             ExprKind::Sequence(expressions) => expressions
                 .iter()
-                .any(|expression| visit(program, *expression, visiting)),
+                .any(|expression| visit(program, *expression, visiting, ignored_ranges)),
             ExprKind::If {
                 condition,
                 then_body,
                 else_body,
             } => {
-                visit(program, *condition, visiting)
-                    || visit(program, *then_body, visiting)
-                    || else_body.is_some_and(|body| visit(program, body, visiting))
+                visit(program, *condition, visiting, ignored_ranges)
+                    || visit(program, *then_body, visiting, ignored_ranges)
+                    || else_body.is_some_and(|body| visit(program, body, visiting, ignored_ranges))
             }
             ExprKind::Case(case) => {
                 case.scrutinee
-                    .is_some_and(|scrutinee| visit(program, scrutinee, visiting))
+                    .is_some_and(|scrutinee| visit(program, scrutinee, visiting, ignored_ranges))
                     || case.arms.iter().any(|arm| {
                         arm.conditions
                             .iter()
-                            .any(|condition| visit(program, *condition, visiting))
-                            || visit(program, arm.body, visiting)
+                            .any(|condition| visit(program, *condition, visiting, ignored_ranges))
+                            || visit(program, arm.body, visiting, ignored_ranges)
                     })
                     || case
                         .else_body
-                        .is_some_and(|body| visit(program, body, visiting))
+                        .is_some_and(|body| visit(program, body, visiting, ignored_ranges))
             }
             ExprKind::Loop(_) | ExprKind::Begin(_) => true,
             ExprKind::Nil
@@ -159,7 +190,7 @@ fn has_top_level_legacy_control(program: &hir::Program, expression: hir::ExprId)
         result
     }
 
-    visit(program, expression, &mut HashSet::new())
+    visit(program, expression, &mut HashSet::new(), ignored_ranges)
 }
 
 fn body_allows_return(program: &hir::Program, body: &hir::Body) -> bool {
@@ -178,7 +209,7 @@ fn expr_transfer_failure(
     expression: hir::ExprId,
     visiting: &mut HashSet<hir::ExprId>,
     loop_depth: usize,
-    context: ControlContext,
+    context: ControlContext<'_>,
 ) -> Result<(), PreflightFailure> {
     if !visiting.insert(expression) {
         return Err(failure(program, expression, "cyclic HIR expression"));
@@ -187,6 +218,14 @@ fn expr_transfer_failure(
         visiting.remove(&expression);
         return Err(failure(program, expression, "missing HIR expression"));
     };
+    if context
+        .ignored_ranges
+        .iter()
+        .any(|(start, end)| expr.span.start as usize >= *start && (expr.span.start as usize) < *end)
+    {
+        visiting.remove(&expression);
+        return Ok(());
+    }
     let result = match &expr.kind {
         ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => Ok(()),
         ExprKind::Defined { value } => {

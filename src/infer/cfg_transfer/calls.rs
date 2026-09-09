@@ -176,7 +176,7 @@ pub(super) fn transfer_call(
         hash_shapes,
         environment,
     );
-    Ok(super::outcomes::finish_call(
+    let result = super::outcomes::finish_call(
         analyzer,
         &input,
         &receiver_type,
@@ -184,7 +184,8 @@ pub(super) fn transfer_call(
         block_result,
         untyped_origin,
         environment,
-    ))
+    );
+    Ok(result)
 }
 
 fn update_hash_shape_after_call(

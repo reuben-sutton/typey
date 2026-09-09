@@ -279,6 +279,16 @@ impl<'src> Analyzer<'src> {
         let Some(state) = self.declarations.methods.get(&resolved) else {
             return signature;
         };
+        if !state.explicit && state.return_type.is_none() {
+            // Inferred methods use `Never` as the worklist's provisional
+            // bottom. That is not evidence that the call terminates: the
+            // method may simply have not been evaluated yet (often because
+            // it is declared after a DSL callback that calls it). Keep the
+            // callback's normal path alive until convergence supplies the
+            // actual summary.
+            signature.return_type = Type::Any;
+            return signature;
+        }
         if state.explicit
             || !state.return_terminates
             || !state.return_type.as_ref().is_some_and(Type::is_never)

@@ -116,6 +116,66 @@ pub(super) fn transfer_receiver_call(
         });
     }
 
+    if matches!(name, "include" | "prepend" | "extend")
+        && Analyzer::class_object_owner(receiver).is_some()
+    {
+        if let Some(module_name) =
+            super::context::owned_mixin_module_name(analyzer, input, environment)
+        {
+            analyzer.observe_mixin_hook_owned(
+                input.site,
+                module_name,
+                receiver,
+                environment,
+                name == "extend",
+            );
+        }
+        return Ok(ReceiverTransfer {
+            type_: Type::Nil,
+            block_result: None,
+            untyped_origin: UntypedOrigin::Propagated,
+            missing_method: false,
+        });
+    }
+
+    // `Module#alias_method` mutates the receiver's instance-method table.
+    // This is commonly called through an `included` hook, where declaration
+    // registration cannot see the receiver or the method names. Record the
+    // same alias in the shared method graph so subsequent calls use the real
+    // inherited signature instead of falling back to `T.untyped`.
+    if name == "alias_method" {
+        if let (Some(owner), Some((new_name, old_name))) = (
+            Analyzer::class_object_owner(receiver),
+            super::builtins::owned_symbol_arguments(analyzer, input),
+        ) {
+            let new_key = MethodKey {
+                owner: Some(owner.clone()),
+                name: new_name,
+                singleton: false,
+            };
+            let old_key = MethodKey {
+                owner: Some(owner),
+                name: old_name,
+                singleton: false,
+            };
+            let changed = analyzer.declarations.aliases.get(&new_key) != Some(&old_key);
+            analyzer.declarations.aliases.insert(new_key, old_key);
+            if changed {
+                analyzer.method_resolution_cache.borrow_mut().clear();
+                analyzer
+                    .fixpoint
+                    .changed_methods
+                    .extend(analyzer.declarations.methods.keys().cloned());
+            }
+            return Ok(ReceiverTransfer {
+                type_: Type::Nil,
+                block_result: None,
+                untyped_origin: UntypedOrigin::Propagated,
+                missing_method: false,
+            });
+        }
+    }
+
     let is_struct_constructor = input
         .expression
         .and_then(|expression| analyzer.program.hir_program.expression(expression))
@@ -207,6 +267,29 @@ pub(super) fn transfer_receiver_call(
                     missing_method: false,
                 });
             }
+        }
+    }
+
+    // Array indexing is partial even when the core RBI supplies a declared
+    // overload. Prefer the structural contract so an integer index retains
+    // its nilable result instead of trusting a generic summary that loses the
+    // out-of-bounds path.
+    if name == "[]" && matches!(receiver, Type::Array(_) | Type::Tuple(_)) {
+        if let Some((type_, block_result)) = super::builtins::transfer_builtin_call(
+            analyzer,
+            input,
+            receiver,
+            arguments,
+            values,
+            environment,
+            hash_shape,
+        ) {
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result,
+                untyped_origin: UntypedOrigin::FallbackCall,
+                missing_method: false,
+            });
         }
     }
 

@@ -218,18 +218,25 @@ pub(super) fn transfer_builtin_call(
             "[]" | "fetch" | "[]=" => Some(Type::union([Type::Nil, Type::String])),
             _ => None,
         },
-        Type::Named(class, arguments) if name_matches(class, "Enumerator") => match name {
-            "map" | "collect" => {
-                if input.block.is_none() {
-                    Some(Type::Named(class.clone(), arguments.clone()))
-                } else {
-                    let element = arguments.first().cloned().unwrap_or(Type::Any);
-                    let callback = callback(std::slice::from_ref(&element))?;
-                    Some(Type::Array(Box::new(Analyzer::block_value_type(&callback))))
+        Type::Named(class, arguments)
+            if name_matches(class, "Enumerator") || name_matches(class, "Enumerable") =>
+        {
+            match name {
+                "map" | "collect" => {
+                    if input.block.is_none() {
+                        Some(Type::Named(class.clone(), arguments.clone()))
+                    } else {
+                        let element = arguments.first().cloned().unwrap_or(Type::Any);
+                        let callback = callback(std::slice::from_ref(&element))?;
+                        Some(Type::Array(Box::new(Analyzer::block_value_type(&callback))))
+                    }
                 }
+                "entries" | "to_a" => Some(Type::Array(Box::new(
+                    arguments.first().cloned().unwrap_or(Type::Any),
+                ))),
+                _ => None,
             }
-            _ => None,
-        },
+        }
         Type::Nil | Type::True | Type::False | Type::Symbol | Type::Object | Type::Named(_, _)
             if matches!(name, "to_s" | "inspect") =>
         {
@@ -277,6 +284,30 @@ fn owned_inline_record_key(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> O
         | hir::ExprKind::Literal(hir::Literal::String(name)) => Some(name.clone()),
         _ => None,
     }
+}
+
+pub(super) fn owned_symbol_arguments(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+) -> Option<(String, String)> {
+    let expression = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))?;
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return None;
+    };
+    let mut symbols = call.arguments.iter().filter_map(|argument| {
+        let hir::Argument::Positional(argument) = argument else {
+            return None;
+        };
+        let expression = analyzer.program.hir_program.expression(*argument)?;
+        match &expression.kind {
+            hir::ExprKind::Literal(hir::Literal::Symbol(name))
+            | hir::ExprKind::Literal(hir::Literal::String(name)) => Some(name.clone()),
+            _ => None,
+        }
+    });
+    Some((symbols.next()?, symbols.next()?))
 }
 
 pub(super) fn owned_hash_key(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<HashKey> {

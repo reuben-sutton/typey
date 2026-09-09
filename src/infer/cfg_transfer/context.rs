@@ -7,6 +7,7 @@
 
 use super::super::{Analyzer, CallArguments, Environment, Eval, OwnedCallInput, UntypedOrigin};
 use crate::cfg;
+use crate::hir;
 use crate::types::Type;
 
 pub(super) struct ContextTransfer {
@@ -80,6 +81,22 @@ pub(super) fn transfer_implicit_call(
     values: &[Option<Type>],
     environment: &mut Environment,
 ) -> Result<ContextTransfer, String> {
+    if matches!(input.name.as_str(), "include" | "prepend" | "extend") {
+        if let Some(module_name) = owned_mixin_module_name(analyzer, input, environment) {
+            analyzer.observe_mixin_hook_owned(
+                input.site,
+                module_name,
+                receiver,
+                environment,
+                input.name.as_str() == "extend",
+            );
+        }
+        return Ok(ContextTransfer {
+            type_: Type::Nil,
+            block_result: None,
+            untyped_origin: UntypedOrigin::Propagated,
+        });
+    }
     if matches!(input.name.as_str(), "lambda" | "proc") {
         if let Some(cfg::BlockOperand::Inline(closure)) = input.block.as_ref() {
             let type_ = analyzer
@@ -146,5 +163,30 @@ pub(super) fn transfer_implicit_call(
     Err(format!(
         "implicit call `{}` has no method or owned dynamic-method contract",
         input.name.as_str()
+    ))
+}
+
+pub(super) fn owned_mixin_module_name(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    environment: &Environment,
+) -> Option<String> {
+    let expression = input.expression?;
+    let hir::ExprKind::Call(call) = &analyzer.program.hir_program.expression(expression)?.kind
+    else {
+        return None;
+    };
+    let value = call.arguments.iter().find_map(|argument| match argument {
+        hir::Argument::Positional(value) => Some(*value),
+        _ => None,
+    })?;
+    let hir::ExprKind::Read(hir::Read::Constant(path)) =
+        &analyzer.program.hir_program.expression(value)?.kind
+    else {
+        return None;
+    };
+    Some(analyzer.resolve_name(
+        path.as_str(),
+        analyzer.lexical_owner(environment).as_deref(),
     ))
 }

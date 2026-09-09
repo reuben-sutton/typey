@@ -1763,6 +1763,9 @@ impl<'program> Builder<'program> {
     }
 
     fn lower_break(&mut self, expression: ExprId, block: BlockId, value: Option<ExprId>) -> Flow {
+        if self.closure_kind == Some(hir::ClosureKind::Lambda) && self.loops.is_empty() {
+            return self.lower_return(expression, block, value);
+        }
         if self.closure_kind == Some(hir::ClosureKind::Block) && self.loops.is_empty() {
             return self.lower_block_outcome(expression, block, value, OutcomeKind::Break);
         }
@@ -1786,6 +1789,9 @@ impl<'program> Builder<'program> {
     }
 
     fn lower_next(&mut self, expression: ExprId, block: BlockId, value: Option<ExprId>) -> Flow {
+        if self.closure_kind == Some(hir::ClosureKind::Lambda) && self.loops.is_empty() {
+            return self.lower_return(expression, block, value);
+        }
         if self.closure_kind == Some(hir::ClosureKind::Block) && self.loops.is_empty() {
             return self.lower_block_outcome(expression, block, value, OutcomeKind::Next);
         }

@@ -924,6 +924,12 @@ impl<'src> Lowerer<'src> {
         if node.as_x_string_node().is_some() {
             return self.push_expr(node, ExprKind::Literal(Literal::XString(self.text(node))));
         }
+        // `__FILE__` is a parser pseudo-expression, not an application call.
+        // Its runtime value depends on the source path, which is not part of
+        // the type-only HIR, but its concrete checker type is always String.
+        if node.as_source_file_node().is_some() {
+            return self.push_expr(node, ExprKind::Literal(Literal::String(String::new())));
+        }
         if let Some(local) = node.as_local_variable_read_node() {
             let local = self.local(&prism::constant_name(local.name()));
             return self.push_expr(node, ExprKind::Read(Read::Local(local)));
