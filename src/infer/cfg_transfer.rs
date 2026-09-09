@@ -7,6 +7,7 @@ mod builtins;
 mod calls;
 mod collections;
 mod construction;
+mod dispatch;
 mod exceptions;
 mod flow;
 mod globals;

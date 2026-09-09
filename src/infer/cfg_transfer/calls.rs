@@ -1,8 +1,7 @@
 //! Shared call-specific semantics for owned CFG transfer.
 
 use super::super::{
-    proc_parts, Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput,
-    SourceSite, UntypedOrigin,
+    Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput, UntypedOrigin,
 };
 use crate::cfg;
 use crate::hir;
@@ -217,120 +216,16 @@ pub(super) fn transfer_call(
                 format!("Used `&.` operator on `{receiver_type}`, which can never be nil"),
             );
         }
-        let callable_type = if matches!(input.name.as_str(), "call" | "[]") {
-            super::calls::transfer_callable_call(
-                analyzer,
-                input.site,
-                &dispatch_receiver,
-                &call_arguments,
-            )
-        } else {
-            None
-        };
-        if let Some(type_) = callable_type {
-            (type_, UntypedOrigin::Propagated)
-        } else if input.safe_navigation && dispatch_receiver.is_never() {
-            (Type::Nil, UntypedOrigin::FallbackCall)
-        } else {
-            // `[]` is also ordinary Ruby method dispatch. Only proc-like
-            // receivers use the callable shorthand; a nominal receiver
-            // must still resolve its declared `[]` method here.
-            let key = analyzer.receiver_method_key(
-                None,
-                &dispatch_receiver,
-                input.name.as_str(),
-                environment,
-            );
-            if let Some(key) = key {
-                analyzer.record_method_dependency(&key, environment);
-                if let Some(signature) = analyzer
-                    .observe_call(&key, &call_arguments, has_block)
-                    .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
-                {
-                    let callback_result = analyzer.cfg_block_return_type(
-                        &input,
-                        &key,
-                        &signature,
-                        &call_arguments,
-                        &dispatch_receiver,
-                        values,
-                        environment,
-                    );
-                    let block_return_type =
-                        callback_result.as_ref().map(Analyzer::block_value_type);
-                    let type_ = analyzer.invoke_signature_at(
-                        input.site,
-                        input.name.as_str(),
-                        &signature,
-                        &call_arguments,
-                        Some(&dispatch_receiver),
-                        block_return_type.as_ref(),
-                    );
-                    block_result = callback_result;
-                    let type_ = if input.name.as_str() == "new" {
-                        let type_ = analyzer.instantiate_generic_class(type_);
-                        analyzer.default_class_constructor_type(&dispatch_receiver, type_)
-                    } else {
-                        type_
-                    };
-                    let origin = analyzer
-                        .resolve_method_key(&key)
-                        .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
-                        .is_some_and(|state| state.explicit)
-                        .then_some(UntypedOrigin::DeclaredSignature)
-                        .unwrap_or(UntypedOrigin::InferredMethod);
-                    (type_, origin)
-                } else if let Some((type_, callback)) = super::collections::transfer_collection_call(
-                    analyzer,
-                    &input,
-                    &dispatch_receiver,
-                    values,
-                    environment,
-                ) {
-                    block_result = callback;
-                    (type_, UntypedOrigin::FallbackCall)
-                } else if let Some((type_, callback)) = super::builtins::transfer_builtin_call(
-                    analyzer,
-                    &input,
-                    &dispatch_receiver,
-                    &call_arguments,
-                    values,
-                    environment,
-                ) {
-                    block_result = callback;
-                    (type_, UntypedOrigin::FallbackCall)
-                } else {
-                    return Err(format!(
-                        "receiver call `{}` on `{dispatch_receiver}` has no method, collection, or builtin contract",
-                        input.name.as_str()
-                    ));
-                }
-            } else if let Some((type_, callback)) = super::collections::transfer_collection_call(
-                analyzer,
-                &input,
-                &dispatch_receiver,
-                values,
-                environment,
-            ) {
-                block_result = callback;
-                (type_, UntypedOrigin::FallbackCall)
-            } else if let Some((type_, callback)) = super::builtins::transfer_builtin_call(
-                analyzer,
-                &input,
-                &dispatch_receiver,
-                &call_arguments,
-                values,
-                environment,
-            ) {
-                block_result = callback;
-                (type_, UntypedOrigin::FallbackCall)
-            } else {
-                return Err(format!(
-                    "receiver call `{}` on `{dispatch_receiver}` has no method, collection, or builtin contract",
-                    input.name.as_str()
-                ));
-            }
-        }
+        let receiver = super::dispatch::transfer_receiver_call(
+            analyzer,
+            &input,
+            &dispatch_receiver,
+            &call_arguments,
+            values,
+            environment,
+        )?;
+        block_result = receiver.block_result;
+        (receiver.type_, receiver.untyped_origin)
     };
     let type_ = if input.safe_navigation && !receiver_type.is_any() {
         Type::union([Type::Nil, type_])
@@ -373,49 +268,6 @@ pub(super) fn transfer_call(
     }
     analyzer.remember_untyped_origin_at(input.site, &result.type_, untyped_origin);
     Ok(result)
-}
-
-pub(super) fn transfer_callable_call(
-    analyzer: &mut Analyzer<'_>,
-    site: SourceSite,
-    receiver: &Type,
-    arguments: &super::super::CallArguments<'_>,
-) -> Option<Type> {
-    match receiver {
-        Type::Proc(_, _) | Type::BoundProc { .. } => {
-            let (parameters, result) = proc_parts(receiver)?;
-            for (index, (actual, expected)) in
-                arguments.argument_types.iter().zip(parameters).enumerate()
-            {
-                if !analyzer.is_assignable(actual, expected) {
-                    let argument_site =
-                        arguments.argument_sites.get(index).copied().unwrap_or(site);
-                    analyzer.error_at(
-                        argument_site,
-                        format!(
-                            "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
-                        ),
-                    );
-                }
-            }
-            Some(result.clone())
-        }
-        Type::Union(members)
-            if members.iter().all(|member| {
-                member.is_nil() || matches!(member, Type::Proc(_, _) | Type::BoundProc { .. })
-            }) =>
-        {
-            let mut result = Type::Never;
-            for member in members {
-                if !member.is_nil() {
-                    result =
-                        result.join(&transfer_callable_call(analyzer, site, member, arguments)?);
-                }
-            }
-            Some(if result.is_never() { Type::Any } else { result })
-        }
-        _ => None,
-    }
 }
 
 pub(super) fn cfg_call_raise_type(
