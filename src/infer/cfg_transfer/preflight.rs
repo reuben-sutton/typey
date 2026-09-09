@@ -141,6 +141,10 @@ fn expr_transfer_failure(
             }
             Ok(())
         }
+        ExprKind::Logical { left, right, .. } => {
+            expr_transfer_failure(program, *left, visiting, loop_depth, context)?;
+            expr_transfer_failure(program, *right, visiting, loop_depth, context)
+        }
         ExprKind::Closure(closure) => {
             let Some(closure) = program.closure(*closure) else {
                 return Err(failure(program, expression, "missing closure"));

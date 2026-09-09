@@ -374,6 +374,9 @@ impl<'program> Builder<'program> {
             ExprKind::Interpolated { kind, parts } => {
                 self.lower_interpolated(expression, block, span, kind, parts)
             }
+            ExprKind::Logical { left, right, kind } => {
+                self.lower_logical(expression, block, span, left, right, kind)
+            }
             ExprKind::Closure(closure) => {
                 let value = self.emit(block, span, OperationKind::MakeClosure { closure }, true);
                 self.normal(expression, block, value)
@@ -467,6 +470,64 @@ impl<'program> Builder<'program> {
             true,
         );
         self.normal(expression, flow.block, value)
+    }
+
+    fn lower_logical(
+        &mut self,
+        expression: ExprId,
+        block: BlockId,
+        span: Span,
+        left: ExprId,
+        right: ExprId,
+        kind: hir::LogicalKind,
+    ) -> Flow {
+        let left_flow = self.lower_expr(left, block);
+        if !left_flow.reachable {
+            return self.abrupt(expression, left_flow.block);
+        }
+        let left_value = left_flow.value.expect("logical left produces a value");
+        let rhs_block = self.new_block_like(left_flow.block);
+        let existing_block = self.new_block_like(left_flow.block);
+        let join = self.new_block_like(left_flow.block);
+        let joined = self.add_parameter(join);
+        let predicate = self.emit(
+            left_flow.block,
+            span,
+            OperationKind::PatternTest {
+                value: left_value,
+                pattern: Pattern::Truthy,
+            },
+            true,
+        );
+        let predicate = predicate.expect("logical predicate produces a value");
+        match kind {
+            hir::LogicalKind::And => {
+                self.branch(left_flow.block, predicate, rhs_block, existing_block)
+            }
+            hir::LogicalKind::Or => {
+                self.branch(left_flow.block, predicate, existing_block, rhs_block)
+            }
+        }
+        self.jump(existing_block, join, vec![left_value]);
+        let right_flow = self.lower_expr(right, rhs_block);
+        if right_flow.reachable {
+            self.jump(
+                right_flow.block,
+                join,
+                vec![right_flow.value.expect("logical right produces a value")],
+            );
+        } else {
+            self.record_terminal_return(right_flow.block, expression);
+        }
+        self.emit(
+            join,
+            span,
+            OperationKind::Record {
+                value: Some(joined),
+            },
+            false,
+        );
+        self.normal(expression, join, Some(joined))
     }
 
     fn lower_read(&mut self, expression: ExprId, block: BlockId, span: Span, read: Read) -> Flow {

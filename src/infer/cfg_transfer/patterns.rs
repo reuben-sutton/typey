@@ -6,46 +6,53 @@ use crate::cfg;
 use crate::hir::{self, ExprKind, Literal, Read};
 use crate::types::Type;
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PatternSource {
+    pub(super) expression: hir::ExprId,
+    pub(super) truthy: bool,
+}
+
 pub(super) fn narrow_pattern_value(
-    analyzer: &Analyzer<'_>,
+    analyzer: &mut Analyzer<'_>,
     state: &mut BlockState,
     value: cfg::ValueId,
     pattern: &cfg::Pattern,
     truthy: bool,
     source_place: Option<&cfg::Place>,
+    source: Option<PatternSource>,
 ) {
-    let Some(source) = state.value(value) else {
+    let Some(source_type) = state.value(value) else {
         return;
     };
     let narrowed = match pattern {
         cfg::Pattern::Nil => {
             if truthy {
-                source.meet(&Type::Nil)
+                source_type.meet(&Type::Nil)
             } else {
-                source.without(&Type::Nil)
+                source_type.without(&Type::Nil)
             }
         }
         cfg::Pattern::Truthy | cfg::Pattern::LogicalAnd | cfg::Pattern::LogicalOr => {
             if truthy {
-                source.truthy_part()
+                source_type.truthy_part()
             } else {
-                source.falsy_part()
+                source_type.falsy_part()
             }
         }
-        cfg::Pattern::Iteration => source,
+        cfg::Pattern::Iteration => source_type,
         cfg::Pattern::Case {
             condition,
             expression,
         } => {
             let condition = state.value(*condition).unwrap_or(Type::Any);
             if !case_pattern_is_type_test(analyzer, *expression, &condition) {
-                source
+                source_type
             } else {
                 let expected = Analyzer::class_object_value_type(&condition).unwrap_or(condition);
                 if truthy {
-                    analyzer.meet_predicate_type(&source, &expected)
+                    analyzer.meet_predicate_type(&source_type, &expected)
                 } else {
-                    source.without(&expected)
+                    source_type.without(&expected)
                 }
             }
         }
@@ -66,6 +73,19 @@ pub(super) fn narrow_pattern_value(
             _ => {}
         }
     }
+    if matches!(
+        pattern,
+        cfg::Pattern::Truthy | cfg::Pattern::LogicalAnd | cfg::Pattern::LogicalOr
+    ) {
+        let Some(source) = source else {
+            return;
+        };
+        analyzer.narrow_cfg_predicate(
+            source.expression,
+            &mut state.environment,
+            truthy == source.truthy,
+        );
+    }
 }
 
 pub(super) fn pattern_source_place(graph: &cfg::Cfg, value: cfg::ValueId) -> Option<cfg::Place> {
@@ -77,6 +97,32 @@ pub(super) fn pattern_source_place(graph: &cfg::Cfg, value: cfg::ValueId) -> Opt
             })?
         })
     })
+}
+
+pub(super) fn pattern_source(graph: &cfg::Cfg, value: cfg::ValueId) -> Option<PatternSource> {
+    let operation = graph.blocks.iter().find_map(|block| {
+        block
+            .operations
+            .iter()
+            .find(|operation| operation.result == Some(value))
+    })?;
+    let expression = operation.expression?;
+    match &operation.kind {
+        cfg::OperationKind::Read { .. } => Some(PatternSource {
+            expression,
+            truthy: true,
+        }),
+        cfg::OperationKind::Call {
+            receiver: cfg::ReceiverOperand::Value(receiver),
+            name,
+            ..
+        } if name.as_str() == "!" => {
+            let mut source = pattern_source(graph, *receiver)?;
+            source.truthy = !source.truthy;
+            Some(source)
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn case_pattern_is_type_test(

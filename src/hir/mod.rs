@@ -244,6 +244,11 @@ pub enum ExprKind {
         kind: InterpolatedKind,
         parts: Vec<ExprId>,
     },
+    Logical {
+        left: ExprId,
+        right: ExprId,
+        kind: LogicalKind,
+    },
     Closure(ClosureId),
     Sequence(Vec<ExprId>),
     If {
@@ -269,6 +274,12 @@ pub enum InterpolatedKind {
     Symbol,
     XString,
     MatchLastLine,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogicalKind {
+    And,
+    Or,
 }
 
 /// A call preserves syntax-level argument shape until inference evaluates it.

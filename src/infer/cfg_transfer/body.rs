@@ -5,7 +5,7 @@ use super::super::{
     Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput, SourceSite,
 };
 use super::globals::{clear_cfg_global_state, commit_cfg_global_state, seed_cfg_global_state};
-use super::patterns::{narrow_pattern_value, pattern_source_place};
+use super::patterns::{narrow_pattern_value, pattern_source, pattern_source_place};
 use super::preflight;
 use crate::cfg;
 use crate::hir::{self, Read};
@@ -602,6 +602,8 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 let (source_id, pattern) = pattern.unwrap_or((None, None));
                 let source_place =
                     source_id.and_then(|source_id| pattern_source_place(graph, source_id));
+                let source_predicate =
+                    source_id.and_then(|source_id| pattern_source(graph, source_id));
                 let source = next
                     .value(source_id.unwrap_or(*condition))
                     .ok_or_else(|| format!("missing branch operand {:?}", condition))?;
@@ -661,6 +663,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             pattern,
                             true,
                             source_place.as_ref(),
+                            source_predicate,
                         );
                         if state.pending_exception.is_some()
                             && matches!(pattern, cfg::Pattern::Case { .. })
@@ -689,6 +692,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             pattern,
                             false,
                             source_place.as_ref(),
+                            source_predicate,
                         );
                     }
                     edges.push(edge(*falsy, state));

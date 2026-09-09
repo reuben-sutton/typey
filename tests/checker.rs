@@ -208,6 +208,38 @@ fn applies_safe_navigation_assertions_after_paths_join() {
 }
 
 #[test]
+fn transfers_logical_values_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_logical_values.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn refines_double_bang_operands_in_owned_logical_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_logical_double_bang.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_owned_collection_trees_without_prism_child_evaluation() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_owned_collection_trees.rb").expect("fixture");

@@ -10,8 +10,8 @@ use super::{
     Argument, ArrayElement, AssignOperator, AssignTarget, BeginExpr, Body, BodyId, BodyOwner,
     CaseArm, CaseExpr, Closure, ClosureId, ClosureKind, ConstantPath, DeclId, Declaration,
     DeclarationKind, Expr, ExprId, ExprKind, FileId, HashElement, InterpolatedKind, Literal,
-    LocalId, LoopExpr, LoopKind, Name, Parameter, ParameterKind, Parameters, Program, Read,
-    Receiver, RescueClause, ScopeId, Span, Unsupported,
+    LocalId, LogicalKind, LoopExpr, LoopKind, Name, Parameter, ParameterKind, Parameters, Program,
+    Read, Receiver, RescueClause, ScopeId, Span, Unsupported,
 };
 use crate::prism;
 use ruby_prism::{ArgumentsNode, CallNode, Node, ParametersNode, Visit};
@@ -553,6 +553,12 @@ impl<'src> Lowerer<'src> {
 
         if let Some(call) = node.as_call_node() {
             return self.lower_call(node, &call);
+        }
+        if let Some(and) = node.as_and_node() {
+            return self.lower_logical(node, and.left(), and.right(), LogicalKind::And);
+        }
+        if let Some(or) = node.as_or_node() {
+            return self.lower_logical(node, or.left(), or.right(), LogicalKind::Or);
         }
         if let Some(super_node) = node.as_super_node() {
             return self.lower_special_call(
@@ -1149,6 +1155,18 @@ impl<'src> Lowerer<'src> {
             block,
             call.is_safe_navigation(),
         )
+    }
+
+    fn lower_logical(
+        &mut self,
+        node: &Node<'_>,
+        left: Node<'_>,
+        right: Node<'_>,
+        kind: LogicalKind,
+    ) -> ExprId {
+        let left = self.lower_node(&left);
+        let right = self.lower_node(&right);
+        self.push_expr(node, ExprKind::Logical { left, right, kind })
     }
 
     fn call_assignment_target_span(

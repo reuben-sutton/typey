@@ -267,6 +267,17 @@ impl<'src> Analyzer<'src> {
                     self.narrow_cfg_predicate(*last, environment, truthy);
                 }
             }
+            hir::ExprKind::Logical { left, right, kind } => match kind {
+                hir::LogicalKind::And if truthy => {
+                    self.narrow_cfg_predicate(left, environment, true);
+                    self.narrow_cfg_predicate(right, environment, true);
+                }
+                hir::LogicalKind::Or if !truthy => {
+                    self.narrow_cfg_predicate(left, environment, false);
+                    self.narrow_cfg_predicate(right, environment, false);
+                }
+                _ => {}
+            },
             hir::ExprKind::Read(Read::Local(local)) => {
                 self.narrow_cfg_local(local, environment, truthy)
             }
