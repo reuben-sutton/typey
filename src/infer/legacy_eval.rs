@@ -236,6 +236,7 @@ impl<'src> Analyzer<'src> {
                 self.eval_resolved_receiver_call(
                     node,
                     "[]",
+                    receiver_node.as_ref(),
                     &key,
                     &access.receiver_type,
                     &access.arguments,

@@ -1,7 +1,13 @@
 class CfgUnionImplicitSelfBase
+  private
+    def private_value
+      1
+    end
+
+  public
   def value_from_self
     if is_a?(CfgUnionImplicitSelfA) || is_a?(CfgUnionImplicitSelfB)
-      value
+      [value, private_value]
     else
       "fallback"
     end
@@ -20,4 +26,4 @@ class CfgUnionImplicitSelfB < CfgUnionImplicitSelfBase
   end
 end
 
-T.reveal_type(CfgUnionImplicitSelfA.new.value_from_self) # note: Revealed type: T.any(Integer, String)
+T.reveal_type(CfgUnionImplicitSelfA.new.value_from_self) # note: Revealed type: T::Array[T.any(Integer, String)]

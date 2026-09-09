@@ -72,6 +72,7 @@ impl<'src> Analyzer<'src> {
                         if let Some((type_, declared)) = self.eval_resolved_receiver_call(
                             node,
                             name,
+                            receiver_node,
                             &key,
                             receiver_type,
                             arguments,
@@ -99,6 +100,7 @@ impl<'src> Analyzer<'src> {
                 if let Some((type_, declared)) = self.eval_resolved_receiver_call(
                     node,
                     name,
+                    receiver_node,
                     &key,
                     member,
                     arguments,
@@ -127,6 +129,7 @@ impl<'src> Analyzer<'src> {
             if let Some((type_, declared)) = self.eval_resolved_receiver_call(
                 node,
                 name,
+                receiver_node,
                 &key,
                 receiver_type,
                 arguments,
@@ -155,6 +158,7 @@ impl<'src> Analyzer<'src> {
         &mut self,
         node: &Node<'node>,
         name: &str,
+        receiver_node: Option<&Node<'node>>,
         key: &MethodKey,
         receiver_type: &Type,
         arguments: &CallArguments<'node>,
@@ -168,6 +172,7 @@ impl<'src> Analyzer<'src> {
             .resolve_method_key(key)
             .and_then(|resolved| self.declarations.methods.get(&resolved))
             .is_some_and(|state| state.visibility == Visibility::Private)
+            && receiver_node.is_some()
             && !self.private_call_allowed(key, environment)
         {
             self.error(
