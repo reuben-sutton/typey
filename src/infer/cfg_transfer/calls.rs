@@ -72,7 +72,6 @@ pub(super) fn transfer_call(
         cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => environment.self_type.clone(),
     };
     let receiver_type = compound_assignment_receiver(analyzer, &input, receiver_type);
-    let has_block = input.block.is_some();
     let mut block_result = None;
     let dynamic_instance_variable_type = if matches!(
         input.name.as_str(),
@@ -110,96 +109,27 @@ pub(super) fn transfer_call(
             .ok_or_else(|| "yield has no owned block contract".to_owned())?;
         (type_, UntypedOrigin::Propagated)
     } else if matches!(input.receiver, cfg::ReceiverOperand::Super) {
-        let current_method = environment
-            .method_key
-            .as_ref()
-            .ok_or_else(|| "super call has no enclosing method".to_owned())?;
-        let key = analyzer
-            .super_method_key(current_method)
-            .ok_or_else(|| "super call has no resolvable parent method".to_owned())?;
-        analyzer.record_method_dependency(&key, environment);
-        if let Some(signature) = analyzer
-            .observe_call(&key, &call_arguments, has_block)
-            .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
-        {
-            let callback_result = analyzer.cfg_block_return_type(
-                &input,
-                &key,
-                &signature,
-                &call_arguments,
-                &receiver_type,
-                values,
-                environment,
-            );
-            let block_return_type = callback_result.as_ref().map(Analyzer::block_value_type);
-            let type_ = analyzer.invoke_signature_at(
-                input.site,
-                input.name.as_str(),
-                &signature,
-                &call_arguments,
-                Some(&receiver_type),
-                block_return_type.as_ref(),
-            );
-            block_result = callback_result;
-            let origin = analyzer
-                .resolve_method_key(&key)
-                .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
-                .is_some_and(|state| state.explicit)
-                .then_some(UntypedOrigin::DeclaredSignature)
-                .unwrap_or(UntypedOrigin::InferredMethod);
-            (type_, origin)
-        } else {
-            (Type::Any, UntypedOrigin::FallbackCall)
-        }
+        let context = super::context::transfer_super_call(
+            analyzer,
+            &input,
+            &receiver_type,
+            &call_arguments,
+            values,
+            environment,
+        )?;
+        block_result = context.block_result;
+        (context.type_, context.untyped_origin)
     } else if matches!(input.receiver, cfg::ReceiverOperand::Implicit) {
-        if let Some(type_) =
-            analyzer.global_call_type(input.name.as_str(), &call_arguments.argument_types)
-        {
-            (type_, UntypedOrigin::Propagated)
-        } else {
-            let key = analyzer.implicit_method_key(input.name.as_str(), environment);
-            analyzer.record_method_dependency(&key, environment);
-            if let Some(signature) = analyzer
-                .observe_call(&key, &call_arguments, has_block)
-                .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
-            {
-                let callback_result = analyzer.cfg_block_return_type(
-                    &input,
-                    &key,
-                    &signature,
-                    &call_arguments,
-                    &receiver_type,
-                    values,
-                    environment,
-                );
-                let block_return_type = callback_result.as_ref().map(Analyzer::block_value_type);
-                let type_ = analyzer.invoke_signature_at(
-                    input.site,
-                    input.name.as_str(),
-                    &signature,
-                    &call_arguments,
-                    Some(&receiver_type),
-                    block_return_type.as_ref(),
-                );
-                block_result = callback_result;
-                let origin = analyzer
-                    .resolve_method_key(&key)
-                    .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
-                    .is_some_and(|state| state.explicit)
-                    .then_some(UntypedOrigin::DeclaredSignature)
-                    .unwrap_or(UntypedOrigin::InferredMethod);
-                (type_, origin)
-            } else if let Some(type_) =
-                analyzer.cfg_passed_dynamic_method_type(&input, &receiver_type, environment)
-            {
-                (type_, UntypedOrigin::Propagated)
-            } else {
-                return Err(format!(
-                    "implicit call `{}` has no method or owned dynamic-method contract",
-                    input.name.as_str()
-                ));
-            }
-        }
+        let context = super::context::transfer_implicit_call(
+            analyzer,
+            &input,
+            &receiver_type,
+            &call_arguments,
+            values,
+            environment,
+        )?;
+        block_result = context.block_result;
+        (context.type_, context.untyped_origin)
     } else {
         let dispatch_receiver = if input.safe_navigation {
             receiver_type.without(&Type::Nil)
