@@ -294,9 +294,10 @@ call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
 semantics in some receiver contexts. On the Packwerk regression run, the
-current owned-CFG boundary is 15 unique fallback spans: one declaration body,
-four dynamic-method/name calls, and ten missing or invalid library contracts;
-the `defined?` span is no longer among them. Removing those requires moving
+current owned-CFG boundary is 12 unique fallback spans: one declaration body,
+one dynamic `name` call, and ten missing or invalid library/flow contracts;
+the `defined?` and module-mixin `define_method` spans are no longer among them.
+Removing those requires moving
 their diagnostic and block contracts to owned source sites rather than
 weakening the checker. CFG fallback telemetry now distinguishes unsupported
 operations, unsupported edges, and legacy bridges; the migrated ordinary-body
