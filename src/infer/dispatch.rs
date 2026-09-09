@@ -249,6 +249,7 @@ impl<'src> Analyzer<'src> {
         match name {
             "to_yaml" => return Some(Type::String),
             "freeze" | "dup" | "clone" => return Some(receiver.clone()),
+            "method" | "public_method" | "singleton_method" => return Some(Type::named("Method")),
             "id" | "object_id" | "hash" => return Some(Type::Integer),
             "respond_to?" | "frozen?" | "nil?" | "is_a?" | "kind_of?" | "instance_of?" | "=="
             | "!=" | "equal?" | "eql?" | "!" => return Some(Type::bool()),

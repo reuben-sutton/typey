@@ -840,6 +840,7 @@ impl<'src> Analyzer<'src> {
         match name {
             "to_s" | "inspect" => Type::String,
             "to_enum" | "enum_for" => Type::named("Enumerator"),
+            "method" | "public_method" | "singleton_method" => Type::named("Method"),
             "id" | "object_id" | "hash" => Type::Integer,
             "respond_to?" | "frozen?" => Type::bool(),
             "nil?" | "to_a" => {
