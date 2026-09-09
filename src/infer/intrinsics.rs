@@ -301,18 +301,32 @@ impl<'src> Analyzer<'src> {
     /// cannot drift from their legacy behavior.
     pub(super) fn global_call_type(&self, name: &str, argument_types: &[Type]) -> Option<Type> {
         match name {
+            "puts" | "print" | "p" | "pp" | "warn" => Some(Type::Nil),
+            "is_a?" | "kind_of?" | "instance_of?" | "block_given?" | "respond_to?" | "frozen?" => {
+                Some(Type::bool())
+            }
             "Array" => Some(argument_types.first().map_or_else(
                 || Type::Array(Box::new(Type::Any)),
                 |type_| Type::Array(Box::new(self.array_coercion_element_type(type_))),
             )),
+            "Hash" => Some(Type::Hash(Box::new(Type::Any), Box::new(Type::Any))),
+            "Integer" => Some(Type::Integer),
+            "Float" => Some(Type::Float),
+            "String" => Some(Type::String),
+            "Symbol" => Some(Type::Symbol),
             "__dir__" => Some(Type::String),
             "gem" => Some(Type::named("Gem::Specification")),
             "require" | "require_relative" | "load" => Some(Type::bool()),
+            "to_enum" | "enum_for" => Some(Type::named("Enumerator")),
+            "binding" => Some(Type::named("Binding")),
+            "rand" => Some(Type::Float),
+            "sleep" | "id" | "object_id" | "hash" => Some(Type::Integer),
+            "const_get" => Some(Type::Object),
             // These are Kernel-level control transfers rather than ordinary
             // receiver method calls. Returning `Never` here lets the owned
             // CFG outcome protocol route their raised type without needing a
             // parser-backed implicit-method lookup.
-            "raise" | "fail" | "abort" | "exit" | "exit!" => Some(Type::Never),
+            "raise" | "fail" | "abort" | "exit" | "exit!" | "throw" => Some(Type::Never),
             // Sorbet's `sig { ... }` declaration is registered before
             // inference and evaluates to nil at runtime. The owned CFG path
             // must still recognize its call without requiring an application
