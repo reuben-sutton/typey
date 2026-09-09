@@ -332,15 +332,16 @@ were zero unsupported-edge and zero legacy-bridge fallbacks, but 501
 unsupported-operation records remain across 149 unique source spans, plus two
 unsupported HIR handoffs. The largest remaining groups are unresolved
 `super` contracts, missing implicit-call contracts, unavailable owned argument
-shapes, and definition/closure handoffs. The owned run reports 406 diagnostics
+shapes, and definition/closure handoffs. The owned run reports 399 diagnostics
 and 12,626 application-library send sites, of which 7,964 (63.1%) are unknown;
-it completes in 155.3 seconds including final reporting after narrowing method
+it completes in 159.6 seconds including final reporting after narrowing method
 resolution invalidation to affected dependents. The fresh legacy recursive run
-on the same checkout reports 724 diagnostics in 164.5 seconds: 393 diagnostics
-match exactly, with 25 CFG-only findings and 343 legacy-only findings. The CFG
-path is therefore faster than the legacy path on this component, but it is not
-yet a replacement: the remaining work is primarily call contract/bridge parity,
-fallback classification, and differential type coverage.
+on the same checkout reports 724 diagnostics in 164.5 seconds. Comparing the
+unique diagnostic messages gives 379 in common, 20 CFG-only findings, and 345
+legacy-only findings. The CFG path is therefore faster than the legacy path on
+this component, but it is not yet a replacement: the remaining work is
+primarily call contract/bridge parity, fallback classification, and
+differential type coverage.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
