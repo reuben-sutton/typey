@@ -193,6 +193,20 @@ fn destructures_homogeneous_array_elements_through_owned_cfg() {
 }
 
 #[test]
+fn keeps_owned_keyword_diagnostics_on_the_value_span() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_keyword_value_diagnostic.rb").unwrap();
+    let baseline = check_fixture("tests/fixtures/cfg_keyword_value_diagnostic.rb");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+}
+
+#[test]
 fn routes_assignment_forms_through_owned_hir_targets() {
     check_fixture("tests/fixtures/hir_assignment_dispatch.rb");
 }

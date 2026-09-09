@@ -11,7 +11,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug)]
 struct OwnedKeywordArgument {
     name: String,
-    name_site: SourceSite,
+    value_site: SourceSite,
     type_: Type,
 }
 
@@ -43,7 +43,7 @@ impl OwnedCallArguments {
             .map(|argument| KeywordArgument {
                 name: argument.name,
                 node: None,
-                site: argument.name_site,
+                site: argument.value_site,
                 type_: argument.type_,
             })
             .collect();
@@ -139,7 +139,7 @@ impl<'src> Analyzer<'src> {
                         hir::Argument::Keyword {
                             name,
                             name_span,
-                            value: _,
+                            value: value_id,
                         } => {
                             let cfg::ArgumentOperand::Keyword {
                                 name: operand_name,
@@ -155,10 +155,14 @@ impl<'src> Analyzer<'src> {
                             key = key.join(&Type::Symbol);
                             value = value.join(&type_);
                             let name_site = SourceSite::from_span(*name_span, None);
+                            let value_site =
+                                self.program.hir_program.expression(*value_id).map(
+                                    |expression| SourceSite::from_span(expression.span, None),
+                                )?;
                             self.record_at(name_site, Type::Symbol, false, None);
                             call_arguments.keyword_arguments.push(OwnedKeywordArgument {
                                 name: name.as_str().to_owned(),
-                                name_site,
+                                value_site,
                                 type_,
                             });
                         }
