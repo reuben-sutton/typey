@@ -1000,6 +1000,14 @@ impl<'src> Lowerer<'src> {
                 ExprKind::Read(Read::Constant(ConstantPath::new(self.text(node)))),
             );
         }
+        if let Some(back_reference) = node.as_back_reference_read_node() {
+            return self.push_expr(
+                node,
+                ExprKind::Read(Read::BackReference(Name::new(prism::constant_name(
+                    back_reference.name(),
+                )))),
+            );
+        }
         if let Some(numbered) = node.as_numbered_reference_read_node() {
             return self.push_expr(node, ExprKind::Read(Read::Numbered(numbered.number())));
         }
