@@ -335,19 +335,21 @@ a publication/send-tracking gap, not evidence that the owned path is more
 correct.
 
 The latest full ActiveSupport run is the current large-component boundary:
-27,099 HIR bodies were compiled and 14,253 bodies and 47,045 calls transferred
-across five worklist rounds. Static `undef` is now an owned operation, leaving
+27,099 HIR bodies were compiled and 15,128 bodies and 49,244 calls transferred
+across six worklist rounds. Static `undef` is now an owned operation, leaving
 zero unsupported-operation records, zero unsupported-edge fallbacks, zero
 legacy bridges, and zero unsupported HIR handoffs in this component. The CFG
-run reports 598 diagnostics and 39,468 recorded types in 169.9 seconds; the
+run reports 593 diagnostics and 39,468 recorded types in 164.1 seconds; the
 fresh legacy recursive run reports 689 diagnostics and 43,378 recorded types
 in 169.1 seconds. Of the diagnostic sets, 528 findings are shared, 161 are
-recursive-only, and 70 are CFG-only. Runtime is therefore approximately at
-parity, but the diagnostic and type-publication differences still require
-differential classification. CFG is not yet a replacement: the remaining work
-is primarily ActiveSupport differential analysis, owned send/type publication,
-the remaining parser-backed call and passed/forwarded-block bridges, and
-making CFG the default only after those gates agree.
+recursive-only, and 65 are CFG-only; the five removed CFG-only findings were
+all false positives from class predicates on inferred parameters. Runtime is
+therefore approximately at parity, but the diagnostic and type-publication
+differences still require differential classification. CFG is not yet a
+replacement: the remaining work is primarily ActiveSupport differential
+analysis, owned send/type publication, the remaining parser-backed call and
+passed/forwarded-block bridges, and making CFG the default only after those
+gates agree.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
@@ -357,7 +359,7 @@ As of 2026-09-09, the implementation is therefore in the final parity phase,
 not at the exit condition. The checker gate is 425/425, Spoom and Packwerk
 diagnostics agree exactly, and the CFG transfer surface has zero measured
 fallbacks on all three repository checks. What remains is not broad CFG
-coverage: it is reconciling ActiveSupport's 231 non-shared diagnostics,
+coverage: it is reconciling ActiveSupport's 226 non-shared diagnostics,
 restoring the missing owned type publications, and then rerunning the full
 differential gates before retiring the recursive path.
 
