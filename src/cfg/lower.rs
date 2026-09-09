@@ -2068,6 +2068,7 @@ impl<'program> Builder<'program> {
             self.cfg.rescue_regions.push(RescueRegion {
                 entry: rescue_entry,
                 exit: after,
+                protected_entry: body_start,
                 may_raise: begin
                     .body
                     .is_some_and(|body| self.expression_contains_call(body)),

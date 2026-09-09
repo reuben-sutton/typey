@@ -53,6 +53,7 @@ pub struct Cfg {
 pub struct RescueRegion {
     pub entry: BlockId,
     pub exit: BlockId,
+    pub protected_entry: BlockId,
     /// Whether the protected expression contains a send that can provide a
     /// runtime exception path. Handler analysis still runs without this, but
     /// a handler value is only part of the enclosing expression when such a

@@ -28,6 +28,7 @@ pub(super) struct BodyTransfer<'analyzer, 'src> {
     /// begin-expression's join rather than continuing into the protected
     /// body's following statements.
     probe_exit: Option<cfg::BlockId>,
+    probe_protected_entry: Option<cfg::BlockId>,
     probe_normal_type: Type,
 }
 
@@ -449,6 +450,7 @@ impl<'src> Analyzer<'src> {
             final_environment: None,
             top_level_terminated: false,
             probe_exit: None,
+            probe_protected_entry: None,
             probe_normal_type: Type::Never,
         };
         let worklist = match cfg::transfer::run(&graph, &mut transfer, initial) {
@@ -493,9 +495,11 @@ impl<'src> Analyzer<'src> {
             let main_final_environment = transfer.final_environment.clone();
             let main_top_level_terminated = transfer.top_level_terminated;
             transfer.probe_exit = Some(region.exit);
+            transfer.probe_protected_entry = Some(region.protected_entry);
             transfer.probe_normal_type = Type::Never;
             let probe_result = cfg::transfer::run_from(&graph, &mut transfer, region.entry, probe);
             transfer.probe_exit = None;
+            transfer.probe_protected_entry = None;
             transfer.abrupt = main_abrupt;
             transfer.terminal_flow = main_terminal_flow;
             transfer.final_environment = main_final_environment;
@@ -586,7 +590,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
         state: &Self::State,
     ) -> Result<Vec<cfg::transfer::TransferEdge<Self::State>>, Self::Error> {
         debug_assert_eq!(graph.body, self.context.body);
-        if self.probe_exit == Some(block.id) {
+        if self.probe_exit == Some(block.id) || self.probe_protected_entry == Some(block.id) {
             if let Some(parameter) = block.parameters.first() {
                 if let Some(type_) = state.value(parameter.value) {
                     self.probe_normal_type = if self.probe_normal_type.is_never() {
