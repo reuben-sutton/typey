@@ -30,40 +30,45 @@ pub(super) fn transfer_receiver_call(
     if let Type::Union(members) = receiver {
         // A union receiver has no single method key. Dispatch each concrete
         // member through the same contract order instead of collapsing the
-        // whole receiver to a parser-era fallback. Calls with blocks remain
-        // outside this path until callback state can be joined per member.
-        if input.block.is_none() {
-            let mut result_type = Type::Never;
-            let mut untyped_origin = UntypedOrigin::Propagated;
-            for member in members {
-                let result = transfer_receiver_call(
-                    analyzer,
-                    input,
-                    member,
-                    arguments,
-                    values,
-                    environment,
-                )?;
-                result_type = result_type.join(&result.type_);
-                if result.untyped_origin == UntypedOrigin::FallbackCall {
-                    untyped_origin = UntypedOrigin::FallbackCall;
-                } else if untyped_origin != UntypedOrigin::FallbackCall
-                    && result.untyped_origin == UntypedOrigin::DeclaredSignature
-                {
-                    untyped_origin = UntypedOrigin::DeclaredSignature;
-                } else if untyped_origin != UntypedOrigin::FallbackCall
-                    && result.untyped_origin == UntypedOrigin::InferredMethod
-                    && untyped_origin == UntypedOrigin::Propagated
-                {
-                    untyped_origin = UntypedOrigin::InferredMethod;
-                }
-            }
-            return Ok(ReceiverTransfer {
-                type_: result_type,
-                block_result: None,
-                untyped_origin,
+        // whole receiver to a parser-era fallback. Each member is a separate
+        // control-flow path, including when a callback is supplied, so its
+        // environment and callback outcomes must be joined rather than
+        // applied sequentially.
+        let initial_environment = environment.clone();
+        let mut result_type = Type::Never;
+        let mut block_result = None;
+        let mut untyped_origin = UntypedOrigin::Propagated;
+        let mut joined_environment: Option<Environment> = None;
+        for member in members {
+            let mut member_environment = initial_environment.clone();
+            let result = transfer_receiver_call(
+                analyzer,
+                input,
+                member,
+                arguments,
+                values,
+                &mut member_environment,
+            )?;
+            result_type = result_type.join(&result.type_);
+            block_result = match (block_result, result.block_result) {
+                (Some(left), Some(right)) => Some(Eval::combine(&left, &right)),
+                (left @ Some(_), None) | (None, left @ Some(_)) => left,
+                (None, None) => None,
+            };
+            joined_environment = Some(match joined_environment {
+                Some(joined) => joined.join(&member_environment),
+                None => member_environment,
             });
+            untyped_origin = join_untyped_origin(untyped_origin, result.untyped_origin);
         }
+        if let Some(joined_environment) = joined_environment {
+            *environment = joined_environment;
+        }
+        return Ok(ReceiverTransfer {
+            type_: result_type,
+            block_result,
+            untyped_origin,
+        });
     }
     let name = input.name.as_str();
     let callable_type = if matches!(name, "call" | "[]") {
@@ -191,6 +196,19 @@ pub(super) fn transfer_receiver_call(
     Err(format!(
         "receiver call `{name}` on `{receiver}` has no method, collection, or builtin contract"
     ))
+}
+
+fn join_untyped_origin(left: UntypedOrigin, right: UntypedOrigin) -> UntypedOrigin {
+    if left == UntypedOrigin::FallbackCall || right == UntypedOrigin::FallbackCall {
+        UntypedOrigin::FallbackCall
+    } else if left == UntypedOrigin::DeclaredSignature || right == UntypedOrigin::DeclaredSignature
+    {
+        UntypedOrigin::DeclaredSignature
+    } else if left == UntypedOrigin::InferredMethod || right == UntypedOrigin::InferredMethod {
+        UntypedOrigin::InferredMethod
+    } else {
+        UntypedOrigin::Propagated
+    }
 }
 
 pub(super) fn transfer_callable_call(

@@ -104,6 +104,31 @@ fn transfers_owned_builtin_receiver_contracts() {
 }
 
 #[test]
+fn transfers_union_enumerable_predicates_through_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_union_enumerable_predicates.rb")
+        .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(
+        cfg.types
+            .iter()
+            .filter(|inferred| inferred.is_send)
+            .any(|inferred| inferred.type_ == Type::bool()),
+        "missing concrete Enumerable predicate send type: {:?}",
+        cfg.types
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn compiles_cfg_bodies_without_changing_checker_results() {
     let source = "value = 1\nif value\n  value.to_s\nend\n";
     let baseline = check(source, CheckerConfig::default());
