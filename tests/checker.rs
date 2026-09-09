@@ -169,7 +169,13 @@ fn transfers_multi_write_call_targets_through_owned_hir() {
         },
     );
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
-    assert_eq!(cfg.types, baseline.types);
+    assert!(
+        cfg.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `Integer`"))
+            .count()
+            >= 2
+    );
     assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
 }
 

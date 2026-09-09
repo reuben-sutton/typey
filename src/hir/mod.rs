@@ -380,6 +380,17 @@ pub enum AssignTarget {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MultiWritePart {
+    Left(usize),
+    Rest,
+    Right {
+        index: usize,
+        left_count: usize,
+        right_count: usize,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AssignOperator {
     Set,

@@ -191,6 +191,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::ReadSpecial { .. }
                         | cfg::OperationKind::Write { .. }
                         | cfg::OperationKind::MultiWrite { .. }
+                        | cfg::OperationKind::MultiWriteElement { .. }
                         | cfg::OperationKind::Defined { .. }
                         | cfg::OperationKind::Call { .. }
                         | cfg::OperationKind::MakeClosure { .. }
@@ -452,6 +453,54 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         .ok_or_else(|| {
                             format!("multi-write transfer failed at {:?}", operation.span)
                         })?
+                    }
+                    cfg::OperationKind::MultiWriteElement { value, part } => {
+                        let actual = next
+                            .value(*value)
+                            .ok_or_else(|| format!("missing multi-write operand {:?}", value))?;
+                        let value_type =
+                            if let Some(elements) = self.fixed_array_elements.get(value) {
+                                let elements = elements
+                                    .iter()
+                                    .map(|element| {
+                                        next.value(*element).ok_or_else(|| {
+                                            format!("missing fixed array element {:?}", element)
+                                        })
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()?;
+                                Type::Tuple(elements)
+                            } else {
+                                actual
+                            };
+                        let known_length = match &value_type {
+                            Type::Tuple(elements) => Some(elements.len()),
+                            _ => None,
+                        };
+                        match part {
+                            cfg::MultiWritePart::Left(index) => self
+                                .analyzer
+                                .multi_assignment_element_type(&value_type, *index, known_length),
+                            cfg::MultiWritePart::Rest => {
+                                let element_type = self.analyzer.array_element_type(&value_type);
+                                Type::union([Type::Nil, Type::Array(Box::new(element_type))])
+                            }
+                            cfg::MultiWritePart::Right {
+                                index,
+                                left_count,
+                                right_count,
+                            } => {
+                                let right_start = known_length
+                                    .map(|length| {
+                                        (*left_count).max(length.saturating_sub(*right_count))
+                                    })
+                                    .unwrap_or(0);
+                                self.analyzer.multi_assignment_element_type(
+                                    &value_type,
+                                    right_start + *index,
+                                    known_length,
+                                )
+                            }
+                        }
                     }
                     cfg::OperationKind::Defined { value } => {
                         next.value(*value)

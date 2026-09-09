@@ -135,6 +135,12 @@ pub enum OperationKind {
         rest: Option<hir::AssignTarget>,
         rights: Vec<hir::AssignTarget>,
     },
+    /// Extract one logical value from a multiple-assignment RHS before
+    /// sending it to a dynamic attribute or index target.
+    MultiWriteElement {
+        value: ValueId,
+        part: MultiWritePart,
+    },
     Defined {
         value: ValueId,
     },
@@ -204,6 +210,17 @@ pub enum OperationKind {
     /// interpretation.
     Unsupported {
         kind: Name,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MultiWritePart {
+    Left(usize),
+    Rest,
+    Right {
+        index: usize,
+        left_count: usize,
+        right_count: usize,
     },
 }
 

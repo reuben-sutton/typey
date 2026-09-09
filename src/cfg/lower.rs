@@ -1178,6 +1178,71 @@ impl<'program> Builder<'program> {
             .value
             .expect("multi-assignment RHS produces a value");
         self.mark_array_value_fixed_shape(value);
+        if lefts
+            .iter()
+            .chain(rest.iter())
+            .chain(rights.iter())
+            .any(|target| {
+                matches!(
+                    target,
+                    AssignTarget::Attribute { .. } | AssignTarget::Index { .. }
+                )
+            })
+        {
+            let mut block = value_flow.block;
+            let left_count = lefts.len();
+            let right_count = rights.len();
+            for (target, part) in lefts
+                .into_iter()
+                .enumerate()
+                .map(|(index, target)| (target, hir::MultiWritePart::Left(index)))
+                .chain(
+                    rest.into_iter()
+                        .map(|target| (target, hir::MultiWritePart::Rest)),
+                )
+                .chain(rights.into_iter().enumerate().map(|(index, target)| {
+                    (
+                        target,
+                        hir::MultiWritePart::Right {
+                            index,
+                            left_count,
+                            right_count,
+                        },
+                    )
+                }))
+            {
+                let Some((next, runtime)) = self.lower_target_runtime(block, target) else {
+                    return self.abrupt(expression, block);
+                };
+                block = next;
+                let element = self.emit(
+                    block,
+                    span,
+                    OperationKind::MultiWriteElement {
+                        value,
+                        part: match part {
+                            hir::MultiWritePart::Left(index) => {
+                                crate::cfg::MultiWritePart::Left(index)
+                            }
+                            hir::MultiWritePart::Rest => crate::cfg::MultiWritePart::Rest,
+                            hir::MultiWritePart::Right {
+                                index,
+                                left_count,
+                                right_count,
+                            } => crate::cfg::MultiWritePart::Right {
+                                index,
+                                left_count,
+                                right_count,
+                            },
+                        },
+                    },
+                    true,
+                );
+                let element = element.expect("multi-assignment element produces a value");
+                (block, _) = self.write_runtime(block, span, runtime, element, false);
+            }
+            return self.normal(expression, block, Some(value));
+        }
         let result = self.emit(
             value_flow.block,
             span,

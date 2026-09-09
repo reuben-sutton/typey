@@ -379,22 +379,38 @@ fn expr_transfer_failure(
             rights,
             value,
         } => {
-            if lefts
-                .iter()
-                .chain(rest.iter())
-                .chain(rights.iter())
-                .any(|target| {
-                    matches!(
-                        target,
-                        hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. }
-                    )
-                })
-            {
-                return Err(failure(
-                    program,
-                    expression,
-                    "multi-assignment target requires a setter call",
-                ));
+            for target in lefts.iter().chain(rest.iter()).chain(rights.iter()) {
+                match target {
+                    hir::AssignTarget::Attribute { receiver, .. } => {
+                        expr_transfer_failure(program, *receiver, visiting, loop_depth, context)?;
+                    }
+                    hir::AssignTarget::Index {
+                        receiver,
+                        arguments,
+                    } => {
+                        expr_transfer_failure(program, *receiver, visiting, loop_depth, context)?;
+                        for argument in arguments {
+                            match argument {
+                                hir::Argument::Forwarded => {
+                                    return Err(failure(
+                                        program,
+                                        expression,
+                                        "forwarded multi-assignment index operand",
+                                    ));
+                                }
+                                hir::Argument::Positional(value)
+                                | hir::Argument::Splat(value)
+                                | hir::Argument::Keyword { value, .. }
+                                | hir::Argument::KeywordSplat(value) => {
+                                    expr_transfer_failure(
+                                        program, *value, visiting, loop_depth, context,
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
             expr_transfer_failure(program, *value, visiting, loop_depth, context)
         }
