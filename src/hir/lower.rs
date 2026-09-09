@@ -1054,6 +1054,30 @@ impl<'src> Lowerer<'src> {
                 self.text(&target.as_node()),
             )));
         }
+        if let Some(target) = node.as_call_target_node() {
+            let receiver = target.receiver();
+            let receiver = if receiver.as_missing_node().is_some() {
+                self.push_expr(node, ExprKind::Read(Read::SelfValue))
+            } else {
+                self.lower_node(&receiver)
+            };
+            return Some(AssignTarget::Attribute {
+                receiver,
+                name: Name::new(prism::constant_name(target.name())),
+            });
+        }
+        if let Some(target) = node.as_index_target_node() {
+            let receiver = target.receiver();
+            let receiver = if receiver.as_missing_node().is_some() {
+                self.push_expr(node, ExprKind::Read(Read::SelfValue))
+            } else {
+                self.lower_node(&receiver)
+            };
+            return Some(AssignTarget::Index {
+                receiver,
+                arguments: self.lower_arguments(target.arguments()),
+            });
+        }
         None
     }
 
