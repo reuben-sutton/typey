@@ -19,8 +19,8 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, 413 checker tests,
-209 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
+The current local gates include 22 CFG tests, 12 HIR tests, 415 checker tests,
+226 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
 checker, local conformance, and upstream smoke gates pass; the upstream suite
 takes about 66 seconds because each fixture reloads the bundled RBI set. The
 CFG path is still opt-in because
@@ -303,45 +303,41 @@ The first modularization steps are now in place:
   regression test. Inferred methods called from DSL callbacks no longer treat
   an unevaluated provisional `Never` summary as a guaranteed terminating path.
 
-The latest release Spoom CFG run is a useful architectural checkpoint: 8,725
-bodies and 65,433 calls transferred, with zero unsupported-operation fallbacks,
-zero unsupported edges, zero legacy bridges, and one diagnostic. The diagnostic
-is the known `Time?` passed to `Time` case in `coverage.rb`; the legacy path
-reports the same finding, while Sorbet accepts it through Thor's untyped option
-hash. The run reached final convergence in four worklist rounds, reported
-1,048 unknown application-library sends out of 5,979 (17.5%), and completed in
-2.29 seconds including repository checking (1.70 seconds through the checker).
+The latest release Spoom CFG run transferred 8,722 bodies and 34,569 calls with
+zero unsupported-operation fallbacks, zero unsupported edges, and zero legacy
+bridges. It reports 10 diagnostics in 2.33 seconds including repository
+checking (1.65 seconds through the checker); the legacy path reports three.
+The CFG-only findings are concentrated in missing `YAML.dump`, Prism location
+accessors, and a union-dispatch case, while the legacy-only findings are an
+unreachable-code diagnostic and a nilable return mismatch. The run reached
+final convergence in four worklist rounds.
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
 semantics in some receiver contexts. On the latest Packwerk regression run,
-the owned path transferred 8,897 bodies and 127,126 calls with zero
+the owned path transferred 8,894 bodies and 38,026 calls with zero
 unsupported-operation fallbacks, zero unsupported edges, and zero legacy
-bridges. It reports 22 diagnostics in 1.97 seconds through the checker (2.61
-seconds including repository discovery and reporting), and 396 unknown
-application-library sends out of 1,578 (25.2%). The exact diagnostic set now
-matches the legacy run: 18 malformed Minitest shim diagnostics and four
-legitimate NodeHelpers array-index nilability findings.
+bridges. It reports 33 diagnostics in 1.26 seconds through the checker (2.08
+seconds including repository discovery and reporting), while the legacy path
+reports 22. All 11 additional CFG findings are calls to `YAML.load_file` or
+`YAML.dump`: the vendored Psych RBI declares `Psych`, and the standard-library
+`YAML = Psych` alias is not currently being applied by the project-RBI loading
+path.
 
 The latest full ActiveSupport run is the current large-component boundary:
-27,099 HIR bodies were compiled and 11,019 bodies, 39,538 calls, 3,350
-assignments, and 33,759 values transferred across seven worklist rounds. There
-were zero unsupported-edge and zero legacy-bridge fallbacks, but 338
-unsupported-operation records remain across 149 unique source spans, plus two
-unsupported HIR handoffs. Unresolved parent `super` calls now follow the
-gradual recursive behavior instead of forcing a body fallback; the largest
-remaining groups are missing implicit-call contracts, unavailable owned
-argument shapes, and definition/closure handoffs. The owned run reports 394
-diagnostics and 12,626 application-library send sites, of which 7,976 (63.2%)
-are unknown; it completes in 167.1 seconds including final reporting after
-narrowing method resolution invalidation to affected dependents. The fresh
-legacy recursive run on the same checkout reports 724 diagnostics in 164.5
-seconds. Comparing the unique diagnostic messages gives 375 in common, 19
-CFG-only findings, and 349 legacy-only findings. The CFG path is not yet a
-replacement: the remaining work is primarily call contract/bridge parity,
-fallback classification, and differential type coverage.
+27,099 HIR bodies were compiled and 14,198 bodies and 46,124 calls transferred
+across five worklist rounds. Static `undef` is now an owned operation, leaving
+zero unsupported-operation records, zero unsupported-edge fallbacks, zero
+legacy bridges, and zero unsupported HIR handoffs in this component. The CFG
+run reports 583 diagnostics and completes in 164.1 seconds; the fresh legacy
+recursive run reports 700 diagnostics in 162.3 seconds. Runtime is therefore
+approximately at parity, but the 117-diagnostic difference and the reduced CFG
+type publication still require differential classification. The CFG path is
+not yet a replacement: remaining work is primarily diagnostic/type parity,
+standard-library alias modeling, complete `undef` method-removal semantics,
+and making CFG the default only after those gates agree.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
