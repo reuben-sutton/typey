@@ -752,6 +752,37 @@ fn transfers_static_undef_through_owned_cfg() {
 }
 
 #[test]
+fn transfers_constant_class_predicates_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_class_predicate.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn narrows_case_assignment_scrutinees_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_case_assignment_narrowing.rb")
+        .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn refines_double_bang_operands_in_owned_logical_cfg() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_logical_double_bang.rb").expect("fixture");
@@ -1548,6 +1579,23 @@ fn preserves_positional_types_in_multi_assignment_rhs_tuples() {
 fn transfers_multi_assignment_through_owned_cfg() {
     let source =
         std::fs::read_to_string("tests/fixtures/multi_assignment_tuple.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+}
+
+#[test]
+fn transfers_typed_tuple_call_destructuring_through_owned_cfg() {
+    let path = "tests/fixtures/cfg_typed_tuple_call_destructuring.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
     let baseline = check(&source, CheckerConfig::default());
     let cfg = check(
         &source,

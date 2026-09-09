@@ -49,6 +49,30 @@ pub(super) fn transfer_write<'src>(
     logical: bool,
     environment: &mut Environment,
 ) -> Type {
+    transfer_write_inner(
+        analyzer,
+        site,
+        place,
+        expression,
+        actual,
+        hash_shape,
+        logical,
+        environment,
+        true,
+    )
+}
+
+fn transfer_write_inner<'src>(
+    analyzer: &mut Analyzer<'src>,
+    site: SourceSite,
+    place: &cfg::Place,
+    expression: Option<hir::ExprId>,
+    actual: Type,
+    hash_shape: Option<HashShape>,
+    logical: bool,
+    environment: &mut Environment,
+    apply_inline_assertion: bool,
+) -> Type {
     let actual = match place {
         cfg::Place::Constant(path) => expression
             .and_then(|expression| {
@@ -64,8 +88,11 @@ pub(super) fn transfer_write<'src>(
                 .hir_program
                 .local_name(*local)
                 .map_or_else(String::new, |name| name.as_str().to_owned());
-            let type_ =
-                analyzer.apply_inline_assertion_in_environment_at(site, actual, environment);
+            let type_ = if apply_inline_assertion {
+                analyzer.apply_inline_assertion_in_environment_at(site, actual, environment)
+            } else {
+                actual
+            };
             let type_ = if logical {
                 type_.without(&Type::Nil)
             } else {
@@ -92,8 +119,11 @@ pub(super) fn transfer_write<'src>(
         }
         cfg::Place::InstanceVariable(name) => {
             let name = name.as_str().to_owned();
-            let type_ =
-                analyzer.apply_inline_assertion_in_environment_at(site, actual, environment);
+            let type_ = if apply_inline_assertion {
+                analyzer.apply_inline_assertion_in_environment_at(site, actual, environment)
+            } else {
+                actual
+            };
             let type_ = if logical {
                 type_.without(&Type::Nil)
             } else {
@@ -106,19 +136,31 @@ pub(super) fn transfer_write<'src>(
             type_
         }
         cfg::Place::ClassVariable(name) => {
-            let type_ = analyzer.apply_inline_assertion_at(site, actual);
+            let type_ = if apply_inline_assertion {
+                analyzer.apply_inline_assertion_at(site, actual)
+            } else {
+                actual
+            };
             analyzer.observe_class_var(environment, name.as_str().to_owned(), &type_);
             environment.set_hash_shape(format!("\u{1}classvar:{}", name.as_str()), hash_shape);
             type_
         }
         cfg::Place::Global(name) => {
-            let type_ = analyzer.apply_inline_assertion_at(site, actual);
+            let type_ = if apply_inline_assertion {
+                analyzer.apply_inline_assertion_at(site, actual)
+            } else {
+                actual
+            };
             environment.bind(cfg_global_refinement_key(name.as_str()), type_.clone());
             environment.set_hash_shape(cfg_global_refinement_key(name.as_str()), hash_shape);
             type_
         }
         cfg::Place::Constant(path) => {
-            let type_ = analyzer.apply_inline_assertion_at(site, actual);
+            let type_ = if apply_inline_assertion {
+                analyzer.apply_inline_assertion_at(site, actual)
+            } else {
+                actual
+            };
             analyzer.observe_constant(environment, path.as_str().to_owned(), &type_);
             environment.set_hash_shape(format!("\u{1}constant:{}", path.as_str()), hash_shape);
             type_
@@ -133,6 +175,31 @@ pub(super) fn transfer_for_target<'src>(
     element_type: Type,
     environment: &mut Environment,
 ) -> Option<Type> {
+    transfer_for_target_inner(analyzer, site, target, element_type, environment, true)
+}
+
+/// Transfer a destructuring target without applying an assertion attached to
+/// the complete RHS. An assertion such as `left, right = value #: as [...]`
+/// describes `value`; applying it again to each projected element would
+/// incorrectly replace every element with the tuple type.
+pub(super) fn transfer_for_target_without_inline_assertion<'src>(
+    analyzer: &mut Analyzer<'src>,
+    site: SourceSite,
+    target: &hir::AssignTarget,
+    element_type: Type,
+    environment: &mut Environment,
+) -> Option<Type> {
+    transfer_for_target_inner(analyzer, site, target, element_type, environment, false)
+}
+
+fn transfer_for_target_inner<'src>(
+    analyzer: &mut Analyzer<'src>,
+    site: SourceSite,
+    target: &hir::AssignTarget,
+    element_type: Type,
+    environment: &mut Environment,
+    apply_inline_assertion: bool,
+) -> Option<Type> {
     let place = match target {
         hir::AssignTarget::Local(local) => cfg::Place::Local(*local),
         hir::AssignTarget::InstanceVariable(name) => cfg::Place::InstanceVariable(name.clone()),
@@ -142,7 +209,7 @@ pub(super) fn transfer_for_target<'src>(
         hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. } => return None,
     };
     let open_array = matches!(&element_type, Type::Array(element) if element.is_never());
-    let result = transfer_write(
+    let result = transfer_write_inner(
         analyzer,
         site,
         &place,
@@ -151,6 +218,7 @@ pub(super) fn transfer_for_target<'src>(
         None,
         false,
         environment,
+        apply_inline_assertion,
     );
     if open_array {
         if let hir::AssignTarget::Local(local) = target {
@@ -238,14 +306,20 @@ pub(super) fn transfer_multi_write<'src>(
     };
     for (index, target) in lefts.iter().enumerate() {
         let element_type = analyzer.multi_assignment_element_type(&value_type, index, known_length);
-        transfer_for_target(analyzer, site, target, element_type, environment)?;
+        transfer_for_target_without_inline_assertion(
+            analyzer,
+            site,
+            target,
+            element_type,
+            environment,
+        )?;
         if is_empty_array_element(analyzer, expression, index) {
             mark_open_array_target(analyzer, target, environment);
         }
     }
     if let Some(target) = rest {
         let element_type = analyzer.array_element_type(&value_type);
-        transfer_for_target(
+        transfer_for_target_without_inline_assertion(
             analyzer,
             site,
             target,
@@ -259,7 +333,13 @@ pub(super) fn transfer_multi_write<'src>(
     for (index, target) in rights.iter().enumerate() {
         let element_type =
             analyzer.multi_assignment_element_type(&value_type, right_start + index, known_length);
-        transfer_for_target(analyzer, site, target, element_type, environment)?;
+        transfer_for_target_without_inline_assertion(
+            analyzer,
+            site,
+            target,
+            element_type,
+            environment,
+        )?;
         if is_empty_array_element(analyzer, expression, right_start + index) {
             mark_open_array_target(analyzer, target, environment);
         }

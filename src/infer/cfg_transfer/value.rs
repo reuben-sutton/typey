@@ -413,6 +413,56 @@ impl<'src> Analyzer<'src> {
                                     environment,
                                     truthy,
                                 ),
+                            hir::ExprKind::Read(Read::Constant(_))
+                                if call.name.as_str() == "===" =>
+                            {
+                                let Some(argument_id) = argument_id else {
+                                    return;
+                                };
+                                let expected =
+                                    self.cfg_predicate_argument_type(receiver, environment);
+                                let Some(argument_kind) = self
+                                    .program
+                                    .hir_program
+                                    .expression(argument_id)
+                                    .map(|expression| expression.kind.clone())
+                                else {
+                                    return;
+                                };
+                                match argument_kind {
+                                    hir::ExprKind::Read(Read::Local(local)) => {
+                                        let Some(name) = self
+                                            .program
+                                            .hir_program
+                                            .local_name(local)
+                                            .map(|name| name.as_str().to_owned())
+                                        else {
+                                            return;
+                                        };
+                                        if environment.is_inferred(&name) {
+                                            return;
+                                        }
+                                        let current = environment.get(&name);
+                                        let narrowed = if truthy {
+                                            self.meet_predicate_type(&current, &expected)
+                                        } else {
+                                            current.without(&expected)
+                                        };
+                                        environment.bind(name, narrowed);
+                                    }
+                                    hir::ExprKind::Read(Read::InstanceVariable(name)) => {
+                                        let current = self.ivar_type(environment, name.as_str());
+                                        let narrowed = if truthy {
+                                            self.meet_predicate_type(&current, &expected)
+                                        } else {
+                                            current.without(&expected)
+                                        };
+                                        environment
+                                            .bind(ivar_refinement_key(name.as_str()), narrowed);
+                                    }
+                                    _ => {}
+                                }
+                            }
                             _ => {}
                         }
                     }

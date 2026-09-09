@@ -261,6 +261,7 @@ pub(super) fn transfer_builtin_call(
                     | "!="
                     | "equal?"
                     | "eql?"
+                    | "==="
             ) =>
         {
             Some(Type::bool())

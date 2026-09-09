@@ -43,6 +43,7 @@ pub(super) fn narrow_pattern_value(
         cfg::Pattern::Case {
             condition,
             expression,
+            ..
         } => {
             let condition = state.value(*condition).unwrap_or(Type::Any);
             if !case_pattern_is_type_test(analyzer, *expression, &condition) {
@@ -58,6 +59,11 @@ pub(super) fn narrow_pattern_value(
         }
     };
     state.set_value(value, narrowed.clone());
+    let pattern_source_place = match pattern {
+        cfg::Pattern::Case { source_place, .. } => source_place.as_ref(),
+        _ => None,
+    };
+    let source_place = pattern_source_place.or(source_place);
     if let Some(source_place) = source_place {
         match source_place {
             cfg::Place::Local(local) => {
@@ -208,6 +214,7 @@ pub(super) fn pattern_reachability(
         cfg::Pattern::Case {
             condition: condition_id,
             expression,
+            ..
         } => {
             let condition = state.value(*condition_id).unwrap_or(Type::Any);
             let is_type_test = case_pattern_is_type_test(analyzer, *expression, &condition);

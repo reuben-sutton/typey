@@ -1454,6 +1454,9 @@ impl<'program> Builder<'program> {
         span: Span,
         case: hir::CaseExpr,
     ) -> Flow {
+        let scrutinee_place = case
+            .scrutinee
+            .and_then(|scrutinee| self.source_place(scrutinee));
         let (mut block, scrutinee) = match case.scrutinee {
             Some(scrutinee) => {
                 let flow = self.lower_expr(scrutinee, block);
@@ -1485,6 +1488,7 @@ impl<'program> Builder<'program> {
                         Some(_scrutinee) => Pattern::Case {
                             condition: condition_value,
                             expression: condition,
+                            source_place: scrutinee_place.clone(),
                         },
                         None => Pattern::Truthy,
                     };
@@ -1549,6 +1553,35 @@ impl<'program> Builder<'program> {
             self.normal(expression, join, Some(joined))
         } else {
             self.abrupt(expression, join)
+        }
+    }
+
+    fn source_place(&self, expression: ExprId) -> Option<Place> {
+        let expression = self.program.expression(expression)?;
+        match &expression.kind {
+            hir::ExprKind::Sequence(expressions) => expressions
+                .last()
+                .and_then(|expression| self.source_place(*expression)),
+            hir::ExprKind::Read(hir::Read::Local(local)) => Some(Place::Local(*local)),
+            hir::ExprKind::Read(hir::Read::InstanceVariable(name)) => {
+                Some(Place::InstanceVariable(name.clone()))
+            }
+            hir::ExprKind::Read(hir::Read::ClassVariable(name)) => {
+                Some(Place::ClassVariable(name.clone()))
+            }
+            hir::ExprKind::Read(hir::Read::Global(name)) => Some(Place::Global(name.clone())),
+            hir::ExprKind::Assign { target, .. } => match target {
+                hir::AssignTarget::Local(local) => Some(Place::Local(*local)),
+                hir::AssignTarget::InstanceVariable(name) => {
+                    Some(Place::InstanceVariable(name.clone()))
+                }
+                hir::AssignTarget::ClassVariable(name) => Some(Place::ClassVariable(name.clone())),
+                hir::AssignTarget::Global(name) => Some(Place::Global(name.clone())),
+                hir::AssignTarget::Constant(_)
+                | hir::AssignTarget::Attribute { .. }
+                | hir::AssignTarget::Index { .. } => None,
+            },
+            _ => None,
         }
     }
 
@@ -2058,6 +2091,7 @@ impl<'program> Builder<'program> {
                         let pattern = Pattern::Case {
                             condition: condition_value,
                             expression: condition,
+                            source_place: None,
                         };
                         let matched = self.emit(
                             condition_flow.block,

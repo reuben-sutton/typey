@@ -293,6 +293,7 @@ pub enum Pattern {
     Case {
         condition: ValueId,
         expression: ExprId,
+        source_place: Option<Place>,
     },
 }
 
