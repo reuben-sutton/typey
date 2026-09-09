@@ -118,6 +118,31 @@ pub(super) fn transfer_implicit_call(
     }
 
     let key = analyzer.implicit_method_key(input.name.as_str(), environment);
+    if matches!(
+        &environment.self_type,
+        Type::Union(_) | Type::Intersection(_)
+    ) && analyzer.resolve_method_key(&key).is_none()
+    {
+        // A mixin body can be evaluated with a union-valued implicit `self`.
+        // The recursive evaluator dispatches that call member-by-member;
+        // using the synthetic owner key here would incorrectly turn valid
+        // included methods into a whole-body fallback.
+        let receiver_type = environment.self_type.clone();
+        let result = super::dispatch::transfer_receiver_call(
+            analyzer,
+            input,
+            &receiver_type,
+            arguments,
+            values,
+            environment,
+            None,
+        )?;
+        return Ok(ContextTransfer {
+            type_: result.type_,
+            block_result: result.block_result,
+            untyped_origin: result.untyped_origin,
+        });
+    }
     analyzer.record_method_dependency(&key, environment);
     if let Some(signature) = analyzer
         .observe_call(&key, arguments, input.block.is_some())
