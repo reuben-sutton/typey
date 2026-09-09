@@ -51,6 +51,43 @@ impl<'src> Analyzer<'src> {
             );
         }
 
+        // Joining class objects preserves the common `Class[...]` shell, but
+        // singleton methods still belong to each possible instance class.
+        // Dispatch every member independently so `Class[A | B]` has the same
+        // method contract as `Class[A] | Class[B]`.
+        if let Type::Named(class, _) = receiver_type {
+            if (name_matches(class, "Class") || name_matches(class, "Module"))
+                && Self::class_object_instance_types(receiver_type)
+                    .is_some_and(|instances| instances.len() > 1)
+            {
+                let instances = Self::class_object_instance_types(receiver_type)
+                    .expect("checked class-object instance types");
+                let mut result = Type::Never;
+                let mut fallback_origin = UntypedOrigin::FallbackCall;
+                for instance in instances {
+                    let candidate = Type::Named(class.clone(), vec![instance]);
+                    let (member_type, member_origin) = self.eval_polymorphic_receiver_call(
+                        node,
+                        receiver_node,
+                        &candidate,
+                        name,
+                        arguments,
+                        block,
+                        site,
+                        environment,
+                    );
+                    if member_type.contains_any() {
+                        fallback_origin = member_origin;
+                    }
+                    result = result.join(&member_type);
+                }
+                return (
+                    if result.is_never() { Type::Any } else { result },
+                    fallback_origin,
+                );
+            }
+        }
+
         // `T.class_of(Foo)[T.all(Foo, M)]` is still a class object whose
         // singleton methods come from Foo. Look up those methods through the
         // intersected instance members while retaining the full receiver for

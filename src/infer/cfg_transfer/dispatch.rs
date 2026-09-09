@@ -31,6 +31,29 @@ pub(super) fn transfer_receiver_call(
     hash_shape: Option<&HashShape>,
 ) -> Result<ReceiverTransfer, String> {
     let name = input.name.as_str();
+    if !matches!(receiver, Type::Union(_)) {
+        if let (Type::Named(class_name, _), Some(instances)) =
+            (receiver, Analyzer::class_object_instance_types(receiver))
+        {
+            if instances.len() > 1 {
+                let receiver = Type::Union(
+                    instances
+                        .into_iter()
+                        .map(|instance| Type::Named(class_name.clone(), vec![instance]))
+                        .collect(),
+                );
+                return transfer_receiver_call(
+                    analyzer,
+                    input,
+                    &receiver,
+                    arguments,
+                    values,
+                    environment,
+                    hash_shape,
+                );
+            }
+        }
+    }
     if let Type::Union(members) = receiver {
         // A union receiver has no single method key. Dispatch each concrete
         // member through the same contract order instead of collapsing the

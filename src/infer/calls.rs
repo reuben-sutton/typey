@@ -776,8 +776,14 @@ impl<'src> Analyzer<'src> {
                 Type::Named(name, arguments)
                     if (name_matches(name, "Class") || name_matches(name, "Module"))
                         && arguments
-                            .first()
-                            .is_some_and(|argument| matches!(argument, Type::Intersection(_)))
+                        .first()
+                        .is_some_and(|argument| matches!(argument, Type::Intersection(_)))
+            ) || matches!(
+                &dispatch_receiver_type,
+                Type::Named(name, _)
+                    if (name_matches(name, "Class") || name_matches(name, "Module"))
+                        && Self::class_object_instance_types(&dispatch_receiver_type)
+                            .is_some_and(|instances| instances.len() > 1)
             ) {
                 let (type_, fallback_origin) = self.eval_polymorphic_receiver_call(
                     node,

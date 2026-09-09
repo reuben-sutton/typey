@@ -5351,6 +5351,23 @@ fn transfers_tap_blocks_through_owned_cfg() {
 }
 
 #[test]
+fn splits_union_generic_class_objects_in_owned_dispatch() {
+    let path = "tests/fixtures/cfg_class_object_union_dispatch.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+}
+
+#[test]
 fn models_class_object_name() {
     let result = check(
         r#"
