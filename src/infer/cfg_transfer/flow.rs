@@ -103,6 +103,9 @@ pub(super) fn conditional_reachability(
                         // `base.is_a?(Module)` unreachable.
                         return truthiness_reachability(source);
                     }
+                    if matches!(expected, Type::Any | Type::Anything | Type::TypeVar(_)) {
+                        return truthiness_reachability(source);
+                    }
                     return case_match_reachability(analyzer, &current, &expected, true);
                 }
             }

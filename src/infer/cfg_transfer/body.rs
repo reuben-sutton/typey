@@ -78,6 +78,28 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         else {
             return;
         };
+        let Some(hir::ExprKind::Call(call)) = self
+            .analyzer
+            .program
+            .hir_program
+            .expression(conditional.condition)
+            .map(|expression| &expression.kind)
+        else {
+            return;
+        };
+        if !matches!(call.name.as_str(), "is_a?" | "kind_of?" | "instance_of?")
+            || !matches!(
+                call.arguments.first(),
+                Some(hir::Argument::Positional(argument))
+                    if matches!(
+                        self.analyzer.program.hir_program.expression(*argument).map(|expression| &expression.kind),
+                        Some(hir::ExprKind::Read(hir::Read::Constant(_)))
+                            | Some(hir::ExprKind::Literal(_))
+                    )
+            )
+        {
+            return;
+        }
         if !self.should_report_unreachable_branch(conditional.expression) {
             return;
         }
