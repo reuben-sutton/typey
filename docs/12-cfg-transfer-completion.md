@@ -19,8 +19,8 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 19 CFG tests, 12 HIR tests, 386 checker tests,
-203 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
+The current local gates include 22 CFG tests, 12 HIR tests, 396 checker tests,
+209 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
 checker, local conformance, and upstream smoke gates pass; the upstream suite
 takes about 66 seconds because each fixture reloads the bundled RBI set. The
 CFG path is still opt-in because
@@ -295,33 +295,37 @@ The first modularization steps are now in place:
   isolated to a source-file body whose legacy statement accounting still
   needs to be represented directly in CFG.
 
-The latest release Spoom CFG run is a useful architectural checkpoint: 5,448
-bodies, 30,536 calls, 16,303 assignments, and 71,567 values transferred; six
-classified unsupported-operation fallback events, zero unsupported edges, zero
-legacy bridges, and one diagnostic. The fallback events are repeated passes
-over one top-level `SourceFileNode` body. That diagnostic is the known `Time?`
-passed to `Time` case in `coverage.rb`; the legacy path reports the same
-finding, while Sorbet accepts it through Thor's untyped option hash. The run
-reported 1,040 unknown application-library sends out of 5,979 (17.4%) and
-completed in 2.10 seconds including repository checking (1.46 seconds through
-the checker).
+* source-file pseudo-expressions, Kernel loading calls, lambda-local outcomes,
+  explicit mixin receivers, dynamic `alias_method`, Enumerable entry
+  contracts, and nilable Array indexing now have owned transfer contracts;
+  each has a focused regression test. Inferred methods called from DSL
+  callbacks no longer treat an unevaluated provisional `Never` summary as a
+  guaranteed terminating path.
+
+The latest release Spoom CFG run is a useful architectural checkpoint: 8,725
+bodies and 65,433 calls transferred, with zero unsupported-operation fallbacks,
+zero unsupported edges, zero legacy bridges, and one diagnostic. The diagnostic
+is the known `Time?` passed to `Time` case in `coverage.rb`; the legacy path
+reports the same finding, while Sorbet accepts it through Thor's untyped option
+hash. The run reached final convergence in four worklist rounds, reported
+1,048 unknown application-library sends out of 5,979 (17.5%), and completed in
+2.10 seconds including repository checking (1.57 seconds through the checker).
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
 semantics in some receiver contexts. On the latest Packwerk regression run,
-the owned path transferred 1,389 bodies, 4,355 calls, 39,392 assignments, and
-169,072 values. It recorded nine classified unsupported-operation fallback
-events, zero unsupported edges, zero legacy bridges, and 23 diagnostics. The
-23 are unchanged from the legacy run: the known minitest shim signature
-diagnostics and node-helper test-input diagnostics. Packwerk reports 332
-unknown application-library sends out of 1,578 (21.0%) and no
-application-library diagnostic is currently emitted. The fallback events are
-repeated passes over the same top-level `SourceFileNode` body; the remaining
-application fallback spans and parser/DSL bridges require owned contracts or
-explicit allowlisting. The run completed in 2.10 seconds including repository
-checking (1.47 seconds through the checker).
+the owned path transferred 9,238 bodies and 127,886 calls with zero
+unsupported-operation fallbacks, zero unsupported edges, and zero legacy
+bridges. It reports 23 total diagnostics in 1.93 seconds through the checker
+(2.58 seconds including repository discovery and reporting), and 398 unknown
+application-library sends out of 1,578 (25.2%). The total diagnostic count
+matches the legacy run, but the exact set is not yet fully differential: CFG
+currently exposes an additional `ParserTestHelper` return-contract discrepancy
+while the repository still contains the known RBI and node-helper diagnostics.
+That discrepancy is a remaining Typey modeling task, not a reason to suppress
+the check.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
