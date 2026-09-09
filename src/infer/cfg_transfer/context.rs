@@ -28,9 +28,29 @@ pub(super) fn transfer_super_call(
         .method_key
         .as_ref()
         .ok_or_else(|| "super call has no enclosing method".to_owned())?;
-    let key = analyzer
-        .super_method_key(current_method)
-        .ok_or_else(|| "super call has no resolvable parent method".to_owned())?;
+    let Some(key) = analyzer.super_method_key(current_method) else {
+        // Ruby permits a `super` call whose parent method is not present in
+        // the available source/RBI set. The recursive evaluator keeps this
+        // gradual: the call returns `T.untyped`, and an inline block is still
+        // visited with an unknown positional contract. Preserve that behavior
+        // in owned CFG transfer instead of abandoning the whole enclosing
+        // body merely because the parent declaration is unavailable.
+        let block_result = match input.block.as_ref() {
+            Some(cfg::BlockOperand::Inline(closure)) => analyzer.transfer_owned_closure_body(
+                *closure,
+                &[Type::Any],
+                None,
+                None,
+                environment,
+            ),
+            Some(cfg::BlockOperand::Passed(_)) | None => None,
+        };
+        return Ok(ContextTransfer {
+            type_: Type::Any,
+            block_result,
+            untyped_origin: UntypedOrigin::FallbackCall,
+        });
+    };
     analyzer.record_method_dependency(&key, environment);
     let Some(signature) = analyzer
         .observe_call(&key, arguments, input.block.is_some())
