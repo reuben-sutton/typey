@@ -444,6 +444,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         super::assignment::transfer_multi_write(
                             self.analyzer,
                             site,
+                            operation.expression,
                             value_type,
                             lefts,
                             rest.as_ref(),

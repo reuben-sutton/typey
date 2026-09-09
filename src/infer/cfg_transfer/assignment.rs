@@ -72,6 +72,21 @@ pub(super) fn transfer_write<'src>(
                 type_
             };
             environment.bind(&name, type_.clone());
+            let empty_array = expression
+                .and_then(|id| analyzer.program.hir_program.expression(id))
+                .and_then(|expression| match &expression.kind {
+                    hir::ExprKind::Assign { value, .. } => {
+                        analyzer.program.hir_program.expression(*value)
+                    }
+                    hir::ExprKind::Array(_) => Some(expression),
+                    _ => None,
+                })
+                .is_some_and(|expression| {
+                    matches!(&expression.kind, hir::ExprKind::Array(elements) if elements.is_empty())
+                });
+            if empty_array && matches!(&type_, Type::Array(element) if element.is_any()) {
+                environment.open_array_locals.insert(name.clone());
+            }
             environment.set_hash_shape(format!("\u{1}local:{name}"), hash_shape);
             type_
         }
@@ -126,7 +141,8 @@ pub(super) fn transfer_for_target<'src>(
         hir::AssignTarget::Constant(path) => cfg::Place::Constant(path.clone()),
         hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. } => return None,
     };
-    Some(transfer_write(
+    let open_array = matches!(&element_type, Type::Array(element) if element.is_never());
+    let result = transfer_write(
         analyzer,
         site,
         &place,
@@ -135,7 +151,17 @@ pub(super) fn transfer_for_target<'src>(
         None,
         false,
         environment,
-    ))
+    );
+    if open_array {
+        if let hir::AssignTarget::Local(local) = target {
+            if let Some(name) = analyzer.program.hir_program.local_name(*local) {
+                environment
+                    .open_array_locals
+                    .insert(name.as_str().to_owned());
+            }
+        }
+    }
+    Some(result)
 }
 
 /// `Struct.new` returns a class object at runtime, but assigning that class to
@@ -199,6 +225,7 @@ fn dynamic_struct_constant_type<'src>(
 pub(super) fn transfer_multi_write<'src>(
     analyzer: &mut Analyzer<'src>,
     site: SourceSite,
+    expression: Option<hir::ExprId>,
     value_type: Type,
     lefts: &[hir::AssignTarget],
     rest: Option<&hir::AssignTarget>,
@@ -212,6 +239,9 @@ pub(super) fn transfer_multi_write<'src>(
     for (index, target) in lefts.iter().enumerate() {
         let element_type = analyzer.multi_assignment_element_type(&value_type, index, known_length);
         transfer_for_target(analyzer, site, target, element_type, environment)?;
+        if is_empty_array_element(analyzer, expression, index) {
+            mark_open_array_target(analyzer, target, environment);
+        }
     }
     if let Some(target) = rest {
         let element_type = analyzer.array_element_type(&value_type);
@@ -230,6 +260,54 @@ pub(super) fn transfer_multi_write<'src>(
         let element_type =
             analyzer.multi_assignment_element_type(&value_type, right_start + index, known_length);
         transfer_for_target(analyzer, site, target, element_type, environment)?;
+        if is_empty_array_element(analyzer, expression, right_start + index) {
+            mark_open_array_target(analyzer, target, environment);
+        }
     }
     Some(value_type)
+}
+
+fn is_empty_array_element(
+    analyzer: &Analyzer<'_>,
+    expression: Option<hir::ExprId>,
+    index: usize,
+) -> bool {
+    let Some(expression) = expression.and_then(|id| analyzer.program.hir_program.expression(id))
+    else {
+        return false;
+    };
+    let hir::ExprKind::MultiAssign { value, .. } = &expression.kind else {
+        return false;
+    };
+    let Some(hir::Expr {
+        kind: hir::ExprKind::Array(elements),
+        ..
+    }) = analyzer.program.hir_program.expression(*value)
+    else {
+        return false;
+    };
+    let Some(hir::ArrayElement::Value(value)) = elements.get(index) else {
+        return false;
+    };
+    matches!(
+        analyzer.program.hir_program.expression(*value),
+        Some(hir::Expr {
+            kind: hir::ExprKind::Array(elements),
+            ..
+        }) if elements.is_empty()
+    )
+}
+
+fn mark_open_array_target(
+    analyzer: &Analyzer<'_>,
+    target: &hir::AssignTarget,
+    environment: &mut Environment,
+) {
+    if let hir::AssignTarget::Local(local) = target {
+        if let Some(name) = analyzer.program.hir_program.local_name(*local) {
+            environment
+                .open_array_locals
+                .insert(name.as_str().to_owned());
+        }
+    }
 }

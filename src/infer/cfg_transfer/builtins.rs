@@ -371,7 +371,7 @@ fn transfer_array_builtin(
         "-" | "&" | "reverse" | "rotate" | "shuffle" | "sort" => {
             Some(Type::Array(Box::new(element.clone())))
         }
-        "push" | "<<" => {
+        "push" | "<<" | "prepend" => {
             let element = arguments
                 .argument_types
                 .iter()

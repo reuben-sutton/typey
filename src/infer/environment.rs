@@ -169,6 +169,31 @@ impl Environment {
         self.known_nonempty_arrays.contains(name)
     }
 
+    /// Widen an array local whose empty literal was kept open for later
+    /// appends. Empty arrays start with an `Any` element in the ordinary
+    /// aggregate type, but that `Any` is only a placeholder until the first
+    /// concrete write. Keep the open marker while updating the local so a
+    /// chained or subsequent append continues to accumulate element types.
+    pub(super) fn widen_open_array(&mut self, name: &str, arguments: &[Type]) -> Option<Type> {
+        if !self.open_array_locals.contains(name) {
+            return None;
+        }
+        let Type::Array(element) = self.locals.get(name)? else {
+            return None;
+        };
+        let mut element = if element.is_any() {
+            Type::Never
+        } else {
+            element.as_ref().clone()
+        };
+        for argument in arguments {
+            element = element.join(argument);
+        }
+        let type_ = Type::Array(Box::new(element));
+        self.locals.insert(name.to_owned(), type_.clone());
+        Some(type_)
+    }
+
     /// Join two control-flow environments using the same type lattice as
     /// expression inference. A local which exists on only one path can be
     /// `nil` when the other path is taken.

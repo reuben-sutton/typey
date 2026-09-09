@@ -1339,6 +1339,39 @@ fn permits_appending_to_an_untyped_empty_array_before_inference() {
 }
 
 #[test]
+fn transfers_open_array_appends_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/open_array_append.rb").unwrap();
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    let reveals = cfg
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("Revealed type:"))
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reveals
+            .iter()
+            .filter(|message| message.contains("Revealed type: `T::Array[String]`"))
+            .count(),
+        3,
+        "{reveals:?}"
+    );
+    assert!(
+        reveals.iter().any(|message| {
+            message.contains("Revealed type: `T::Array[T.any(Integer, Symbol)]`")
+        }),
+        "{reveals:?}"
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn does_not_treat_observed_argument_types_as_exhaustive_validation() {
     check_fixture("tests/fixtures/inferred_argument_validation.rb");
 }

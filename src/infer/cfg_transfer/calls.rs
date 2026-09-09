@@ -6,6 +6,45 @@ use crate::cfg;
 use crate::hir;
 use crate::types::Type;
 use std::collections::HashMap;
+
+fn open_array_append_local(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    environment: &Environment,
+) -> Option<String> {
+    if !matches!(input.name.as_str(), "push" | "<<" | "prepend") {
+        return None;
+    }
+    let mut expression = input
+        .expression
+        .and_then(|id| analyzer.program.hir_program.expression(id))?;
+    loop {
+        let hir::ExprKind::Call(call) = &expression.kind else {
+            return None;
+        };
+        let hir::Receiver::Explicit(receiver) = call.receiver else {
+            return None;
+        };
+        expression = analyzer.program.hir_program.expression(receiver)?;
+        match &expression.kind {
+            hir::ExprKind::Read(hir::Read::Local(local)) => {
+                let name = analyzer
+                    .program
+                    .hir_program
+                    .local_name(*local)?
+                    .as_str()
+                    .to_owned();
+                return environment
+                    .open_array_locals
+                    .contains(&name)
+                    .then_some(name);
+            }
+            hir::ExprKind::Call(call)
+                if matches!(call.name.as_str(), "push" | "<<" | "prepend") => {}
+            _ => return None,
+        }
+    }
+}
 fn compound_assignment_receiver(
     analyzer: &Analyzer<'_>,
     input: &OwnedCallInput,
@@ -62,7 +101,7 @@ pub(super) fn transfer_call(
             .cfg_owned_call_arguments(&input, values, fixed_array_elements)
             .ok_or_else(|| "owned CFG call-argument shape is unavailable".to_owned())?
     };
-    let receiver_type = match &input.receiver {
+    let mut receiver_type = match &input.receiver {
         cfg::ReceiverOperand::Implicit => environment.self_type.clone(),
         cfg::ReceiverOperand::Value(value) => values
             .get(value.0 as usize)
@@ -71,6 +110,12 @@ pub(super) fn transfer_call(
             .ok_or_else(|| "owned receiver value is unavailable".to_owned())?,
         cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => environment.self_type.clone(),
     };
+    if let Some(local) = open_array_append_local(analyzer, &input, environment) {
+        if let Some(widened) = environment.widen_open_array(&local, &call_arguments.argument_types)
+        {
+            receiver_type = widened;
+        }
+    }
     let receiver_type = compound_assignment_receiver(analyzer, &input, receiver_type);
     let receiver_value = match input.receiver {
         cfg::ReceiverOperand::Value(value) => Some(value),
