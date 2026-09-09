@@ -171,6 +171,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::ReadSpecial { .. }
                         | cfg::OperationKind::Write { .. }
                         | cfg::OperationKind::MultiWrite { .. }
+                        | cfg::OperationKind::Defined { .. }
                         | cfg::OperationKind::Call { .. }
                         | cfg::OperationKind::MakeClosure { .. }
                         | cfg::OperationKind::BuildArray { .. }
@@ -276,6 +277,11 @@ impl<'src> Analyzer<'src> {
     }
 }
 
+enum OperationTransfer {
+    Value(Type),
+    Stop,
+}
+
 impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, 'src> {
     type State = BlockState;
     type Error = String;
@@ -292,289 +298,327 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
         let mut exception_edges = Vec::new();
         for operation in &block.operations {
             let site = SourceSite::from_span(operation.span, operation.expression);
-            let type_ = match &operation.kind {
-                cfg::OperationKind::Const { value } => {
-                    let type_ = Analyzer::cfg_literal_type(value);
-                    if operation.defer_inline_assertion {
-                        type_
-                    } else {
-                        self.analyzer.apply_inline_assertion_at(site, type_)
+            let previous_suppression = self.analyzer.reporting.suppress_diagnostics;
+            if operation.suppress_diagnostics {
+                self.analyzer.reporting.suppress_diagnostics = true;
+            }
+            let operation_result = (|| -> Result<OperationTransfer, String> {
+                let type_ = match &operation.kind {
+                    cfg::OperationKind::Const { value } => {
+                        let type_ = Analyzer::cfg_literal_type(value);
+                        if operation.defer_inline_assertion {
+                            type_
+                        } else {
+                            self.analyzer.apply_inline_assertion_at(site, type_)
+                        }
                     }
-                }
-                cfg::OperationKind::Read { place } => {
-                    let read = match place {
-                        cfg::Place::Local(local) => Read::Local(*local),
-                        cfg::Place::InstanceVariable(name) => Read::InstanceVariable(name.clone()),
-                        cfg::Place::ClassVariable(name) => Read::ClassVariable(name.clone()),
-                        cfg::Place::Global(name) => Read::Global(name.clone()),
-                        cfg::Place::Constant(path) => Read::Constant(path.clone()),
-                    };
-                    if operation.defer_inline_assertion {
-                        let previous = self.analyzer.defer_inline_assertions;
-                        self.analyzer.defer_inline_assertions = true;
-                        let type_ =
+                    cfg::OperationKind::Read { place } => {
+                        let read = match place {
+                            cfg::Place::Local(local) => Read::Local(*local),
+                            cfg::Place::InstanceVariable(name) => {
+                                Read::InstanceVariable(name.clone())
+                            }
+                            cfg::Place::ClassVariable(name) => Read::ClassVariable(name.clone()),
+                            cfg::Place::Global(name) => Read::Global(name.clone()),
+                            cfg::Place::Constant(path) => Read::Constant(path.clone()),
+                        };
+                        if operation.defer_inline_assertion {
+                            let previous = self.analyzer.defer_inline_assertions;
+                            self.analyzer.defer_inline_assertions = true;
+                            let type_ = self.analyzer.transfer_cfg_read_at(
+                                site,
+                                read,
+                                &mut next.environment,
+                            );
+                            self.analyzer.defer_inline_assertions = previous;
+                            type_
+                        } else {
                             self.analyzer
-                                .transfer_cfg_read_at(site, read, &mut next.environment);
-                        self.analyzer.defer_inline_assertions = previous;
-                        type_
-                    } else {
-                        self.analyzer
-                            .transfer_cfg_read_at(site, read, &mut next.environment)
+                                .transfer_cfg_read_at(site, read, &mut next.environment)
+                        }
                     }
-                }
-                cfg::OperationKind::ReadSpecial { read } => {
-                    if operation.defer_inline_assertion {
-                        let previous = self.analyzer.defer_inline_assertions;
-                        self.analyzer.defer_inline_assertions = true;
-                        let type_ = self.analyzer.transfer_cfg_read_at(
+                    cfg::OperationKind::ReadSpecial { read } => {
+                        if operation.defer_inline_assertion {
+                            let previous = self.analyzer.defer_inline_assertions;
+                            self.analyzer.defer_inline_assertions = true;
+                            let type_ = self.analyzer.transfer_cfg_read_at(
+                                site,
+                                read.clone(),
+                                &mut next.environment,
+                            );
+                            self.analyzer.defer_inline_assertions = previous;
+                            type_
+                        } else {
+                            self.analyzer.transfer_cfg_read_at(
+                                site,
+                                read.clone(),
+                                &mut next.environment,
+                            )
+                        }
+                    }
+                    cfg::OperationKind::Write {
+                        place,
+                        value,
+                        logical,
+                    } => {
+                        let actual = next
+                            .value(*value)
+                            .ok_or_else(|| format!("missing write operand {:?}", value))?;
+                        super::assignment::transfer_write(
+                            self.analyzer,
                             site,
-                            read.clone(),
-                            &mut next.environment,
-                        );
-                        self.analyzer.defer_inline_assertions = previous;
-                        type_
-                    } else {
-                        self.analyzer.transfer_cfg_read_at(
-                            site,
-                            read.clone(),
+                            place,
+                            actual,
+                            *logical,
                             &mut next.environment,
                         )
                     }
-                }
-                cfg::OperationKind::Write {
-                    place,
-                    value,
-                    logical,
-                } => {
-                    let actual = next
-                        .value(*value)
-                        .ok_or_else(|| format!("missing write operand {:?}", value))?;
-                    super::assignment::transfer_write(
-                        self.analyzer,
-                        site,
-                        place,
-                        actual,
-                        *logical,
-                        &mut next.environment,
-                    )
-                }
-                cfg::OperationKind::MultiWrite {
-                    value,
-                    lefts,
-                    rest,
-                    rights,
-                } => {
-                    let actual = next
-                        .value(*value)
-                        .ok_or_else(|| format!("missing multi-write operand {:?}", value))?;
-                    let value_type = if let Some(elements) = self.fixed_array_elements.get(value) {
-                        let elements = elements
-                            .iter()
-                            .map(|element| {
-                                next.value(*element).ok_or_else(|| {
-                                    format!("missing fixed array element {:?}", element)
-                                })
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        Type::Tuple(elements)
-                    } else {
-                        actual
-                    };
-                    super::assignment::transfer_multi_write(
-                        self.analyzer,
-                        site,
-                        value_type,
+                    cfg::OperationKind::MultiWrite {
+                        value,
                         lefts,
-                        rest.as_ref(),
+                        rest,
                         rights,
-                        &mut next.environment,
-                    )
-                    .ok_or_else(|| format!("multi-write transfer failed at {:?}", operation.span))?
-                }
-                cfg::OperationKind::BindForTarget { collection, target } => {
-                    let collection_type = next.value(*collection).ok_or_else(|| {
-                        format!("missing for collection operand {:?}", collection)
-                    })?;
-                    let element_type = self.analyzer.array_element_type(&collection_type);
-                    super::assignment::transfer_for_target(
+                    } => {
+                        let actual = next
+                            .value(*value)
+                            .ok_or_else(|| format!("missing multi-write operand {:?}", value))?;
+                        let value_type =
+                            if let Some(elements) = self.fixed_array_elements.get(value) {
+                                let elements = elements
+                                    .iter()
+                                    .map(|element| {
+                                        next.value(*element).ok_or_else(|| {
+                                            format!("missing fixed array element {:?}", element)
+                                        })
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()?;
+                                Type::Tuple(elements)
+                            } else {
+                                actual
+                            };
+                        super::assignment::transfer_multi_write(
+                            self.analyzer,
+                            site,
+                            value_type,
+                            lefts,
+                            rest.as_ref(),
+                            rights,
+                            &mut next.environment,
+                        )
+                        .ok_or_else(|| {
+                            format!("multi-write transfer failed at {:?}", operation.span)
+                        })?
+                    }
+                    cfg::OperationKind::Defined { value } => {
+                        next.value(*value)
+                            .ok_or_else(|| format!("missing defined? operand {:?}", value))?;
+                        self.analyzer.apply_inline_assertion_in_environment_at(
+                            site,
+                            Type::union([Type::Nil, Type::String]),
+                            &next.environment,
+                        )
+                    }
+                    cfg::OperationKind::BindForTarget { collection, target } => {
+                        let collection_type = next.value(*collection).ok_or_else(|| {
+                            format!("missing for collection operand {:?}", collection)
+                        })?;
+                        let element_type = self.analyzer.array_element_type(&collection_type);
+                        super::assignment::transfer_for_target(
+                            self.analyzer,
+                            site,
+                            target,
+                            element_type,
+                            &mut next.environment,
+                        )
+                        .ok_or_else(|| format!("unsupported for target at {:?}", operation.span))?
+                    }
+                    cfg::OperationKind::Call { .. } => {
+                        let result = super::calls::transfer_call(
+                            self.analyzer,
+                            OwnedCallInput::from_operation(operation).ok_or_else(|| {
+                                format!("missing owned call input at {:?}", operation.span)
+                            })?,
+                            &next.values,
+                            &self.fixed_array_elements,
+                            &mut next.environment,
+                        )
+                        .map_err(|reason| format!("call transfer failed: {reason}"))?;
+                        if result.flow.contains(FlowKind::Raise) {
+                            let exception = result.abrupt.raise_type.clone();
+                            if let Some(edge) = super::exceptions::exception_edge(
+                                graph,
+                                block,
+                                next.clone(),
+                                exception.clone(),
+                            ) {
+                                exception_edges.push(edge);
+                            } else {
+                                self.abrupt = self
+                                    .abrupt
+                                    .join(&OutcomeTypes::for_kind(FlowKind::Raise, exception));
+                                self.terminal_flow =
+                                    self.terminal_flow.union(Flow::abrupt(FlowKind::Raise));
+                            }
+                        }
+                        let non_raise = result.abrupt.without(FlowKind::Raise);
+                        if !non_raise.all().is_never() {
+                            self.abrupt = self.abrupt.join(&non_raise);
+                            self.terminal_flow = self.terminal_flow.union(non_raise.flow());
+                        }
+                        if !result.flow.contains(FlowKind::Normal) {
+                            let expression_type = result.normal_type.clone().unwrap_or(Type::Never);
+                            self.analyzer.record_at(
+                                site,
+                                expression_type,
+                                self.analyzer.reporting.report,
+                                None,
+                            );
+                            return Ok(OperationTransfer::Stop);
+                        }
+                        result.normal_type.ok_or_else(|| {
+                            format!("call has no normal result at {:?}", operation.span)
+                        })?
+                    }
+                    cfg::OperationKind::BuildArray {
+                        elements,
+                        preserve_fixed_shape,
+                    } => super::construction::transfer_array(
                         self.analyzer,
                         site,
-                        target,
-                        element_type,
-                        &mut next.environment,
-                    )
-                    .ok_or_else(|| format!("unsupported for target at {:?}", operation.span))?
-                }
-                cfg::OperationKind::Call { .. } => {
-                    let result = super::calls::transfer_call(
-                        self.analyzer,
-                        OwnedCallInput::from_operation(operation).ok_or_else(|| {
-                            format!("missing owned call input at {:?}", operation.span)
-                        })?,
+                        elements,
                         &next.values,
-                        &self.fixed_array_elements,
+                        *preserve_fixed_shape
+                            || operation.result.is_some_and(|result| {
+                                self.fixed_shape_array_elements.contains_key(&result)
+                            }),
+                        operation.defer_inline_assertion,
                         &mut next.environment,
                     )
-                    .map_err(|reason| format!("call transfer failed: {reason}"))?;
-                    if result.flow.contains(FlowKind::Raise) {
-                        let exception = result.abrupt.raise_type.clone();
-                        if let Some(edge) = super::exceptions::exception_edge(
-                            graph,
-                            block,
-                            next.clone(),
-                            exception.clone(),
-                        ) {
-                            exception_edges.push(edge);
-                        } else {
-                            self.abrupt = self
-                                .abrupt
-                                .join(&OutcomeTypes::for_kind(FlowKind::Raise, exception));
-                            self.terminal_flow =
-                                self.terminal_flow.union(Flow::abrupt(FlowKind::Raise));
+                    .ok_or_else(|| format!("array transfer failed at {:?}", operation.span))?,
+                    cfg::OperationKind::BuildHash { elements } => {
+                        super::construction::transfer_hash(
+                            self.analyzer,
+                            site,
+                            elements,
+                            &next.values,
+                            operation.defer_inline_assertion,
+                            &mut next.environment,
+                        )
+                        .ok_or_else(|| format!("hash transfer failed at {:?}", operation.span))?
+                    }
+                    cfg::OperationKind::BuildInterpolated { kind } => match kind {
+                        crate::hir::InterpolatedKind::String
+                        | crate::hir::InterpolatedKind::XString => Type::String,
+                        crate::hir::InterpolatedKind::RegularExpression => Type::named("Regexp"),
+                        crate::hir::InterpolatedKind::Symbol => Type::Symbol,
+                        crate::hir::InterpolatedKind::MatchLastLine => {
+                            Type::union([Type::Nil, Type::Integer])
                         }
+                    },
+                    cfg::OperationKind::BuildRange {
+                        left,
+                        right,
+                        exclude_end: _,
+                    } => {
+                        let left = left
+                            .and_then(|value| next.value(value))
+                            .unwrap_or(Type::Nil);
+                        let right = right
+                            .and_then(|value| next.value(value))
+                            .unwrap_or(Type::Nil);
+                        let type_ = Type::Named("Range".to_owned(), vec![left, right]);
+                        self.analyzer.apply_inline_assertion_in_environment_at(
+                            site,
+                            type_,
+                            &next.environment,
+                        )
                     }
-                    let non_raise = result.abrupt.without(FlowKind::Raise);
-                    if !non_raise.all().is_never() {
-                        self.abrupt = self.abrupt.join(&non_raise);
-                        self.terminal_flow = self.terminal_flow.union(non_raise.flow());
+                    cfg::OperationKind::Record { value } => {
+                        let type_ = value
+                            .as_ref()
+                            .and_then(|value| next.value(*value))
+                            .unwrap_or(Type::Never);
+                        self.analyzer.record_at(site, type_.clone(), false, None);
+                        type_
                     }
-                    if !result.flow.contains(FlowKind::Normal) {
-                        let expression_type = result.normal_type.clone().unwrap_or(Type::Never);
+                    cfg::OperationKind::ApplyAssertion { value } => {
+                        let type_ = next
+                            .value(*value)
+                            .ok_or_else(|| format!("missing assertion operand {:?}", value))?;
+                        let type_ = self.analyzer.apply_inline_assertion_in_environment_at(
+                            site,
+                            type_,
+                            &next.environment,
+                        );
+                        self.analyzer.record_at(site, type_.clone(), false, None);
+                        type_
+                    }
+                    cfg::OperationKind::SetOutcome { kind, value } => {
+                        let type_ = next
+                            .value(*value)
+                            .ok_or_else(|| format!("missing outcome operand {:?}", value))?;
+                        let kind = match kind {
+                            cfg::OutcomeKind::Return => FlowKind::Return,
+                            cfg::OutcomeKind::Break => FlowKind::Break,
+                            cfg::OutcomeKind::Next => FlowKind::Next,
+                            cfg::OutcomeKind::Retry => FlowKind::Retry,
+                        };
+                        next.set_pending_outcome(kind, type_.clone());
+                        type_
+                    }
+                    cfg::OperationKind::PatternTest { value, pattern } => {
+                        let source = next
+                            .value(*value)
+                            .ok_or_else(|| format!("missing pattern operand {:?}", value))?;
+                        let (_, _, type_) = super::patterns::pattern_reachability(
+                            self.analyzer,
+                            pattern,
+                            &source,
+                            &next,
+                        )
+                        .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
+                        type_
+                    }
+                    cfg::OperationKind::MakeClosure { closure } => self
+                        .analyzer
+                        .cfg_owned_closure_type(*closure, &next.environment)
+                        .ok_or_else(|| {
+                            format!("closure transfer failed at {:?}", operation.span)
+                        })?,
+                    _ => return Err(format!("unsupported CFG operation at {:?}", operation.span)),
+                };
+                if !self.suppress_internal_assignment_record(operation)
+                    && !self.suppress_internal_call_record(operation)
+                    && !matches!(
+                        operation.kind,
+                        cfg::OperationKind::PatternTest { .. }
+                            | cfg::OperationKind::Record { .. }
+                            | cfg::OperationKind::SetOutcome { .. }
+                            | cfg::OperationKind::BindForTarget { .. }
+                    )
+                {
+                    if matches!(operation.kind, cfg::OperationKind::Call { .. }) {
                         self.analyzer.record_at(
                             site,
-                            expression_type,
+                            type_.clone(),
                             self.analyzer.reporting.report,
                             None,
                         );
-                        return Ok(exception_edges);
+                    } else {
+                        self.analyzer.record_at(site, type_.clone(), false, None);
                     }
-                    result.normal_type.ok_or_else(|| {
-                        format!("call has no normal result at {:?}", operation.span)
-                    })?
                 }
-                cfg::OperationKind::BuildArray {
-                    elements,
-                    preserve_fixed_shape,
-                } => super::construction::transfer_array(
-                    self.analyzer,
-                    site,
-                    elements,
-                    &next.values,
-                    *preserve_fixed_shape
-                        || operation.result.is_some_and(|result| {
-                            self.fixed_shape_array_elements.contains_key(&result)
-                        }),
-                    operation.defer_inline_assertion,
-                    &mut next.environment,
-                )
-                .ok_or_else(|| format!("array transfer failed at {:?}", operation.span))?,
-                cfg::OperationKind::BuildHash { elements } => super::construction::transfer_hash(
-                    self.analyzer,
-                    site,
-                    elements,
-                    &next.values,
-                    operation.defer_inline_assertion,
-                    &mut next.environment,
-                )
-                .ok_or_else(|| format!("hash transfer failed at {:?}", operation.span))?,
-                cfg::OperationKind::BuildInterpolated { kind } => match kind {
-                    crate::hir::InterpolatedKind::String
-                    | crate::hir::InterpolatedKind::XString => Type::String,
-                    crate::hir::InterpolatedKind::RegularExpression => Type::named("Regexp"),
-                    crate::hir::InterpolatedKind::Symbol => Type::Symbol,
-                    crate::hir::InterpolatedKind::MatchLastLine => {
-                        Type::union([Type::Nil, Type::Integer])
-                    }
-                },
-                cfg::OperationKind::BuildRange {
-                    left,
-                    right,
-                    exclude_end: _,
-                } => {
-                    let left = left
-                        .and_then(|value| next.value(value))
-                        .unwrap_or(Type::Nil);
-                    let right = right
-                        .and_then(|value| next.value(value))
-                        .unwrap_or(Type::Nil);
-                    let type_ = Type::Named("Range".to_owned(), vec![left, right]);
-                    self.analyzer.apply_inline_assertion_in_environment_at(
-                        site,
-                        type_,
-                        &next.environment,
-                    )
-                }
-                cfg::OperationKind::Record { value } => {
-                    let type_ = value
-                        .as_ref()
-                        .and_then(|value| next.value(*value))
-                        .unwrap_or(Type::Never);
-                    self.analyzer.record_at(site, type_.clone(), false, None);
-                    type_
-                }
-                cfg::OperationKind::ApplyAssertion { value } => {
-                    let type_ = next
-                        .value(*value)
-                        .ok_or_else(|| format!("missing assertion operand {:?}", value))?;
-                    let type_ = self.analyzer.apply_inline_assertion_in_environment_at(
-                        site,
-                        type_,
-                        &next.environment,
-                    );
-                    self.analyzer.record_at(site, type_.clone(), false, None);
-                    type_
-                }
-                cfg::OperationKind::SetOutcome { kind, value } => {
-                    let type_ = next
-                        .value(*value)
-                        .ok_or_else(|| format!("missing outcome operand {:?}", value))?;
-                    let kind = match kind {
-                        cfg::OutcomeKind::Return => FlowKind::Return,
-                        cfg::OutcomeKind::Break => FlowKind::Break,
-                        cfg::OutcomeKind::Next => FlowKind::Next,
-                        cfg::OutcomeKind::Retry => FlowKind::Retry,
-                    };
-                    next.set_pending_outcome(kind, type_.clone());
-                    type_
-                }
-                cfg::OperationKind::PatternTest { value, pattern } => {
-                    let source = next
-                        .value(*value)
-                        .ok_or_else(|| format!("missing pattern operand {:?}", value))?;
-                    let (_, _, type_) = super::patterns::pattern_reachability(
-                        self.analyzer,
-                        pattern,
-                        &source,
-                        &next,
-                    )
-                    .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
-                    type_
-                }
-                cfg::OperationKind::MakeClosure { closure } => self
-                    .analyzer
-                    .cfg_owned_closure_type(*closure, &next.environment)
-                    .ok_or_else(|| format!("closure transfer failed at {:?}", operation.span))?,
-                _ => return Err(format!("unsupported CFG operation at {:?}", operation.span)),
+                Ok(OperationTransfer::Value(type_))
+            })();
+            if operation.suppress_diagnostics {
+                self.analyzer.reporting.suppress_diagnostics = previous_suppression;
+            }
+            let type_ = match operation_result? {
+                OperationTransfer::Value(type_) => type_,
+                OperationTransfer::Stop => return Ok(exception_edges),
             };
             if let Some(result) = operation.result {
                 next.set_value(result, type_.clone());
-            }
-            if !self.suppress_internal_assignment_record(operation)
-                && !self.suppress_internal_call_record(operation)
-                && !matches!(
-                    operation.kind,
-                    cfg::OperationKind::PatternTest { .. }
-                        | cfg::OperationKind::Record { .. }
-                        | cfg::OperationKind::SetOutcome { .. }
-                        | cfg::OperationKind::BindForTarget { .. }
-                )
-            {
-                if matches!(operation.kind, cfg::OperationKind::Call { .. }) {
-                    self.analyzer
-                        .record_at(site, type_, self.analyzer.reporting.report, None);
-                } else {
-                    self.analyzer.record_at(site, type_, false, None);
-                }
             }
         }
 

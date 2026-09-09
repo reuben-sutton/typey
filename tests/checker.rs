@@ -8052,6 +8052,22 @@ fn traverses_defined_operands_without_reporting_their_runtime_probe_errors() {
 }
 
 #[test]
+fn transfers_defined_operands_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/defined_operand_sends.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn traverses_blocks_on_unknown_super_calls() {
     let source = r#"
 class Parent

@@ -137,6 +137,7 @@ struct Builder<'program> {
     retain_expression_values: bool,
     current_expression: Option<ExprId>,
     defer_inline_assertions: bool,
+    suppress_diagnostics: bool,
 }
 
 impl<'program> Builder<'program> {
@@ -175,6 +176,7 @@ impl<'program> Builder<'program> {
             retain_expression_values,
             current_expression: None,
             defer_inline_assertions: false,
+            suppress_diagnostics: false,
         }
     }
 
@@ -255,6 +257,7 @@ impl<'program> Builder<'program> {
                 }),
                 result: value,
                 defer_inline_assertion: self.defer_inline_assertions,
+                suppress_diagnostics: self.suppress_diagnostics,
                 kind,
             });
         value
@@ -374,6 +377,7 @@ impl<'program> Builder<'program> {
                 rights,
                 value,
             } => self.lower_multi_assignment(expression, block, span, lefts, rest, rights, value),
+            ExprKind::Defined { value } => self.lower_defined(expression, block, span, value),
             ExprKind::Call(call) => self.lower_call(expression, block, call),
             ExprKind::Array(elements) => self.lower_array(expression, block, span, elements),
             ExprKind::Hash(elements) => self.lower_hash(expression, block, span, elements),
@@ -584,6 +588,25 @@ impl<'program> Builder<'program> {
             true,
         );
         self.normal(expression, block, value)
+    }
+
+    fn lower_defined(
+        &mut self,
+        expression: ExprId,
+        block: BlockId,
+        span: Span,
+        operand: ExprId,
+    ) -> Flow {
+        let previous = self.suppress_diagnostics;
+        self.suppress_diagnostics = true;
+        let flow = self.lower_expr(operand, block);
+        self.suppress_diagnostics = previous;
+        if !flow.reachable {
+            return flow;
+        }
+        let value = flow.value.expect("defined? operand produces a value");
+        let result = self.emit(block, span, OperationKind::Defined { value }, true);
+        self.normal(expression, block, result)
     }
 
     fn lower_read(&mut self, expression: ExprId, block: BlockId, span: Span, read: Read) -> Flow {

@@ -297,6 +297,11 @@ impl<'src> Lowerer<'src> {
             return self.lower_singleton_class(node, &singleton);
         }
 
+        if let Some(defined) = node.as_defined_node() {
+            let value = self.lower_node(&defined.value());
+            return self.push_expr(node, ExprKind::Defined { value });
+        }
+
         if let Some(write) = node.as_multi_write_node() {
             let lefts = write
                 .lefts()

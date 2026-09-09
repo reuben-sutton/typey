@@ -243,6 +243,9 @@ pub enum ExprKind {
         rights: Vec<AssignTarget>,
         value: ExprId,
     },
+    Defined {
+        value: ExprId,
+    },
     Call(Call),
     Array(Vec<ArrayElement>),
     Hash(Vec<HashElement>),

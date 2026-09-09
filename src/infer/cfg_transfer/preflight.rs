@@ -80,6 +80,9 @@ fn expr_transfer_failure(
     };
     let result = match &expr.kind {
         ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => Ok(()),
+        ExprKind::Defined { value } => {
+            expr_transfer_failure(program, *value, visiting, loop_depth, context)
+        }
         ExprKind::Call(call) => {
             if let Some(block) = &call.block {
                 match block {
@@ -365,7 +368,7 @@ mod tests {
 
     #[test]
     fn reports_the_owned_span_and_reason_for_unsupported_hir() {
-        let program = hir::lower(hir::FileId(3), b"defined?(value)");
+        let program = hir::lower(hir::FileId(3), b"alias foo bar");
         let body = program.root.expect("root body");
         let failure = body_transfer_failure(&program, body).expect("unsupported expression");
         let expression = program.body(body).expect("body").root;

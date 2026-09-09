@@ -100,6 +100,9 @@ pub struct Operation {
     /// Logical-assignment RHS operations defer source inline assertions until
     /// the assignment result is written, matching Ruby's expression scope.
     pub defer_inline_assertion: bool,
+    /// Operations which probe the operand of `defined?` retain sends and
+    /// inferred values but must not publish ordinary operand diagnostics.
+    pub suppress_diagnostics: bool,
     pub kind: OperationKind,
 }
 
@@ -127,6 +130,9 @@ pub enum OperationKind {
         lefts: Vec<hir::AssignTarget>,
         rest: Option<hir::AssignTarget>,
         rights: Vec<hir::AssignTarget>,
+    },
+    Defined {
+        value: ValueId,
     },
     Call {
         receiver: ReceiverOperand,

@@ -282,18 +282,23 @@ values[index] ||= local
 }
 
 #[test]
-fn unsupported_syntax_is_explicit_and_source_mapped() {
+fn lowers_defined_operands_into_owned_hir() {
     let source = "defined?(value)";
     let program = expressions(source);
-    let unsupported = program
+    let operand = program
         .expressions
         .iter()
         .find_map(|expression| match &expression.kind {
-            ExprKind::Unsupported(unsupported) => Some(unsupported),
+            ExprKind::Defined { value } => Some(*value),
             _ => None,
         })
-        .expect("unsupported expression");
-    assert_eq!(unsupported.kind.as_str(), "DefinedNode");
+        .expect("defined expression");
+    assert!(matches!(
+        program
+            .expression(operand)
+            .map(|expression| &expression.kind),
+        Some(ExprKind::Read(_))
+    ));
 }
 
 #[test]
