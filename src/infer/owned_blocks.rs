@@ -135,10 +135,11 @@ impl<'src> Analyzer<'src> {
             Some(cfg::BlockOperand::Passed(value)) => values
                 .get(value.0 as usize)
                 .and_then(Option::as_ref)
-                .and_then(proc_parts)
+                .and_then(optional_proc_type)
+                .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()))
                 .map_or_else(
                     || Some(Eval::value(Type::Any)),
-                    |(_, result)| Some(Eval::value(result.clone())),
+                    |result| Some(Eval::value(result)),
                 ),
             None => Some(Eval::value(Type::Any)),
         }

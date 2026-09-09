@@ -200,6 +200,12 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         else {
             return false;
         };
+        if expression.synthetic {
+            // HIR introduces a `!` call for `unless` so the ordinary CFG
+            // branch machinery can consume a boolean condition. Its span is
+            // the predicate's source span, but it is not a source send.
+            return true;
+        }
         let is_safe_navigation_call = matches!(
             &expression.kind,
             hir::ExprKind::Call(call) if call.safe_navigation

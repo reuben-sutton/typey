@@ -98,6 +98,7 @@ impl<'src> Lowerer<'src> {
         let id = ExprId(self.program.expressions.len() as u32);
         self.program.expressions.push(Expr {
             span: self.span(node),
+            synthetic: false,
             kind,
         });
         id
@@ -105,7 +106,11 @@ impl<'src> Lowerer<'src> {
 
     fn push_expr_with_span(&mut self, span: Span, kind: ExprKind) -> ExprId {
         let id = ExprId(self.program.expressions.len() as u32);
-        self.program.expressions.push(Expr { span, kind });
+        self.program.expressions.push(Expr {
+            span,
+            synthetic: true,
+            kind,
+        });
         id
     }
 

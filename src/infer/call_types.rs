@@ -313,8 +313,8 @@ impl<'src> Analyzer<'src> {
             let expected = state
                 .block
                 .as_ref()
-                .and_then(proc_parts)
-                .map(|(parameters, _)| parameters.to_vec());
+                .and_then(optional_proc_type)
+                .and_then(|block| proc_parts(&block).map(|(parameters, _)| parameters.to_vec()));
             let return_type = state.block_return_type.clone().unwrap_or(Type::Any);
             (expected, return_type)
         };
@@ -405,8 +405,9 @@ impl<'src> Analyzer<'src> {
                 values
                     .get(value.0 as usize)
                     .and_then(Option::as_ref)
-                    .and_then(proc_parts)
-                    .map(|(_, result)| Eval::value(result.clone()))
+                    .and_then(optional_proc_type)
+                    .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()))
+                    .map(Eval::value)
             }
         }
     }

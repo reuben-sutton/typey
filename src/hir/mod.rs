@@ -224,6 +224,10 @@ pub enum Read {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Expr {
     pub span: Span,
+    /// Whether the expression was introduced by HIR lowering rather than
+    /// corresponding to a parser node. Synthetic expressions may reuse a
+    /// source span for diagnostics, but must not create an extra source send.
+    pub synthetic: bool,
     pub kind: ExprKind,
 }
 

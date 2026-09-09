@@ -9,8 +9,8 @@
 
 use super::super::hash_shape::HashShape;
 use super::super::{
-    name_matches, proc_parts, Analyzer, CallArguments, Environment, Eval, MethodKey,
-    OwnedCallInput, SourceSite, UntypedOrigin,
+    name_matches, optional_proc_type, proc_parts, Analyzer, CallArguments, Environment, Eval,
+    MethodKey, OwnedCallInput, SourceSite, UntypedOrigin,
 };
 use crate::cfg;
 use crate::types::Type;
@@ -181,8 +181,11 @@ pub(super) fn transfer_receiver_call(
             Some(crate::cfg::BlockOperand::Passed(value)) => values
                 .get(value.0 as usize)
                 .and_then(Option::as_ref)
-                .and_then(super::super::proc_parts)
-                .map(|(_, result)| Eval::value(result.clone())),
+                .and_then(optional_proc_type)
+                .and_then(|block| {
+                    super::super::proc_parts(&block).map(|(_, result)| result.clone())
+                })
+                .map(Eval::value),
             None => None,
         };
         return Ok(ReceiverTransfer {
