@@ -733,12 +733,19 @@ impl<'src> Analyzer<'src> {
                 });
             let class_mixin = matches!(name.as_str(), "include" | "prepend" | "extend")
                 && Self::class_object_instance_types(&dispatch_receiver_type).is_some();
+            let class_attribute_dsl =
+                matches!(
+                    name.as_str(),
+                    "attr_reader" | "attr_writer" | "attr_accessor"
+                ) && Self::class_object_instance_types(&dispatch_receiver_type).is_some();
             let random_formatter_signature = self.random_formatter_signature(
                 receiver_node.as_ref(),
                 &dispatch_receiver_type,
                 &name,
             );
-            let mut result = if class_mixin {
+            let mut result = if name == "singleton_class" {
+                Type::Named("Class".to_owned(), vec![Type::Anything])
+            } else if class_mixin {
                 if name == "include" {
                     self.observe_include_hook_for_base(
                         node,
@@ -754,6 +761,8 @@ impl<'src> Analyzer<'src> {
                         environment,
                     );
                 }
+                Type::Nil
+            } else if class_attribute_dsl {
                 Type::Nil
             } else if yaml_dump {
                 Type::String

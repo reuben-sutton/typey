@@ -973,56 +973,18 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                     name.as_str(),
                     "attr_reader" | "attr_writer" | "attr_accessor"
                 ) {
-                    let owner = self
-                        .singleton_stack
-                        .last()
-                        .cloned()
-                        .or_else(|| self.class_stack.last().cloned());
-                    let singleton = self.singleton_stack.last().is_some();
-                    let signatures = self
-                        .attribute_annotations
-                        .get(&prism::span(&node.as_node()).0);
-                    for attribute in &arguments {
-                        let add_accessor =
-                            |registrar: &mut Self, name: String, kind: AccessorKind| {
-                                let key = MethodKey {
-                                    owner: owner.clone(),
-                                    name,
-                                    singleton,
-                                };
-                                registrar.declarations.accessors.insert(key.clone(), kind);
-                                let state = signatures.map_or_else(
-                                    || MethodState::inferred_accessor(kind),
-                                    |signatures| {
-                                        let signatures = if kind == AccessorKind::Writer {
-                                            signatures
-                                                .iter()
-                                                .map(attribute_writer_signature)
-                                                .collect::<Vec<_>>()
-                                        } else {
-                                            signatures.clone()
-                                        };
-                                        MethodState::explicit_overloads(&signatures)
-                                    },
-                                );
-                                registrar.declarations.methods.entry(key).or_insert(state);
-                            };
-                        match name.as_str() {
-                            "attr_reader" => {
-                                add_accessor(self, attribute.clone(), AccessorKind::Reader)
-                            }
-                            "attr_writer" => {
-                                add_accessor(self, format!("{}=", attribute), AccessorKind::Writer)
-                            }
-                            "attr_accessor" => {
-                                add_accessor(self, attribute.clone(), AccessorKind::Reader);
-                                add_accessor(self, format!("{}=", attribute), AccessorKind::Writer);
-                            }
-                            _ => {}
-                        }
-                    }
+                    self.register_accessor_call(node);
                 }
             }
+        }
+        if self.method_depth == 0
+            && node.receiver().is_some()
+            && matches!(
+                prism::constant_name(node.name()).as_str(),
+                "attr_reader" | "attr_writer" | "attr_accessor"
+            )
+        {
+            self.register_accessor_call(node);
         }
         let dynamic_definition_target = self.dynamic_definition_target(node);
         if let Some(target) = dynamic_definition_target.as_ref() {
@@ -1114,6 +1076,77 @@ impl MethodRegistrar<'_> {
 
     fn current_singleton(&self) -> bool {
         self.singleton_stack.last().is_some()
+    }
+
+    fn accessor_owner<'node>(&self, node: &CallNode<'node>) -> (Option<String>, bool) {
+        let receiver_is_singleton_class = node.receiver().is_some_and(|receiver| {
+            receiver.as_call_node().is_some_and(|call| {
+                call.receiver().is_none() && prism::constant_name(call.name()) == "singleton_class"
+            })
+        });
+        if receiver_is_singleton_class {
+            (self.class_stack.last().cloned(), true)
+        } else {
+            (
+                self.singleton_stack
+                    .last()
+                    .cloned()
+                    .or_else(|| self.class_stack.last().cloned()),
+                self.singleton_stack.last().is_some(),
+            )
+        }
+    }
+
+    fn register_accessor_call<'node>(&mut self, node: &CallNode<'node>) {
+        let Some(nodes) = node.arguments() else {
+            return;
+        };
+        let name = prism::constant_name(node.name());
+        let arguments = nodes
+            .arguments()
+            .into_iter()
+            .map(|argument| self.method_name(&argument))
+            .collect::<Vec<_>>();
+        let (owner, singleton) = self.accessor_owner(node);
+        let signatures = self
+            .attribute_annotations
+            .get(&prism::span(&node.as_node()).0);
+        for attribute in arguments {
+            let add_accessor = |registrar: &mut Self, name: String, kind: AccessorKind| {
+                let key = MethodKey {
+                    owner: owner.clone(),
+                    name,
+                    singleton,
+                };
+                registrar.declarations.accessors.insert(key.clone(), kind);
+                let state = signatures.map_or_else(
+                    || MethodState::inferred_accessor(kind),
+                    |signatures| {
+                        let signatures = if kind == AccessorKind::Writer {
+                            signatures
+                                .iter()
+                                .map(attribute_writer_signature)
+                                .collect::<Vec<_>>()
+                        } else {
+                            signatures.clone()
+                        };
+                        MethodState::explicit_overloads(&signatures)
+                    },
+                );
+                registrar.declarations.methods.entry(key).or_insert(state);
+            };
+            match name.as_str() {
+                "attr_reader" => add_accessor(self, attribute, AccessorKind::Reader),
+                "attr_writer" => {
+                    add_accessor(self, format!("{}=", attribute), AccessorKind::Writer)
+                }
+                "attr_accessor" => {
+                    add_accessor(self, attribute.clone(), AccessorKind::Reader);
+                    add_accessor(self, format!("{}=", attribute), AccessorKind::Writer);
+                }
+                _ => {}
+            }
+        }
     }
 
     fn set_visibility_for_method_names(

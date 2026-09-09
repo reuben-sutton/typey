@@ -229,6 +229,7 @@ impl<'src> Analyzer<'src> {
             }
             "throw" => Type::Never,
             "binding" => Type::named("Binding"),
+            "singleton_class" => Type::Named("Class".to_owned(), vec![Type::Anything]),
             "gem" => Type::named("Gem::Specification"),
             "rand" => Type::Float,
             "sleep" => Type::Integer,
@@ -319,6 +320,7 @@ impl<'src> Analyzer<'src> {
             "require" | "require_relative" | "load" => Some(Type::bool()),
             "to_enum" | "enum_for" => Some(Type::named("Enumerator")),
             "binding" => Some(Type::named("Binding")),
+            "singleton_class" => Some(Type::Named("Class".to_owned(), vec![Type::Anything])),
             "rand" => Some(Type::Float),
             "sleep" | "id" | "object_id" | "hash" => Some(Type::Integer),
             "const_get" => Some(Type::Object),

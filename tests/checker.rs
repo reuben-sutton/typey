@@ -1876,6 +1876,26 @@ fn models_class_attribute_generated_accessors() {
 }
 
 #[test]
+fn models_accessors_declared_on_singleton_class_receivers() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/singleton_class_accessors.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
 fn models_delegate_generated_methods() {
     check_fixture("tests/fixtures/delegate_macro.rb");
 }

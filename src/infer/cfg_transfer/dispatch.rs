@@ -31,6 +31,24 @@ pub(super) fn transfer_receiver_call(
     hash_shape: Option<&HashShape>,
 ) -> Result<ReceiverTransfer, String> {
     let name = input.name.as_str();
+    if name == "singleton_class" {
+        return Ok(ReceiverTransfer {
+            type_: Type::Named("Class".to_owned(), vec![Type::Anything]),
+            block_result: None,
+            untyped_origin: UntypedOrigin::DeclaredSignature,
+            missing_method: false,
+        });
+    }
+    if matches!(name, "attr_reader" | "attr_writer" | "attr_accessor")
+        && Analyzer::class_object_instance_type(receiver).is_some()
+    {
+        return Ok(ReceiverTransfer {
+            type_: Type::Nil,
+            block_result: None,
+            untyped_origin: UntypedOrigin::DeclaredSignature,
+            missing_method: false,
+        });
+    }
     if !matches!(receiver, Type::Union(_)) {
         if let (Type::Named(class_name, _), Some(instances)) =
             (receiver, Analyzer::class_object_instance_types(receiver))
@@ -459,6 +477,37 @@ pub(super) fn transfer_receiver_call(
     let key = analyzer.receiver_method_key(None, receiver, name, environment);
     if let Some(key) = key {
         analyzer.record_method_dependency(&key, environment);
+        let inferred_accessor = analyzer
+            .resolve_method_key(&key)
+            .filter(|resolved| {
+                analyzer
+                    .declarations
+                    .methods
+                    .get(resolved)
+                    .is_some_and(|state| !state.explicit)
+            })
+            .and_then(|resolved| {
+                analyzer
+                    .declarations
+                    .accessors
+                    .get(&resolved)
+                    .copied()
+                    .map(|accessor| (resolved, accessor))
+            });
+        if let Some((accessor_key, accessor)) = inferred_accessor {
+            let type_ = analyzer.eval_accessor_call(
+                &accessor_key,
+                accessor,
+                &arguments.argument_types,
+                environment,
+            );
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result: None,
+                untyped_origin: UntypedOrigin::InferredMethod,
+                missing_method: false,
+            });
+        }
         if let Some(signature) = analyzer
             .observe_call(&key, arguments, input.block.is_some())
             .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))

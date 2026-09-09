@@ -18,6 +18,16 @@ impl<'src> Analyzer<'src> {
         site: &CallSite<'a, 'node>,
         environment: &mut Environment,
     ) -> (Type, UntypedOrigin) {
+        if name == "singleton_class" {
+            // Kernel#singleton_class is declared as T::Class[T.anything].
+            // Keep the class-object shell so subsequent Module/Class calls
+            // remain dispatchable even when the attached singleton class is
+            // not represented nominally.
+            return (
+                Type::Named("Class".to_owned(), vec![Type::Anything]),
+                UntypedOrigin::DeclaredSignature,
+            );
+        }
         if let Type::Union(members) = receiver_type {
             if matches!(name, "call" | "[]")
                 && members.iter().all(|member| {
