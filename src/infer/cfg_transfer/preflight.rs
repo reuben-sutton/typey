@@ -304,6 +304,9 @@ fn expr_transfer_failure(
             }
             Ok(())
         }
+        ExprKind::Splat(value) => {
+            expr_transfer_failure(program, *value, visiting, loop_depth, context)
+        }
         ExprKind::Return(value) => {
             if !context.allow_return {
                 return Err(failure(

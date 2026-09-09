@@ -271,6 +271,9 @@ pub enum ExprKind {
         else_body: Option<ExprId>,
     },
     Case(CaseExpr),
+    /// A splatted case condition. The operand is evaluated as the condition
+    /// value; case matching owns the expansion semantics at its boundary.
+    Splat(ExprId),
     Loop(LoopExpr),
     Begin(BeginExpr),
     Return(Option<ExprId>),

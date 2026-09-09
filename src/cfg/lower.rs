@@ -403,6 +403,18 @@ impl<'program> Builder<'program> {
                 else_body,
             } => self.lower_if(expression, block, condition, then_body, else_body),
             ExprKind::Case(case) => self.lower_case(expression, block, span, case),
+            ExprKind::Splat(value) => {
+                let flow = self.lower_expr(value, block);
+                if !flow.reachable {
+                    self.abrupt(expression, flow.block)
+                } else {
+                    self.normal(
+                        expression,
+                        flow.block,
+                        Some(flow.value.expect("splat operand value")),
+                    )
+                }
+            }
             ExprKind::Loop(loop_expr) => self.lower_loop(expression, block, span, loop_expr),
             ExprKind::Begin(begin) => self.lower_begin(expression, block, span, begin),
             ExprKind::Return(value) => self.lower_return(expression, block, value),

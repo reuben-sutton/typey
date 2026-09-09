@@ -110,6 +110,21 @@ fn lowers_keyword_shorthand_as_an_owned_local_read() {
 }
 
 #[test]
+fn lowers_case_splats_without_a_parser_handoff() {
+    let graph = cfg(
+        "conditions = [\"match\"]\ncase\nwhen *conditions\n  \"matched\"\nelse\n  \"other\"\nend",
+    );
+    assert!(
+        graph.unsupported_spans.is_empty(),
+        "{:#?}",
+        graph.unsupported_spans
+    );
+    assert!(operations(&graph)
+        .iter()
+        .any(|operation| { matches!(operation.kind, OperationKind::PatternTest { .. }) }));
+}
+
+#[test]
 fn lowers_safe_navigation_to_nil_and_call_paths() {
     let graph = cfg("receiver&.call(argument)");
     assert!(operations(&graph).iter().any(|operation| matches!(

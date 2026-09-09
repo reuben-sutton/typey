@@ -294,6 +294,13 @@ impl<'src> Lowerer<'src> {
             let value = implicit.value();
             return self.lower_node(&value);
         }
+        if let Some(splat) = node.as_splat_node() {
+            let value = splat
+                .expression()
+                .map(|value| self.lower_node(&value))
+                .unwrap_or_else(|| self.nil(node));
+            return self.push_expr(node, ExprKind::Splat(value));
+        }
         if let Some(definition) = node.as_def_node() {
             return self.lower_definition(node, &definition);
         }
