@@ -250,6 +250,16 @@ pub(super) fn hir_call_argument_inputs<'node>(
                     result.push(CallArgumentInput::Forwarded { node });
                     hir_index += 1;
                 }
+                Some(CallArgumentInput::Splat {
+                    node,
+                    expression: None,
+                }) => {
+                    // Ruby's `*` forwarding syntax is represented by Prism as
+                    // an empty splat, while HIR intentionally normalizes it
+                    // to the same forwarded-arguments shape as `...`.
+                    result.push(CallArgumentInput::Forwarded { node });
+                    hir_index += 1;
+                }
                 Some(_) | None => panic!("HIR forwarding did not match Prism argument bridge"),
             },
         }

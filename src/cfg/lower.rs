@@ -868,7 +868,12 @@ impl<'program> Builder<'program> {
                 if !flow.reachable {
                     return None;
                 }
-                ArgumentOperand::KeywordSplat(flow.value.expect("keyword splat produces a value"))
+                return Some((
+                    flow.block,
+                    ArgumentOperand::KeywordSplat(
+                        flow.value.expect("keyword splat produces a value"),
+                    ),
+                ));
             }
         };
         Some((block, operand))

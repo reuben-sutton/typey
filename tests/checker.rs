@@ -501,6 +501,48 @@ fn transfers_logical_values_through_owned_cfg() {
 }
 
 #[test]
+fn advances_after_logical_keyword_splat_values_in_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_keyword_splat_logical.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    let value_start = source.find("options || {}").expect("logical keyword value");
+    let value_end = value_start + "options || {}".len();
+    assert!(
+        cfg.types.iter().any(|inferred| {
+            inferred.start == value_start
+                && inferred.end == value_end
+                && inferred.type_ == Type::Hash(Box::new(Type::Symbol), Box::new(Type::Integer))
+        }),
+        "CFG lost the concrete logical keyword value type: {:?}",
+        cfg.types
+    );
+}
+
+#[test]
+fn transfers_star_forwarding_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_star_forwarding.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn refines_double_bang_operands_in_owned_logical_cfg() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_logical_double_bang.rb").expect("fixture");
