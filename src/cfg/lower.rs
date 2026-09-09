@@ -1076,7 +1076,15 @@ impl<'program> Builder<'program> {
                 self.normal(expression, result.0, result.1)
             }
             AssignOperator::And | AssignOperator::Or => {
+                // The getter is an internal part of the logical assignment,
+                // so a trailing assertion belongs to the joined assignment
+                // result, not to the cache-hit branch. Applying it here can
+                // make a nilable getter look truthy and incorrectly prune the
+                // RHS.
+                let previous_defer_inline_assertions = self.defer_inline_assertions;
+                self.defer_inline_assertions = true;
                 let read_flow = self.read_runtime(block, span, runtime.clone());
+                self.defer_inline_assertions = previous_defer_inline_assertions;
                 let Some(old) = read_flow.value else {
                     return self.abrupt(expression, read_flow.block);
                 };

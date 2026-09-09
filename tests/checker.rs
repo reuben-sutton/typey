@@ -1182,6 +1182,35 @@ fn preserves_ivar_or_assignment_narrowing_in_cfg() {
 }
 
 #[test]
+fn keeps_index_logical_assignment_rhs_reachable_through_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_index_logical_assignment_assertion.rb")
+            .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    let call_start = source.find("\"default\".upcase").expect("RHS call");
+    let call_end = call_start + "\"default\".upcase".len();
+    assert!(
+        cfg.types.iter().any(|inferred| {
+            inferred.start == call_start
+                && inferred.end == call_end
+                && inferred.type_ == Type::String
+        }),
+        "CFG did not transfer the logical-assignment RHS call: {:?}",
+        cfg.types
+    );
+}
+
+#[test]
 fn transfers_rescue_handlers_and_unwind_edges_without_changing_results() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_exception_transfer.rb").expect("fixture");
