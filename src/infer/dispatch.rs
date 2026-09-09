@@ -210,6 +210,29 @@ impl<'src> Analyzer<'src> {
         name: &str,
         argument_types: &[Type],
     ) -> Option<Type> {
+        if name == "class" {
+            return Some(match receiver {
+                Type::Any | Type::Anything => Type::Any,
+                Type::Never => Type::Never,
+                Type::True => Self::class_object_type("TrueClass"),
+                Type::False => Self::class_object_type("FalseClass"),
+                Type::Nil => Self::class_object_type("NilClass"),
+                Type::Integer => Self::class_object_type("Integer"),
+                Type::Float => Self::class_object_type("Float"),
+                Type::String => Self::class_object_type("String"),
+                Type::Symbol => Self::class_object_type("Symbol"),
+                Type::Array(_) | Type::Tuple(_) => Self::class_object_type("Array"),
+                Type::Hash(_, _) => Self::class_object_type("Hash"),
+                Type::Proc(_, _) | Type::BoundProc { .. } => Self::class_object_type("Proc"),
+                Type::Object => Self::class_object_type("Object"),
+                Type::Named(class, _) => Self::class_object_type(class),
+                Type::Intersection(_)
+                | Type::Union(_)
+                | Type::TypeVar(_)
+                | Type::AttachedClass
+                | Type::AttachedClassOf(_) => Type::Any,
+            });
+        }
         if *receiver == Type::String && matches!(name, "bytes" | "codepoints") {
             return Some(Type::Array(Box::new(Type::Integer)));
         }
