@@ -125,6 +125,32 @@ pub(super) fn pattern_source(graph: &cfg::Cfg, value: cfg::ValueId) -> Option<Pa
     }
 }
 
+pub(super) fn branch_pattern_source(
+    graph: &cfg::Cfg,
+    condition: cfg::ValueId,
+) -> Option<PatternSource> {
+    let operation = graph.blocks.iter().find_map(|block| {
+        block
+            .operations
+            .iter()
+            .find(|operation| operation.result == Some(condition))
+    })?;
+    matches!(
+        operation.kind,
+        cfg::OperationKind::PatternTest {
+            pattern: cfg::Pattern::Truthy,
+            ..
+        }
+    )
+    .then(|| {
+        operation.expression.map(|expression| PatternSource {
+            expression,
+            truthy: true,
+        })
+    })
+    .flatten()
+}
+
 pub(super) fn case_pattern_is_type_test(
     analyzer: &Analyzer<'_>,
     expression: hir::ExprId,

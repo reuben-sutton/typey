@@ -707,8 +707,9 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 let (source_id, pattern) = pattern.unwrap_or((None, None));
                 let source_place =
                     source_id.and_then(|source_id| pattern_source_place(graph, source_id));
-                let source_predicate =
-                    source_id.and_then(|source_id| pattern_source(graph, source_id));
+                let source_predicate = source_id
+                    .and_then(|source_id| pattern_source(graph, source_id))
+                    .or_else(|| super::patterns::branch_pattern_source(graph, *condition));
                 let source = next
                     .value(source_id.unwrap_or(*condition))
                     .ok_or_else(|| format!("missing branch operand {:?}", condition))?;

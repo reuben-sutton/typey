@@ -477,6 +477,22 @@ fn transfers_dynamic_struct_constant_identity_in_cfg() {
 }
 
 #[test]
+fn keeps_non_nil_refinement_across_and_operands_in_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_and_keeps_nil_refinement.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn narrows_loop_assignment_targets_in_cfg_predicates() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_while_assignment_narrowing.rb")
         .expect("fixture");
