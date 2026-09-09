@@ -1447,6 +1447,18 @@ impl<'src> Lowerer<'src> {
         kind: ClosureKind,
     ) -> ClosureId {
         let closure_id = ClosureId(self.program.closures.len() as u32);
+        let span = self.span(node);
+        // Reserve the id before lowering the body. Nested closures are lowered
+        // while the outer body is being copied; without a reserved slot they
+        // can reuse the outer id and cause callbacks to transfer the wrong
+        // body.
+        self.program.closures.push(Closure {
+            body: BodyId(u32::MAX),
+            parameters: Parameters::default(),
+            span,
+            lexical_scope: ScopeId(0),
+            kind,
+        });
         self.push_scope();
         let parameters = self.lower_parameters_from_node(parameters_node);
         let root = if let Some(body) = body_node {
@@ -1458,17 +1470,17 @@ impl<'src> Lowerer<'src> {
             BodyOwner::Closure(closure_id),
             parameters.clone(),
             root,
-            self.span(node),
+            span,
         );
         let lexical_scope = self.current_scope();
         self.pop_scope();
-        self.program.closures.push(Closure {
+        self.program.closures[closure_id.0 as usize] = Closure {
             body: body_id,
             parameters,
-            span: self.span(node),
+            span,
             lexical_scope,
             kind,
-        });
+        };
         closure_id
     }
 

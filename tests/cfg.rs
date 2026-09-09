@@ -23,6 +23,32 @@ fn operations(graph: &typey::cfg::Cfg) -> Vec<&typey::cfg::Operation> {
 }
 
 #[test]
+fn reserves_distinct_ids_for_nested_inline_closures() {
+    let source = r#"
+def build(values)
+  values.to_h { |value| [value, [value].map { |nested| nested }] }
+end
+"#;
+    let program = lower(FileId(3), source.as_bytes());
+    let mut to_h_closure = None;
+    let mut map_closure = None;
+    for expression in &program.expressions {
+        let ExprKind::Call(call) = &expression.kind else {
+            continue;
+        };
+        let Some(typey::hir::BlockArgument::Inline(closure)) = call.block.as_ref() else {
+            continue;
+        };
+        match call.name.as_str() {
+            "to_h" => to_h_closure = Some(*closure),
+            "map" => map_closure = Some(*closure),
+            _ => {}
+        }
+    }
+    assert_ne!(to_h_closure, map_closure);
+}
+
+#[test]
 fn lowers_calls_left_to_right_without_flattening_argument_shapes() {
     let graph = cfg("receiver.first(1, *values, flag: 2, **options, &block)");
     let call = operations(&graph)

@@ -4308,8 +4308,7 @@ T.reveal_type(Finder.new.find { |value| value.length > 0 })
 
 #[test]
 fn infers_generic_block_returns_through_nilable_block_signatures() {
-    let result = check(
-        r#"
+    let source = r#"
 class Mapper
   sig do
     type_parameters(:U, :V).params(
@@ -4327,9 +4326,8 @@ class Mapper
 end
 
 T.reveal_type(Mapper.new.to_h { |value| [value, value.length] })
-"#,
-        CheckerConfig::default(),
-    );
+"#;
+    let result = check(source, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
         result.diagnostics.iter().any(|diagnostic| diagnostic
@@ -4338,6 +4336,30 @@ T.reveal_type(Mapper.new.to_h { |value| [value, value.length] })
         "{:?}",
         result.diagnostics
     );
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+}
+
+#[test]
+fn transfers_nested_map_inside_generic_to_h_block_through_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_generic_to_h_nested_map.rb").expect("fixture");
+    let baseline = check_fixture("tests/fixtures/cfg_generic_to_h_nested_map.rb");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
 }
 
 #[test]
