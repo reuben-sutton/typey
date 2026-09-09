@@ -357,7 +357,7 @@ pub(super) fn transfer_receiver_call(
     // overload. Prefer the structural contract so an integer index retains
     // its nilable result instead of trusting a generic summary that loses the
     // out-of-bounds path.
-    if name == "[]" && matches!(receiver, Type::Array(_) | Type::Tuple(_)) {
+    if matches!(name, "[]" | "<=>") && matches!(receiver, Type::Array(_) | Type::Tuple(_)) {
         if let Some((type_, block_result)) = super::builtins::transfer_builtin_call(
             analyzer,
             input,

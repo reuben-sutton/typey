@@ -25,6 +25,82 @@ pub(super) struct BodyTransfer<'analyzer, 'src> {
 }
 
 impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
+    fn first_body_expression(&self, expression: hir::ExprId) -> Option<hir::ExprId> {
+        match &self
+            .analyzer
+            .program
+            .hir_program
+            .expression(expression)?
+            .kind
+        {
+            hir::ExprKind::Sequence(expressions) => expressions
+                .first()
+                .and_then(|expression| self.first_body_expression(*expression)),
+            hir::ExprKind::Begin(begin) => {
+                begin.body.and_then(|body| self.first_body_expression(body))
+            }
+            _ => Some(expression),
+        }
+    }
+
+    fn should_report_unreachable_branch(&self, expression: hir::ExprId) -> bool {
+        let Some(start) = self
+            .analyzer
+            .program
+            .hir_program
+            .expression(expression)
+            .map(|expression| expression.span.start as usize)
+        else {
+            return false;
+        };
+        self.analyzer.program.source[..start]
+            .iter()
+            .rev()
+            .find(|byte| !byte.is_ascii_whitespace())
+            .is_none_or(|byte| *byte != b'=')
+    }
+
+    fn report_unreachable_branch(
+        &mut self,
+        graph: &cfg::Cfg,
+        truthy: cfg::BlockId,
+        falsy: cfg::BlockId,
+        truthy_reachable: bool,
+        falsy_reachable: bool,
+    ) {
+        if truthy_reachable && falsy_reachable {
+            return;
+        }
+        let Some(conditional) = graph
+            .conditionals
+            .iter()
+            .find(|conditional| conditional.truthy == truthy && conditional.falsy == falsy)
+        else {
+            return;
+        };
+        if !self.should_report_unreachable_branch(conditional.expression) {
+            return;
+        }
+        let body = if !truthy_reachable {
+            Some(conditional.then_body)
+        } else {
+            conditional.else_body
+        };
+        let Some(body) = body else {
+            return;
+        };
+        let Some(first) = self.first_body_expression(body) else {
+            return;
+        };
+        let Some(expression) = self.analyzer.program.hir_program.expression(first) else {
+            return;
+        };
+        self.analyzer.error_at(
+            SourceSite::from_span(expression.span, Some(first)),
+            "This code is unreachable",
+        );
+    }
+
     fn suppress_internal_assignment_record(&self, operation: &cfg::Operation) -> bool {
         let Some(expression) = operation.expression else {
             return false;
@@ -953,6 +1029,13 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         &next,
                     )
                 };
+                self.report_unreachable_branch(
+                    graph,
+                    *truthy,
+                    *falsy,
+                    truthy_reachable,
+                    falsy_reachable,
+                );
                 let mut edges = Vec::with_capacity(2);
                 if truthy_reachable {
                     let mut state = next.clone();

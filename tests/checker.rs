@@ -2032,6 +2032,16 @@ fn infers_the_static_top_for_bare_class_annotations() {
 #[test]
 fn narrows_nominal_predicates_to_unreachable_when_classes_are_disjoint() {
     let result = check_fixture("tests/fixtures/nominal_predicate_unreachable.rb");
+    let source = std::fs::read_to_string("tests/fixtures/nominal_predicate_unreachable.rb")
+        .expect("fixture");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, result.diagnostics);
     assert!(
         result
             .diagnostics
@@ -2783,7 +2793,18 @@ fn reports_nilable_array_indices_even_when_the_producer_is_untyped_to_sorbet() {
 
 #[test]
 fn checks_array_comparison_return_contracts() {
-    check_fixture("tests/fixtures/array_comparison_contract.rb");
+    let result = check_fixture("tests/fixtures/array_comparison_contract.rb");
+    let source =
+        std::fs::read_to_string("tests/fixtures/array_comparison_contract.rb").expect("fixture");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, result.diagnostics);
+    assert_eq!(cfg.types, result.types);
 }
 
 #[test]

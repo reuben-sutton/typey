@@ -605,7 +605,7 @@ impl<'src> Analyzer<'src> {
         environment.bind(ivar_refinement_key(name), narrowed);
     }
 
-    fn cfg_predicate_argument_type(
+    pub(super) fn cfg_predicate_argument_type(
         &mut self,
         expression: hir::ExprId,
         environment: &Environment,

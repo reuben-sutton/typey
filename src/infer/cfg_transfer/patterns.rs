@@ -231,7 +231,7 @@ pub(super) fn pattern_reachability(
     Some((truthy, falsy, test_type))
 }
 
-fn case_match_reachability(
+pub(super) fn case_match_reachability(
     analyzer: &Analyzer<'_>,
     source: &Type,
     expected: &Type,

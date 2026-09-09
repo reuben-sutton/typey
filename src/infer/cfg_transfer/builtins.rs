@@ -353,6 +353,17 @@ fn transfer_array_builtin(
                 ]))
             }
         }
+        "<=>" => {
+            Some(
+                if arguments.argument_types.first().is_some_and(|other| {
+                    analyzer.definitely_comparable_array_element(element, other)
+                }) {
+                    Type::Integer
+                } else {
+                    Type::union([Type::Nil, Type::Integer])
+                },
+            )
+        }
         "[]=" => Some(
             arguments
                 .argument_types
