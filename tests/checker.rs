@@ -661,6 +661,11 @@ fn transfers_nonlocal_block_returns_and_ensure_outcomes() {
 }
 
 #[test]
+fn keeps_the_normal_call_type_separate_from_nonlocal_block_returns() {
+    check_fixture("tests/fixtures/nonlocal_return_keeps_call_normal_type.rb");
+}
+
+#[test]
 fn transfers_case_patterns_through_the_owned_cfg_graph() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_case_body.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());

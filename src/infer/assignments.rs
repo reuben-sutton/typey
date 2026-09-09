@@ -13,11 +13,15 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
     ) -> Eval {
         let mut result = self.eval_call(node, call, environment);
-        let type_ =
-            self.apply_inline_assertion_in_environment(node, result.type_.clone(), environment);
-        if result.normal_type.is_some() {
-            result.normal_type = Some(type_.clone());
-        }
+        let normal_type = result
+            .normal_type
+            .take()
+            .map(|type_| self.apply_inline_assertion_in_environment(node, type_, environment));
+        let type_ = normal_type
+            .clone()
+            .unwrap_or(Type::Never)
+            .join(&result.abrupt.all());
+        result.normal_type = normal_type;
         result.type_ = self.record(node, type_);
         result
     }
