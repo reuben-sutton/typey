@@ -153,7 +153,7 @@ pub(super) fn transfer_receiver_call(
                     *closure,
                     &[receiver.clone()],
                     None,
-                    Some(receiver),
+                    None,
                     environment,
                 ),
             Some(crate::cfg::BlockOperand::Passed(value)) => values

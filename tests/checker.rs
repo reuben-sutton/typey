@@ -9107,6 +9107,22 @@ fn transfers_defined_operands_through_owned_cfg() {
 }
 
 #[test]
+fn preserves_lexical_self_inside_tap_blocks() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_tap_lexical_self.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn traverses_blocks_on_unknown_super_calls() {
     let source = r#"
 class Parent
