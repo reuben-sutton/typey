@@ -2851,6 +2851,21 @@ fn reports_unreachable_statement_branches() {
 }
 
 #[test]
+fn preserves_unreachable_branch_products_through_cfg_transfer() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/unreachable_control_flow.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+}
+
+#[test]
 fn reports_unreachable_nominal_predicate_next() {
     check_fixture("tests/fixtures/nominal_predicate_next.rb");
 }

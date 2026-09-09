@@ -1521,6 +1521,16 @@ impl<'program> Builder<'program> {
                         body_block,
                         false_target,
                     );
+                    self.cfg.conditionals.push(Conditional {
+                        expression,
+                        condition,
+                        then_body: arm.body,
+                        else_body: None,
+                        truthy: body_block,
+                        falsy: false_target,
+                        join,
+                        loop_condition: false,
+                    });
                     test = false_target;
                 }
             }

@@ -88,6 +88,16 @@ impl Cfg {
             .get(expression.0 as usize)
             .copied()
             .flatten()
+            .or_else(|| {
+                self.blocks
+                    .iter()
+                    .flat_map(|block| block.operations.iter())
+                    .find_map(|operation| {
+                        (operation.expression == Some(expression))
+                            .then_some(operation.result)
+                            .flatten()
+                    })
+            })
     }
 }
 

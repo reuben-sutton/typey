@@ -53,8 +53,36 @@ pub(super) fn conditional_reachability(
         let Some(name) = analyzer.program.hir_program.local_name(*local) else {
             return truthiness_reachability(source);
         };
+        if let Some(truthy) = state.environment.known_truthiness(name.as_str()) {
+            return (truthy, !truthy);
+        }
         if state.environment.is_inferred(name.as_str()) {
             return (true, true);
+        }
+    }
+    if let Some(hir::ExprKind::Call(call)) = condition
+        .and_then(|condition| analyzer.program.hir_program.expression(condition))
+        .map(|expression| &expression.kind)
+    {
+        if call.name.as_str() == "!" {
+            if let hir::Receiver::Explicit(receiver) = call.receiver {
+                let receiver_value = graph.value_for(receiver);
+                if let Some(receiver_value) = receiver_value {
+                    let receiver_type = state.value(receiver_value);
+                    if let Some(receiver_type) = receiver_type {
+                        // Unary negation publishes the ordinary boolean
+                        // result, but its operand can still prove the
+                        // branch's truth value (for example `if
+                        // !nil.blank?`). Keep that proof at the branch
+                        // boundary rather than widening the source call away
+                        // from `T::Boolean`.
+                        return (
+                            !receiver_type.falsy_part().is_never(),
+                            !receiver_type.truthy_part().is_never(),
+                        );
+                    }
+                }
+            }
         }
     }
     truthiness_reachability(source)

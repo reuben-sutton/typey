@@ -502,6 +502,7 @@ impl<'src> Analyzer<'src> {
             return;
         };
         if environment.is_inferred(name) {
+            environment.set_known_truthiness(name.to_owned(), truthy);
             return;
         }
         let current = environment.get(name);
