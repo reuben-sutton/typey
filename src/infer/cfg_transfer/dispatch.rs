@@ -44,6 +44,7 @@ pub(super) fn transfer_receiver_call(
         let mut untyped_origin = UntypedOrigin::Propagated;
         let mut joined_environment: Option<Environment> = None;
         let mut missing_method = false;
+        let mut all_members_missing = true;
         for member in members {
             let mut member_environment = initial_environment.clone();
             let result = transfer_receiver_call(
@@ -67,11 +68,12 @@ pub(super) fn transfer_receiver_call(
             });
             untyped_origin = join_untyped_origin(untyped_origin, result.untyped_origin);
             missing_method |= result.missing_method;
+            all_members_missing &= result.missing_method;
         }
         if let Some(joined_environment) = joined_environment {
             *environment = joined_environment;
         }
-        if missing_method {
+        if missing_method && all_members_missing {
             analyzer.report_missing_method_if_needed_at(input.site, receiver, name, false);
         }
         return Ok(ReceiverTransfer {
