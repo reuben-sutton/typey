@@ -1,5 +1,5 @@
 use typey::cfg::{build, ArgumentOperand, CfgIndex, OperationKind, Pattern, Terminator};
-use typey::hir::{lower, ExprKind, FileId};
+use typey::hir::{lower, BodyOwner, ExprKind, FileId};
 
 fn cfg(source: &str) -> typey::cfg::Cfg {
     let program = lower(FileId(3), source.as_bytes());
@@ -122,6 +122,33 @@ fn lowers_case_splats_without_a_parser_handoff() {
     assert!(operations(&graph)
         .iter()
         .any(|operation| { matches!(operation.kind, OperationKind::PatternTest { .. }) }));
+}
+
+#[test]
+fn lowers_nested_method_definitions_as_owned_declaration_operations() {
+    let source = "def outer\n  def nested\n    1\n  end\n  nil\nend\n";
+    let program = lower(FileId(3), source.as_bytes());
+    let body = program
+        .bodies
+        .iter()
+        .enumerate()
+        .find_map(|(index, body)| {
+            matches!(
+                &body.owner,
+                BodyOwner::Method { name, singleton: false } if name.as_str() == "outer"
+            )
+            .then_some(typey::hir::BodyId(index as u32))
+        })
+        .expect("outer method body");
+    let graph = build(&program, body);
+    assert!(
+        graph.unsupported_spans.is_empty(),
+        "{:#?}",
+        graph.unsupported_spans
+    );
+    assert!(operations(&graph)
+        .iter()
+        .any(|operation| { matches!(operation.kind, OperationKind::Definition { .. }) }));
 }
 
 #[test]

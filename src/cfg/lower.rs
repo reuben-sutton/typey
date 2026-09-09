@@ -421,16 +421,8 @@ impl<'program> Builder<'program> {
             ExprKind::Break(value) => self.lower_break(expression, block, value),
             ExprKind::Next(value) => self.lower_next(expression, block, value),
             ExprKind::Retry => self.lower_retry(expression, block, span),
-            ExprKind::Definition(_) => {
-                self.cfg.unsupported_spans.push(span);
-                let value = self.emit(
-                    block,
-                    span,
-                    OperationKind::Unsupported {
-                        kind: hir::Name::new("definition"),
-                    },
-                    true,
-                );
+            ExprKind::Definition(declaration) => {
+                let value = self.emit(block, span, OperationKind::Definition { declaration }, true);
                 self.normal(expression, block, value)
             }
             ExprKind::Unsupported(unsupported) => {

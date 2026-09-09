@@ -159,6 +159,13 @@ pub enum OperationKind {
         right: Option<ValueId>,
         exclude_end: bool,
     },
+    /// A method declaration evaluates to `nil`. The declaration itself is
+    /// already registered in the workspace; class/module declaration bodies
+    /// remain outside this transitional operation until their runtime owner
+    /// effects have an owned transfer contract.
+    Definition {
+        declaration: hir::DeclId,
+    },
     /// Record a joined expression value without introducing another runtime
     /// operation. This is used for begin/conditional join expressions whose
     /// value is carried by a block parameter.

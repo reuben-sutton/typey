@@ -11,6 +11,7 @@ use std::collections::HashSet;
 struct ControlContext {
     allow_return: bool,
     allow_block_outcomes: bool,
+    allow_method_definitions: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,7 +48,11 @@ pub(super) fn body_transfer_failure(
             hir::BodyOwner::Closure(closure_id)
                 if program
                     .closure(*closure_id)
-                    .is_some_and(|closure| closure.kind == hir::ClosureKind::Block)
+                .is_some_and(|closure| closure.kind == hir::ClosureKind::Block)
+        ),
+        allow_method_definitions: matches!(
+            &body.owner,
+            hir::BodyOwner::Method { .. } | hir::BodyOwner::Closure(_)
         ),
     };
     expr_transfer_failure(program, body.root, &mut visiting, 0, context).err()
@@ -345,11 +350,26 @@ fn expr_transfer_failure(
             }
             Ok(())
         }
-        ExprKind::Definition(_) => Err(failure(
-            program,
-            expression,
-            "declaration expression is handled outside owned body transfer",
-        )),
+        ExprKind::Definition(declaration) => {
+            let Some(declaration) = program.declaration(*declaration) else {
+                return Err(failure(program, expression, "missing HIR declaration"));
+            };
+            match declaration.kind {
+                hir::DeclarationKind::Method { .. } if context.allow_method_definitions => Ok(()),
+                hir::DeclarationKind::Method { .. } => Err(failure(
+                    program,
+                    expression,
+                    "method declaration is outside this owned body transfer",
+                )),
+                hir::DeclarationKind::Class { .. }
+                | hir::DeclarationKind::Module { .. }
+                | hir::DeclarationKind::SingletonClass { .. } => Err(failure(
+                    program,
+                    expression,
+                    "class/module declaration effects are not represented by owned CFG transfer",
+                )),
+            }
+        }
         ExprKind::Unsupported(unsupported) => {
             let span = expr.span;
             Err(PreflightFailure {

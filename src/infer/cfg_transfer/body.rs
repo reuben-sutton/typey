@@ -193,6 +193,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::BuildHash { .. }
                         | cfg::OperationKind::BuildInterpolated { .. }
                         | cfg::OperationKind::BuildRange { .. }
+                        | cfg::OperationKind::Definition { .. }
                         | cfg::OperationKind::Record { .. }
                         | cfg::OperationKind::ApplyAssertion { .. }
                         | cfg::OperationKind::SetOutcome { .. }
@@ -540,6 +541,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         )
                         .ok_or_else(|| format!("hash transfer failed at {:?}", operation.span))?
                     }
+                    cfg::OperationKind::Definition { .. } => Type::Nil,
                     cfg::OperationKind::BuildInterpolated { kind } => match kind {
                         crate::hir::InterpolatedKind::String
                         | crate::hir::InterpolatedKind::XString => Type::String,
