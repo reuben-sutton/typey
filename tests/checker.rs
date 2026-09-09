@@ -775,6 +775,22 @@ fn transfers_constant_class_predicates_through_owned_cfg() {
 }
 
 #[test]
+fn refines_inferred_parameters_inside_class_predicates() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_inferred_parameter_predicate.rb")
+        .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn narrows_case_assignment_scrutinees_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_case_assignment_narrowing.rb")
         .expect("fixture");

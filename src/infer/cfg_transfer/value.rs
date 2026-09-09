@@ -439,12 +439,17 @@ impl<'src> Analyzer<'src> {
                                         else {
                                             return;
                                         };
-                                        if environment.is_inferred(&name) {
-                                            return;
-                                        }
                                         let current = environment.get(&name);
                                         let narrowed = if truthy {
-                                            self.meet_predicate_type(&current, &expected)
+                                            if environment.is_inferred(&name) {
+                                                // An inferred parameter type is a sample from
+                                                // observed calls, not an exhaustive contract. A
+                                                // successful class predicate still proves the
+                                                // predicate's operand type on this path.
+                                                expected.clone()
+                                            } else {
+                                                self.meet_predicate_type(&current, &expected)
+                                            }
                                         } else {
                                             current.without(&expected)
                                         };
