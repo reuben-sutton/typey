@@ -481,7 +481,12 @@ impl<'src> Analyzer<'src> {
             let Some(exception_parameter) = entry_block.parameters.first() else {
                 continue;
             };
-            let mut probe_environment = fallback_environment.clone();
+            let mut probe_environment = worklist
+                .states
+                .get(region.protected_entry.0 as usize)
+                .and_then(Option::as_ref)
+                .map(|state| state.environment.clone())
+                .unwrap_or_else(|| fallback_environment.clone());
             seed_cfg_global_state(transfer.analyzer, &graph, &mut probe_environment);
             let mut probe = BlockState::with_values(
                 probe_environment,
