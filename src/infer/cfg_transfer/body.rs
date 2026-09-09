@@ -370,7 +370,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         &self.fixed_array_elements,
                         &mut next.environment,
                     )
-                    .ok_or_else(|| format!("call transfer failed at {:?}", operation.span))?;
+                    .map_err(|reason| format!("call transfer failed: {reason}"))?;
                     if result.flow.contains(FlowKind::Raise) {
                         let exception = result.abrupt.raise_type.clone();
                         if let Some(edge) = super::exceptions::exception_edge(

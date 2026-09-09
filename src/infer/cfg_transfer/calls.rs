@@ -44,7 +44,7 @@ pub(super) fn transfer_call(
     values: &[Option<Type>],
     fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
     environment: &mut Environment,
-) -> Option<Eval> {
+) -> Result<Eval, &'static str> {
     analyzer.cfg_transfer_calls = analyzer.cfg_transfer_calls.saturating_add(1);
     let call = input
         .expression
@@ -54,20 +54,22 @@ pub(super) fn transfer_call(
             _ => None,
         });
     let call_arguments = if let Some(call) = call {
-        let arguments = analyzer.cfg_owned_hir_call_arguments(
-            &input,
-            &call,
-            values,
-            fixed_array_elements,
-            environment,
-        )?;
+        let arguments = analyzer
+            .cfg_owned_hir_call_arguments(&input, &call, values, fixed_array_elements, environment)
+            .ok_or("owned HIR call-argument shape is unavailable")?;
         arguments.into_call_arguments()
     } else {
-        analyzer.cfg_owned_call_arguments(&input, values, fixed_array_elements)?
+        analyzer
+            .cfg_owned_call_arguments(&input, values, fixed_array_elements)
+            .ok_or("owned CFG call-argument shape is unavailable")?
     };
     let receiver_type = match &input.receiver {
         cfg::ReceiverOperand::Implicit => environment.self_type.clone(),
-        cfg::ReceiverOperand::Value(value) => values.get(value.0 as usize).cloned().flatten()?,
+        cfg::ReceiverOperand::Value(value) => values
+            .get(value.0 as usize)
+            .cloned()
+            .flatten()
+            .ok_or("owned receiver value is unavailable")?,
         cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => environment.self_type.clone(),
     };
     let receiver_type = compound_assignment_receiver(analyzer, &input, receiver_type);
@@ -100,10 +102,18 @@ pub(super) fn transfer_call(
         // before flow narrowing has selected their non-nil branch.
         (Type::bool(), UntypedOrigin::Propagated)
     } else if matches!(input.receiver, cfg::ReceiverOperand::Yield) {
-        let type_ = analyzer.cfg_yield_result(input.site, &call_arguments, environment)?;
+        let type_ = analyzer
+            .cfg_yield_result(input.site, &call_arguments, environment)
+            .ok_or("yield has no owned block contract")?;
         (type_, UntypedOrigin::Propagated)
     } else if matches!(input.receiver, cfg::ReceiverOperand::Super) {
-        let key = analyzer.super_method_key(environment.method_key.as_ref()?)?;
+        let current_method = environment
+            .method_key
+            .as_ref()
+            .ok_or("super call has no enclosing method")?;
+        let key = analyzer
+            .super_method_key(current_method)
+            .ok_or("super call has no resolvable parent method")?;
         analyzer.record_method_dependency(&key, environment);
         if let Some(signature) = analyzer
             .observe_call(&key, &call_arguments, has_block)
@@ -181,7 +191,7 @@ pub(super) fn transfer_call(
             {
                 (type_, UntypedOrigin::Propagated)
             } else {
-                return None;
+                return Err("implicit call has no method or owned dynamic-method contract");
             }
         }
     } else {
@@ -283,7 +293,7 @@ pub(super) fn transfer_call(
                     block_result = callback;
                     (type_, UntypedOrigin::FallbackCall)
                 } else {
-                    return None;
+                    return Err("receiver call has no method, collection, or builtin contract");
                 }
             } else if let Some((type_, callback)) = super::collections::transfer_collection_call(
                 analyzer,
@@ -305,7 +315,7 @@ pub(super) fn transfer_call(
                 block_result = callback;
                 (type_, UntypedOrigin::FallbackCall)
             } else {
-                return None;
+                return Err("receiver call has no method, collection, or builtin contract");
             }
         }
     };
@@ -349,7 +359,7 @@ pub(super) fn transfer_call(
         result = Eval::from_parts(Some(normal_type), result.abrupt, result.flow);
     }
     analyzer.remember_untyped_origin_at(input.site, &result.type_, untyped_origin);
-    Some(result)
+    Ok(result)
 }
 
 pub(super) fn transfer_callable_call(
