@@ -117,6 +117,24 @@ pub(super) fn transfer_implicit_call(
         });
     }
 
+    if let Some(signature) =
+        analyzer.random_formatter_signature(None, receiver, input.name.as_str())
+    {
+        let type_ = analyzer.invoke_signature_at(
+            input.site,
+            input.name.as_str(),
+            &signature,
+            arguments,
+            Some(receiver),
+            None,
+        );
+        return Ok(ContextTransfer {
+            type_,
+            block_result: None,
+            untyped_origin: UntypedOrigin::InferredMethod,
+        });
+    }
+
     let key = analyzer.implicit_method_key(input.name.as_str(), environment);
     if matches!(
         &environment.self_type,

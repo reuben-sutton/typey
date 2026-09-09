@@ -2697,6 +2697,21 @@ fn models_random_formatter_keywords() {
 }
 
 #[test]
+fn transfers_random_formatter_keywords_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/random_formatter.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn models_array_inspection_as_string() {
     let result = check(
         r#"

@@ -344,6 +344,28 @@ pub(super) fn transfer_receiver_call(
         }
     }
 
+    // `Random.alphanumeric` and `SecureRandom.alphanumeric` are documented
+    // by the core RBI with an incomplete implementation shape. The recursive
+    // dispatcher supplies the optional length/keyword contract explicitly;
+    // keep owned CFG calls on that same contract instead of reporting the
+    // Ruby implementation's internal forwarding call as an arity error.
+    if let Some(signature) = analyzer.random_formatter_signature(None, receiver, name) {
+        let type_ = analyzer.invoke_signature_at(
+            input.site,
+            name,
+            &signature,
+            arguments,
+            Some(receiver),
+            None,
+        );
+        return Ok(ReceiverTransfer {
+            type_,
+            block_result: None,
+            untyped_origin: UntypedOrigin::InferredMethod,
+            missing_method: false,
+        });
+    }
+
     // Struct accessors are generated from the fields observed at construction
     // time. Resolve them before the ordinary method table: a broad RBI method
     // entry must not erase the concrete field contract.
