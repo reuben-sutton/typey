@@ -154,7 +154,7 @@ pub(super) fn transfer_receiver_call(
                 singleton: false,
             };
             let old_key = MethodKey {
-                owner: Some(owner),
+                owner: Some(owner.clone()),
                 name: old_name,
                 singleton: false,
             };
@@ -162,10 +162,7 @@ pub(super) fn transfer_receiver_call(
             analyzer.declarations.aliases.insert(new_key, old_key);
             if changed {
                 analyzer.method_resolution_cache.borrow_mut().clear();
-                analyzer
-                    .fixpoint
-                    .changed_methods
-                    .extend(analyzer.declarations.methods.keys().cloned());
+                analyzer.schedule_method_resolution_dependents(&owner);
             }
             return Ok(ReceiverTransfer {
                 type_: Type::Nil,

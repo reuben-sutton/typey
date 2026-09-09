@@ -6,19 +6,50 @@ use std::collections::BTreeSet;
 
 impl<'src> Analyzer<'src> {
     pub(super) fn record_method_dependency(&mut self, key: &MethodKey, environment: &Environment) {
-        let Some(callee) = self.resolve_method_key(key) else {
-            return;
-        };
         let Some(caller) = environment.method_key.as_ref() else {
             return;
         };
-        if self.declarations.methods.contains_key(caller) {
+        if !self.declarations.methods.contains_key(caller) {
+            return;
+        }
+
+        // Keep the requested lookup key as a dependency even when it is
+        // currently unresolved. A later include/extend/alias can make that
+        // lookup resolve; dropping the edge would force the worklist to
+        // conservatively reevaluate every method after a method-table change.
+        let resolved = self.resolve_method_key(key);
+        self.fixpoint
+            .method_callers
+            .entry(key.clone())
+            .or_default()
+            .insert(caller.clone());
+        if let Some(resolved) = resolved.filter(|resolved| resolved != key) {
             self.fixpoint
                 .method_callers
-                .entry(callee)
+                .entry(resolved)
                 .or_default()
                 .insert(caller.clone());
         }
+    }
+
+    /// Schedule only call sites whose receiver owner can be affected by a
+    /// method-table change on `owner`. The old implementation invalidated all
+    /// methods whenever a mixin or alias changed method resolution. That was
+    /// safe but made large Rails workspaces repeatedly reevaluate every
+    /// method, including unrelated RBI bodies.
+    pub(super) fn schedule_method_resolution_dependents(&mut self, owner: &str) {
+        let callers = self
+            .fixpoint
+            .method_callers
+            .iter()
+            .filter(|(key, _)| {
+                key.owner
+                    .as_deref()
+                    .is_some_and(|candidate| self.nominal_subtype_names(candidate, owner))
+            })
+            .flat_map(|(_, callers)| callers.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        self.fixpoint.changed_methods.extend(callers);
     }
 
     /// Recursive inferred methods need a finite widening point. A direct

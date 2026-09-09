@@ -1493,6 +1493,23 @@ fn tracks_constant_mixins_and_binds_dsl_blocks_to_instances() {
 }
 
 #[test]
+fn reschedules_only_dependents_when_a_late_include_resolves_a_call() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_late_include_dependency.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+}
+
+#[test]
 fn infers_instance_binding_through_define_method() {
     check_fixture("tests/fixtures/dynamic_define_method_bound_block.rb");
 }

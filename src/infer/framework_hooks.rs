@@ -43,9 +43,7 @@ impl<'src> Analyzer<'src> {
             if changed {
                 self.method_resolution_cache.borrow_mut().clear();
                 self.instance_self_type_cache.borrow_mut().clear();
-                self.fixpoint
-                    .changed_methods
-                    .extend(self.declarations.methods.keys().cloned());
+                self.schedule_method_resolution_dependents(&base_type);
             }
             let hook = MethodKey {
                 owner: Some(module_name.clone()),
@@ -250,9 +248,7 @@ impl<'src> Analyzer<'src> {
                 info.extends.push(module_name.clone());
                 self.method_resolution_cache.borrow_mut().clear();
                 self.instance_self_type_cache.borrow_mut().clear();
-                self.fixpoint
-                    .changed_methods
-                    .extend(self.declarations.methods.keys().cloned());
+                self.schedule_method_resolution_dependents(&base_type);
             }
             let hook = MethodKey {
                 owner: Some(module_name.clone()),
@@ -327,9 +323,7 @@ impl<'src> Analyzer<'src> {
                 info.includes.push(module_name.clone());
                 self.method_resolution_cache.borrow_mut().clear();
                 self.instance_self_type_cache.borrow_mut().clear();
-                self.fixpoint
-                    .changed_methods
-                    .extend(self.declarations.methods.keys().cloned());
+                self.schedule_method_resolution_dependents(&base_type);
             }
             let hook = MethodKey {
                 owner: Some(module_name.clone()),
