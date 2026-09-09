@@ -1109,6 +1109,22 @@ fn reports_missing_methods_in_typed_true_files() {
 }
 
 #[test]
+fn preserves_missing_method_diagnostics_through_owned_cfg() {
+    let path = "tests/fixtures/typed_true_missing_api.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn reports_missing_constants_in_typed_true_files() {
     check_fixture("tests/fixtures/missing_constants.rb");
 }

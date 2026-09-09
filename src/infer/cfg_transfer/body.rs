@@ -51,6 +51,21 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         let cfg::OperationKind::Call { name, .. } = &operation.kind else {
             return false;
         };
+        if operation.defer_inline_assertion
+            && self
+                .analyzer
+                .inline_assertion_for_site(crate::infer::SourceSite::from_span(
+                    operation.span,
+                    operation.expression,
+                ))
+                .is_some()
+        {
+            // Safe navigation lowers its real call on one branch and applies
+            // the trailing assertion at the synthetic join. The branch call
+            // must not publish a competing pre-assertion type for the same
+            // source span.
+            return true;
+        }
         if name.as_str() == "!" {
             return true;
         }
@@ -569,7 +584,16 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             type_,
                             &next.environment,
                         );
-                        self.analyzer.record_at(site, type_.clone(), false, None);
+                        let is_send = site.expression.is_some_and(|expression| {
+                            self.analyzer
+                                .program
+                                .hir_program
+                                .expression(expression)
+                                .is_some_and(|expression| {
+                                    matches!(expression.kind, hir::ExprKind::Call(_))
+                                })
+                        });
+                        self.analyzer.record_at(site, type_.clone(), is_send, None);
                         type_
                     }
                     cfg::OperationKind::SetOutcome { kind, value } => {
@@ -617,8 +641,24 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     }
                     _ => return Err(format!("unsupported CFG operation at {:?}", operation.span)),
                 };
+                let synthetic_safe_navigation_nil =
+                    matches!(
+                        operation.kind,
+                        cfg::OperationKind::Const {
+                            value: hir::Literal::Nil
+                        }
+                    ) && operation.expression.is_some_and(|expression| {
+                        self.analyzer
+                            .program
+                            .hir_program
+                            .expression(expression)
+                            .is_some_and(|expression| {
+                                matches!(expression.kind, hir::ExprKind::Call(_))
+                            })
+                    });
                 if !self.suppress_internal_assignment_record(operation)
                     && !self.suppress_internal_call_record(operation)
+                    && !synthetic_safe_navigation_nil
                     && !matches!(
                         operation.kind,
                         cfg::OperationKind::PatternTest { .. }

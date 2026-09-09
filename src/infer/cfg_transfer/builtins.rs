@@ -118,7 +118,9 @@ pub(super) fn transfer_builtin_call(
             | "delete_suffix" => Some(Type::String),
             "length" | "size" | "bytesize" | "count" | "ord" => Some(Type::Integer),
             "hash" => Some(Type::Integer),
-            "empty?" | "start_with?" | "end_with?" | "include?" | "match?" => Some(Type::bool()),
+            "empty?" | "start_with?" | "end_with?" | "include?" | "match?" | "nil?" => {
+                Some(Type::bool())
+            }
             "to_i" | "to_int" => Some(Type::Integer),
             "to_f" => Some(Type::Float),
             "to_sym" | "intern" => Some(Type::Symbol),

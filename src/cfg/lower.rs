@@ -785,13 +785,17 @@ impl<'program> Builder<'program> {
             join,
             vec![call_value.expect("call produces a value")],
         );
-        self.emit(
+        let asserted = self.emit(
             join,
             call.span,
             OperationKind::ApplyAssertion { value: joined },
-            false,
+            true,
         );
-        self.normal(expression, join, Some(joined))
+        self.normal(
+            expression,
+            join,
+            Some(asserted.expect("inline assertion produces a value")),
+        )
     }
 
     fn lower_argument(

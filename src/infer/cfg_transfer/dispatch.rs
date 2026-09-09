@@ -18,6 +18,7 @@ pub(super) struct ReceiverTransfer {
     pub(super) type_: Type,
     pub(super) block_result: Option<Eval>,
     pub(super) untyped_origin: UntypedOrigin,
+    pub(super) missing_method: bool,
 }
 
 pub(super) fn transfer_receiver_call(
@@ -29,6 +30,7 @@ pub(super) fn transfer_receiver_call(
     environment: &mut Environment,
     hash_shape: Option<&HashShape>,
 ) -> Result<ReceiverTransfer, String> {
+    let name = input.name.as_str();
     if let Type::Union(members) = receiver {
         // A union receiver has no single method key. Dispatch each concrete
         // member through the same contract order instead of collapsing the
@@ -41,6 +43,7 @@ pub(super) fn transfer_receiver_call(
         let mut block_result = None;
         let mut untyped_origin = UntypedOrigin::Propagated;
         let mut joined_environment: Option<Environment> = None;
+        let mut missing_method = false;
         for member in members {
             let mut member_environment = initial_environment.clone();
             let result = transfer_receiver_call(
@@ -63,17 +66,21 @@ pub(super) fn transfer_receiver_call(
                 None => member_environment,
             });
             untyped_origin = join_untyped_origin(untyped_origin, result.untyped_origin);
+            missing_method |= result.missing_method;
         }
         if let Some(joined_environment) = joined_environment {
             *environment = joined_environment;
+        }
+        if missing_method {
+            analyzer.report_missing_method_if_needed_at(input.site, receiver, name, false);
         }
         return Ok(ReceiverTransfer {
             type_: result_type,
             block_result,
             untyped_origin,
+            missing_method: false,
         });
     }
-    let name = input.name.as_str();
     let callable_type = if matches!(name, "call" | "[]") {
         transfer_callable_call(analyzer, input.site, receiver, arguments)
     } else {
@@ -84,6 +91,7 @@ pub(super) fn transfer_receiver_call(
             type_,
             block_result: None,
             untyped_origin: UntypedOrigin::Propagated,
+            missing_method: false,
         });
     }
     if input.safe_navigation && receiver.is_never() {
@@ -91,6 +99,7 @@ pub(super) fn transfer_receiver_call(
             type_: Type::Nil,
             block_result: None,
             untyped_origin: UntypedOrigin::FallbackCall,
+            missing_method: false,
         });
     }
 
@@ -101,6 +110,7 @@ pub(super) fn transfer_receiver_call(
             type_,
             block_result: None,
             untyped_origin: UntypedOrigin::InferredMethod,
+            missing_method: false,
         });
     }
 
@@ -127,6 +137,7 @@ pub(super) fn transfer_receiver_call(
                         type_: analyzer.instantiate_generic_class(instance),
                         block_result: None,
                         untyped_origin: UntypedOrigin::InferredMethod,
+                        missing_method: false,
                     });
                 }
             }
@@ -146,6 +157,7 @@ pub(super) fn transfer_receiver_call(
                 type_: Type::named(owner),
                 block_result: None,
                 untyped_origin: UntypedOrigin::InferredMethod,
+                missing_method: false,
             });
         }
     }
@@ -160,6 +172,7 @@ pub(super) fn transfer_receiver_call(
                     type_: hash_shape.value_for(&key),
                     block_result: None,
                     untyped_origin: UntypedOrigin::Propagated,
+                    missing_method: false,
                 });
             }
         }
@@ -168,6 +181,46 @@ pub(super) fn transfer_receiver_call(
     // `[]` is also ordinary Ruby method dispatch. Only proc-like receivers
     // use the callable shorthand; a nominal receiver must still resolve its
     // declared `[]` method here.
+    if name == "[]" {
+        if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
+            if let Some(type_arguments) = arguments
+                .argument_types
+                .iter()
+                .map(Analyzer::class_object_value_type)
+                .collect::<Option<Vec<_>>>()
+            {
+                let type_ = match &instance {
+                    Type::Named(owner, _)
+                        if matches!(owner.as_str(), "Array" | "T::Array")
+                            && type_arguments.len() == 1 =>
+                    {
+                        Type::Array(Box::new(type_arguments[0].clone()))
+                    }
+                    Type::Named(owner, _)
+                        if matches!(owner.as_str(), "Hash" | "T::Hash")
+                            && type_arguments.len() == 2 =>
+                    {
+                        Type::Hash(
+                            Box::new(type_arguments[0].clone()),
+                            Box::new(type_arguments[1].clone()),
+                        )
+                    }
+                    Type::Named(owner, _) => Type::Named(owner.clone(), type_arguments),
+                    _ => {
+                        return Err(format!(
+                            "receiver call `{name}` on `{receiver}` has no generic type contract"
+                        ))
+                    }
+                };
+                return Ok(ReceiverTransfer {
+                    type_,
+                    block_result: None,
+                    untyped_origin: UntypedOrigin::Propagated,
+                    missing_method: false,
+                });
+            }
+        }
+    }
     let key = analyzer.receiver_method_key(None, receiver, name, environment);
     if let Some(key) = key {
         analyzer.record_method_dependency(&key, environment);
@@ -209,6 +262,27 @@ pub(super) fn transfer_receiver_call(
                 type_,
                 block_result,
                 untyped_origin,
+                missing_method: false,
+            });
+        }
+    }
+
+    if let Some(owner) = Analyzer::named_type_name(receiver) {
+        if let Some(type_) = analyzer.struct_field_type(&owner, name, environment) {
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result: None,
+                untyped_origin: UntypedOrigin::InferredMethod,
+                missing_method: false,
+            });
+        }
+        if let Some(type_) = analyzer.inferred_accessor_ivar_type(&owner, name, false, environment)
+        {
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result: None,
+                untyped_origin: UntypedOrigin::InferredMethod,
+                missing_method: false,
             });
         }
     }
@@ -220,6 +294,7 @@ pub(super) fn transfer_receiver_call(
             type_,
             block_result,
             untyped_origin: UntypedOrigin::FallbackCall,
+            missing_method: false,
         });
     }
     if let Some((type_, block_result)) = super::builtins::transfer_builtin_call(
@@ -234,13 +309,33 @@ pub(super) fn transfer_receiver_call(
         return Ok(ReceiverTransfer {
             type_,
             block_result,
-            untyped_origin: UntypedOrigin::FallbackCall,
+            untyped_origin: if receiver.is_any() {
+                UntypedOrigin::Propagated
+            } else {
+                UntypedOrigin::FallbackCall
+            },
+            missing_method: false,
         });
     }
 
-    Err(format!(
-        "receiver call `{name}` on `{receiver}` has no method, collection, or builtin contract"
-    ))
+    // The remaining T.* contracts still have parser-backed metatype and
+    // annotation semantics. Keep those calls on the transactional migration
+    // boundary until their owned representation is complete; treating an
+    // unsupported intrinsic as an ordinary missing application method would
+    // lose reveal/type-expression diagnostics.
+    if matches!(receiver, Type::Named(name, _) if name == "T" || name.starts_with("T::Types::"))
+        || Analyzer::class_object_instance_type(receiver)
+            .is_some_and(|instance| matches!(instance, Type::Named(name, _) if name == "T"))
+    {
+        return Err(format!("intrinsic `{name}` has no owned contract"));
+    }
+
+    Ok(ReceiverTransfer {
+        type_: Type::Any,
+        block_result: None,
+        untyped_origin: UntypedOrigin::FallbackCall,
+        missing_method: true,
+    })
 }
 
 fn join_untyped_origin(left: UntypedOrigin, right: UntypedOrigin) -> UntypedOrigin {

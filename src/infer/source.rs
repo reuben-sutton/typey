@@ -91,8 +91,24 @@ impl<'src> Analyzer<'src> {
         name: &str,
         resolved: bool,
     ) {
+        let (start, end) = prism::span(node);
+        self.report_missing_method_if_needed_at(
+            SourceSite::new(start, end),
+            receiver,
+            name,
+            resolved,
+        );
+    }
+
+    pub(super) fn report_missing_method_if_needed_at(
+        &mut self,
+        site: SourceSite,
+        receiver: &Type,
+        name: &str,
+        resolved: bool,
+    ) {
         if resolved
-            || !self.reports_missing_api(node)
+            || !self.reports_missing_api_at(site)
             || receiver.is_any()
             || receiver.contains_any()
             || receiver.is_never()
@@ -100,8 +116,8 @@ impl<'src> Analyzer<'src> {
         {
             return;
         }
-        self.error(
-            node,
+        self.error_at(
+            site,
             format!("Method `{name}` does not exist on `{receiver}`"),
         );
     }
