@@ -19,8 +19,8 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates are 18 CFG tests, 10 HIR tests, 346 checker tests, and
-173 conformance tests passing. The
+The current local gates are 18 CFG tests, 12 HIR tests, 374 checker tests, and
+194 conformance tests passing. The
 implementation note records parity with the existing Spoom baseline. The CFG
 path is still opt-in because the transfer host has semantic bridges in the
 legacy recursive path: the recursive evaluator still uses Prism children for
@@ -269,6 +269,21 @@ The first modularization steps are now in place:
   transfer publish identical source types. Unary negation keeps its boolean
   result for flow narrowing without recording an extra internal call type at
   the operand span.
+* interpolated strings, regular expressions, symbols, xstrings, and
+  match-last-line expressions now lower to owned HIR/CFG construction
+  operations with no child Prism evaluation; their conformance expectations
+  are checked against the same source spans.
+* `&&` and `||` now lower to owned short-circuit CFG branches and a value join.
+  The transfer layer carries truthiness through nested unary negation and
+  carries facts from a composite predicate into the normal path after an
+  `unless`/`if`, preserving concrete receiver types without a parser fallback.
+
+The latest release Spoom CFG run is a useful architectural checkpoint: 4,753
+bodies, 25,524 calls, 17,204 assignments, and 78,758 values transferred; 465
+explicitly classified unsupported-operation fallbacks, zero unsupported edges,
+zero legacy bridges, and zero diagnostics. The run completed in 3.14 seconds
+including repository checking (2.16 seconds in the checker after the final
+pass).
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
