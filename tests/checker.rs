@@ -1211,6 +1211,22 @@ fn keeps_index_logical_assignment_rhs_reachable_through_owned_cfg() {
 }
 
 #[test]
+fn preserves_tuple_component_types_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_tuple_first.rb").expect("fixture");
+    let baseline = check_fixture("tests/fixtures/cfg_tuple_first.rb");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_rescue_handlers_and_unwind_edges_without_changing_results() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_exception_transfer.rb").expect("fixture");
