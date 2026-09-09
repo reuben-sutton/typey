@@ -13,6 +13,7 @@ mod exceptions;
 mod flow;
 mod globals;
 mod intrinsics;
+mod outcomes;
 mod patterns;
 mod preflight;
 mod value;
