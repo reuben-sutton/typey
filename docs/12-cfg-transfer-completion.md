@@ -19,7 +19,7 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, 400 checker tests,
+The current local gates include 22 CFG tests, 12 HIR tests, 406 checker tests,
 209 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
 checker, local conformance, and upstream smoke gates pass; the upstream suite
 takes about 66 seconds because each fixture reloads the bundled RBI set. The
@@ -295,12 +295,13 @@ The first modularization steps are now in place:
   isolated to a source-file body whose legacy statement accounting still
   needs to be represented directly in CFG.
 
-* source-file pseudo-expressions, Kernel loading calls, lambda-local outcomes,
-  explicit mixin receivers, dynamic `alias_method`, Enumerable entry
-  contracts, and nilable Array indexing now have owned transfer contracts;
-  each has a focused regression test. Inferred methods called from DSL
-  callbacks no longer treat an unevaluated provisional `Never` summary as a
-  guaranteed terminating path.
+* source-file pseudo-expressions including `__FILE__` and `__LINE__`, rescue
+  modifiers, backreference reads, Kernel loading calls, lambda-local outcomes,
+  explicit mixin receivers, dynamic `alias_method`, the `alias` keyword,
+  Enumerable entry contracts, multi-write call/index targets, and nilable
+  Array indexing now have owned transfer contracts; each has a focused
+  regression test. Inferred methods called from DSL callbacks no longer treat
+  an unevaluated provisional `Never` summary as a guaranteed terminating path.
 
 The latest release Spoom CFG run is a useful architectural checkpoint: 8,725
 bodies and 65,433 calls transferred, with zero unsupported-operation fallbacks,
@@ -309,7 +310,7 @@ is the known `Time?` passed to `Time` case in `coverage.rb`; the legacy path
 reports the same finding, while Sorbet accepts it through Thor's untyped option
 hash. The run reached final convergence in four worklist rounds, reported
 1,048 unknown application-library sends out of 5,979 (17.5%), and completed in
-2.56 seconds including repository checking (1.93 seconds through the checker).
+2.53 seconds including repository checking (1.79 seconds through the checker).
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
@@ -318,23 +319,26 @@ builtin hooks, while forwarded or passed blocks supplied to
 semantics in some receiver contexts. On the latest Packwerk regression run,
 the owned path transferred 9,238 bodies and 127,886 calls with zero
 unsupported-operation fallbacks, zero unsupported edges, and zero legacy
-bridges. It reports 22 diagnostics in 2.35 seconds through the checker (3.02
+bridges. It reports 22 diagnostics in 2.16 seconds through the checker (2.99
 seconds including repository discovery and reporting), and 398 unknown
 application-library sends out of 1,578 (25.2%). The exact diagnostic set now
 matches the legacy run: 18 malformed Minitest shim diagnostics and four
 legitimate NodeHelpers array-index nilability findings.
 
 The latest full ActiveSupport run is the current large-component boundary:
-27,099 HIR bodies were compiled, 8,097 bodies and 30,449 calls transferred,
-and five worklist rounds reached convergence. There were zero unsupported-edge
-and zero legacy-bridge fallbacks, but 725 classified unsupported-operation
-fallbacks remain, mostly missing framework/dynamic-call contracts and a small
-set of unsupported Prism parent shapes. The run reports 479 diagnostics and
-12,626 application-library send sites, of which 7,943 (62.9%) are unknown;
-it completes in about 166 seconds including final reporting. The previous
-first-round measurement was about 276 seconds, so lazy attached-class
-substitution removed a major general receiver-union cost without changing the
-diagnostic surface.
+27,099 HIR bodies were compiled, 13,418 bodies, 49,899 calls, 3,836
+assignments, and 35,611 values transferred across six worklist rounds. There
+were zero unsupported-edge and zero legacy-bridge fallbacks, but 1,086
+unsupported-operation records remain across 218 unique source spans: 144 call
+contract failures, 54 unresolved `super` contracts, 11 definition handoffs,
+three closure handoffs, two assignment handoffs, and five other cases. The
+owned run reports 495 diagnostics and 12,626 application-library send sites,
+of which 7,958 (63.0%) are unknown; it completes in about 275 seconds
+including final reporting. This is not yet an accepted parity checkpoint: the
+legacy recursive run on the same checkout reports 724 diagnostics in about
+164 seconds, with 446 exact diagnostic matches, 49 CFG-only findings, and 278
+legacy-only findings. The extra owned paths therefore need classification and
+fixes before the CFG result can replace the legacy result.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
