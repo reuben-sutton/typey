@@ -394,9 +394,10 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         self.terminal_flow = self.terminal_flow.union(non_raise.flow());
                     }
                     if !result.flow.contains(FlowKind::Normal) {
+                        let expression_type = result.normal_type.clone().unwrap_or(Type::Never);
                         self.analyzer.record_at(
                             site,
-                            result.type_.clone(),
+                            expression_type,
                             self.analyzer.reporting.report,
                             None,
                         );

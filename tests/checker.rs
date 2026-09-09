@@ -218,6 +218,31 @@ fn transfers_global_array_coercion_through_shared_intrinsic_semantics() {
 }
 
 #[test]
+fn transfers_global_raising_calls_through_shared_intrinsic_semantics() {
+    let source = r#"
+def always_raises
+  raise "boom"
+end
+
+T.reveal_type(always_raises)
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("T.noreturn")));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_known_dynamic_instance_variables_through_owned_calls() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_dynamic_instance_variable_get.rb")
         .expect("fixture");

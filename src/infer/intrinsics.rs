@@ -305,6 +305,11 @@ impl<'src> Analyzer<'src> {
                 || Type::Array(Box::new(Type::Any)),
                 |type_| Type::Array(Box::new(self.array_coercion_element_type(type_))),
             )),
+            // These are Kernel-level control transfers rather than ordinary
+            // receiver method calls. Returning `Never` here lets the owned
+            // CFG outcome protocol route their raised type without needing a
+            // parser-backed implicit-method lookup.
+            "raise" | "fail" | "abort" | "exit" | "exit!" => Some(Type::Never),
             _ => None,
         }
     }
