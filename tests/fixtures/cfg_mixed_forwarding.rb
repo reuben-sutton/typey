@@ -10,4 +10,4 @@ class CfgMixedForwarding
   end
 end
 
-T.reveal_type(CfgMixedForwarding.wrapper("value")) # note: Revealed type: `String`
+T.reveal_type(CfgMixedForwarding.wrapper("value")) # note: Revealed type: `T.untyped`
