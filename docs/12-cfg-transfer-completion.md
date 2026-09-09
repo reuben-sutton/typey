@@ -19,10 +19,11 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 19 CFG tests, 12 HIR tests, 382 checker tests,
-and 199 conformance tests. The focused CFG and checker gates pass; the full
-conformance run remains a longer-running gate. The implementation note records
-parity with the existing Spoom baseline. The CFG path is still opt-in because
+The current local gates include 19 CFG tests, 12 HIR tests, 386 checker tests,
+203 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
+checker, local conformance, and upstream smoke gates pass; the upstream suite
+takes about 66 seconds because each fixture reloads the bundled RBI set. The
+CFG path is still opt-in because
 the transfer host has semantic bridges in the legacy recursive path: the
 recursive evaluator still uses Prism children for exact diagnostics and
 builtin hooks, while parser-backed callback contracts and some conditional and
@@ -59,10 +60,10 @@ the CFG path quiet.
 The current implementation has a useful but temporary shape:
 
 ```text
-owned HIR -> owned CFG -> BlockTransfer
-                         |-> owned source-site transfer for values and writes
-                         |-> owned call input -> legacy diagnostic/builtin adapter
-                         |-> whole-body legacy fallback
+owned HIR -> owned CFG -> BlockTransfer -> abstract state/result
+                         |-> owned source-site transfer for values, writes, and calls
+                         |-> explicit unsupported-body fallback during migration
+recursive Prism evaluator -> legacy-only parser adapter
 ```
 
 The target shape is:
@@ -161,8 +162,9 @@ The first modularization steps are now in place:
   `HirCallView` remains only as the recursive evaluator's compatibility
   adapter; and
 * the `BodyTransfer` call path now consumes only `OwnedCallInput` and owned
-  argument shapes. Parser argument materialization and builtin fallback remain
-  isolated in the recursive `transfer_cfg_call` bridge; and
+  argument shapes. Parser argument materialization remains isolated in the
+  recursive call adapter, while CFG builtin and collection contracts consume
+  owned types and values directly; and
 * `MakeClosure` transfers from its owned `ClosureId` and closure span, so
   closure creation no longer performs a source-span lookup;
 * ordinary `while`/`until` bodies now pass CFG preflight, including local
@@ -283,31 +285,36 @@ The first modularization steps are now in place:
   carries facts from a composite predicate into the normal path after an
   `unless`/`if`, preserving concrete receiver types without a parser fallback.
 
-The latest release Spoom CFG run is a useful architectural checkpoint: 4,997
-bodies, 27,884 calls, 16,839 assignments, and 76,961 values transferred; 361
-explicitly classified unsupported-operation fallbacks, zero unsupported edges,
-zero legacy bridges, and zero diagnostics. The run completed in 2.35 seconds
-including repository checking (1.70 seconds in the checker after the final
-pass).
+The latest release Spoom CFG run is a useful architectural checkpoint: 4,998
+bodies, 27,893 calls, 16,839 assignments, and 76,961 values transferred; 361
+explicitly classified unsupported-operation fallback events, zero unsupported
+edges, zero legacy bridges, and one diagnostic. That diagnostic is the known
+`Time?` passed to `Time` case in `coverage.rb`; the legacy path reports the same
+finding, while Sorbet accepts it through Thor's untyped option hash. The run
+reported 1,001 unknown application-library sends out of 5,979 (16.7%) and 284
+unique application fallback spans, and completed in 2.84 seconds including
+repository checking (2.05 seconds through the checker).
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
-semantics in some receiver contexts. On the Packwerk regression run, the
-current owned-CFG boundary is seven unique fallback spans: one declaration
-body and six operation spans involving nil/false receivers, an implicit
-`name`, and `any?` on a Set/Array union. The run produces no
-application-library diagnostics; the remaining printed diagnostics are the
-known minitest shim and node-helper test-input baseline. It transferred 1,331
-bodies, 4,123 calls, 39,425 assignments, and 168,628 values with 23
-classified unsupported-operation fallbacks, zero unsupported edges, and zero
-legacy bridges; total measured time was 2.46 seconds. Removing those requires
-moving their diagnostic and block contracts to owned source sites rather than
-weakening the checker. CFG fallback telemetry now distinguishes unsupported
-operations, unsupported edges, and legacy bridges; the migrated ordinary-body
-path now uses explicit outcome routing for non-local `return`, `break`, and
-`next`, including through ensure regions.
+semantics in some receiver contexts. On the latest Packwerk regression run,
+the owned path transferred 1,370 bodies, 4,187 calls, 39,404 assignments, and
+168,502 values. It recorded 11 early unsupported-operation fallback events,
+zero unsupported edges, zero legacy bridges, and 23 diagnostics. The 23 are
+unchanged from the legacy run: the known minitest shim signature diagnostics
+and node-helper test-input diagnostics. Packwerk reports 298 unknown
+application-library sends out of 1,578 (18.9%) and 73 unique application
+fallback spans; no application-library diagnostic is currently emitted. The
+run completed in 2.93 seconds including repository checking (2.04 seconds
+through the checker). The remaining fallback events are provisional calls on
+nil during early summary rounds, while the remaining application fallback
+spans and parser/DSL bridges require owned contracts or explicit allowlisting.
+CFG fallback telemetry now distinguishes unsupported operations, unsupported
+edges, and legacy bridges; the migrated ordinary-body path now uses explicit
+outcome routing for non-local `return`, `break`, and `next`, including through
+ensure regions.
 
 ## Design
 
