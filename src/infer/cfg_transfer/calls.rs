@@ -44,7 +44,7 @@ pub(super) fn transfer_call(
     values: &[Option<Type>],
     fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
     environment: &mut Environment,
-) -> Result<Eval, &'static str> {
+) -> Result<Eval, String> {
     analyzer.cfg_transfer_calls = analyzer.cfg_transfer_calls.saturating_add(1);
     let call = input
         .expression
@@ -56,12 +56,12 @@ pub(super) fn transfer_call(
     let call_arguments = if let Some(call) = call {
         let arguments = analyzer
             .cfg_owned_hir_call_arguments(&input, &call, values, fixed_array_elements, environment)
-            .ok_or("owned HIR call-argument shape is unavailable")?;
+            .ok_or_else(|| "owned HIR call-argument shape is unavailable".to_owned())?;
         arguments.into_call_arguments()
     } else {
         analyzer
             .cfg_owned_call_arguments(&input, values, fixed_array_elements)
-            .ok_or("owned CFG call-argument shape is unavailable")?
+            .ok_or_else(|| "owned CFG call-argument shape is unavailable".to_owned())?
     };
     let receiver_type = match &input.receiver {
         cfg::ReceiverOperand::Implicit => environment.self_type.clone(),
@@ -69,7 +69,7 @@ pub(super) fn transfer_call(
             .get(value.0 as usize)
             .cloned()
             .flatten()
-            .ok_or("owned receiver value is unavailable")?,
+            .ok_or_else(|| "owned receiver value is unavailable".to_owned())?,
         cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => environment.self_type.clone(),
     };
     let receiver_type = compound_assignment_receiver(analyzer, &input, receiver_type);
@@ -104,16 +104,16 @@ pub(super) fn transfer_call(
     } else if matches!(input.receiver, cfg::ReceiverOperand::Yield) {
         let type_ = analyzer
             .cfg_yield_result(input.site, &call_arguments, environment)
-            .ok_or("yield has no owned block contract")?;
+            .ok_or_else(|| "yield has no owned block contract".to_owned())?;
         (type_, UntypedOrigin::Propagated)
     } else if matches!(input.receiver, cfg::ReceiverOperand::Super) {
         let current_method = environment
             .method_key
             .as_ref()
-            .ok_or("super call has no enclosing method")?;
+            .ok_or_else(|| "super call has no enclosing method".to_owned())?;
         let key = analyzer
             .super_method_key(current_method)
-            .ok_or("super call has no resolvable parent method")?;
+            .ok_or_else(|| "super call has no resolvable parent method".to_owned())?;
         analyzer.record_method_dependency(&key, environment);
         if let Some(signature) = analyzer
             .observe_call(&key, &call_arguments, has_block)
@@ -191,7 +191,10 @@ pub(super) fn transfer_call(
             {
                 (type_, UntypedOrigin::Propagated)
             } else {
-                return Err("implicit call has no method or owned dynamic-method contract");
+                return Err(format!(
+                    "implicit call `{}` has no method or owned dynamic-method contract",
+                    input.name.as_str()
+                ));
             }
         }
     } else {
@@ -293,7 +296,10 @@ pub(super) fn transfer_call(
                     block_result = callback;
                     (type_, UntypedOrigin::FallbackCall)
                 } else {
-                    return Err("receiver call has no method, collection, or builtin contract");
+                    return Err(format!(
+                        "receiver call `{}` on `{dispatch_receiver}` has no method, collection, or builtin contract",
+                        input.name.as_str()
+                    ));
                 }
             } else if let Some((type_, callback)) = super::collections::transfer_collection_call(
                 analyzer,
@@ -315,7 +321,10 @@ pub(super) fn transfer_call(
                 block_result = callback;
                 (type_, UntypedOrigin::FallbackCall)
             } else {
-                return Err("receiver call has no method, collection, or builtin contract");
+                return Err(format!(
+                    "receiver call `{}` on `{dispatch_receiver}` has no method, collection, or builtin contract",
+                    input.name.as_str()
+                ));
             }
         }
     };
