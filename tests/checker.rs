@@ -174,6 +174,25 @@ fn transfers_multi_write_call_targets_through_owned_hir() {
 }
 
 #[test]
+fn transfers_alias_keyword_through_owned_hir() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_alias_keyword.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_lambda_outcomes_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_lambda_outcomes.rb").unwrap();
     let baseline = check(&source, CheckerConfig::default());

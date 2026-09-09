@@ -319,6 +319,26 @@ impl<'src> Lowerer<'src> {
             return self.push_expr(node, ExprKind::Defined { value });
         }
 
+        if let Some(alias) = node.as_alias_method_node() {
+            let new_name_node = alias.new_name();
+            let old_name_node = alias.old_name();
+            let new_name = self.lower_alias_name(&new_name_node);
+            let old_name = self.lower_alias_name(&old_name_node);
+            return self.lower_call_parts(
+                node,
+                Receiver::Implicit,
+                Name::new("alias_method"),
+                vec![
+                    Argument::Positional(new_name),
+                    Argument::Positional(old_name),
+                ],
+                vec![1, 2],
+                vec![self.span(&new_name_node), self.span(&old_name_node)],
+                None,
+                false,
+            );
+        }
+
         if let Some(write) = node.as_multi_write_node() {
             let lefts = write
                 .lefts()
@@ -1016,6 +1036,12 @@ impl<'src> Lowerer<'src> {
         }
 
         self.unsupported(node)
+    }
+
+    fn lower_alias_name(&mut self, name: &Node<'_>) -> ExprId {
+        let text = self.text(name);
+        let text = text.strip_prefix(':').unwrap_or(&text).to_owned();
+        self.push_expr(name, ExprKind::Literal(Literal::Symbol(text)))
     }
 
     fn lower_for_target(&mut self, node: &Node<'_>) -> Option<AssignTarget> {
