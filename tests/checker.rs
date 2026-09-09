@@ -170,6 +170,29 @@ fn transfers_dynamic_alias_methods_through_owned_cfg() {
 }
 
 #[test]
+fn destructures_homogeneous_array_elements_through_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_block_array_destructuring.rb").unwrap();
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    let reveals = cfg
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("Revealed type"))
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reveals,
+        vec!["Revealed type: `String`", "Revealed type: `String`",]
+    );
+}
+
+#[test]
 fn routes_assignment_forms_through_owned_hir_targets() {
     check_fixture("tests/fixtures/hir_assignment_dispatch.rb");
 }

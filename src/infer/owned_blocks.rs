@@ -332,7 +332,12 @@ impl<'src> Analyzer<'src> {
             });
         }
 
-        bind_owned_parameters(&closure.parameters, expected, &mut closure_environment);
+        bind_owned_parameters(
+            self,
+            &closure.parameters,
+            expected,
+            &mut closure_environment,
+        );
         let previous_expected_return = self.expected_return_type.take();
         self.expected_return_type = expected_return.map(|expected| {
             if matches!(expected, Type::TypeVar(_)) {
@@ -382,25 +387,32 @@ fn owned_literal_block_tuple_type(
 }
 
 fn bind_owned_parameters(
+    analyzer: &Analyzer<'_>,
     parameters: &hir::Parameters,
     expected: &[Type],
     environment: &mut Environment,
 ) {
-    let expected = if parameters
+    let required_parameters = parameters
         .parameters
         .iter()
         .filter(|parameter| parameter.kind == hir::ParameterKind::Required)
-        .count()
-        > 1
-    {
-        if let [Type::Tuple(elements)] = expected {
-            elements.as_slice()
-        } else {
-            expected
+        .count();
+    let destructured = if required_parameters > 1 {
+        match expected {
+            [Type::Tuple(elements)] => Some(elements.clone()),
+            [Type::Array(_)] => {
+                let element = analyzer.array_element_type(&expected[0]);
+                match element {
+                    Type::Tuple(elements) => Some(elements),
+                    element => Some(vec![element; required_parameters]),
+                }
+            }
+            _ => None,
         }
     } else {
-        expected
+        None
     };
+    let expected = destructured.as_deref().unwrap_or(expected);
     let mut positional_index = 0;
     for parameter in &parameters.parameters {
         let type_ = match parameter.kind {
