@@ -86,6 +86,16 @@ pub(super) fn transfer_receiver_call(
         });
     }
 
+    if let Some(type_) =
+        analyzer.eval_node_helpers_method(receiver, name, &arguments.argument_types)
+    {
+        return Ok(ReceiverTransfer {
+            type_,
+            block_result: None,
+            untyped_origin: UntypedOrigin::InferredMethod,
+        });
+    }
+
     // `[]` is also ordinary Ruby method dispatch. Only proc-like receivers
     // use the callable shorthand; a nominal receiver must still resolve its
     // declared `[]` method here.

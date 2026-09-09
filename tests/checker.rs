@@ -2001,6 +2001,21 @@ fn accepts_ranges_with_concrete_integer_endpoints_as_integer_ranges() {
 }
 
 #[test]
+fn transfers_range_literals_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/range_assignability.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn models_random_formatter_keywords() {
     let result = check_fixture("tests/fixtures/random_formatter.rb");
     assert_eq!(
@@ -5307,6 +5322,8 @@ T.reveal_type("text".codepoints)
 #[test]
 fn accepts_array_replacement_splats_for_range_assignment() {
     let source = r#"
+# typed: strict
+
 class Rewriter
   #: (Array[Integer]) -> void
   def rewrite(bytes)
@@ -5314,6 +5331,15 @@ class Rewriter
   end
 end
 "#;
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
         .expect("vendored RBIs load");
     files.push(WorkspaceFile::new("array_replacement_splat.rb", source));

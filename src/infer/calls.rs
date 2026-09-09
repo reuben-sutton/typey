@@ -844,6 +844,15 @@ impl<'src> Analyzer<'src> {
                     // Dispatch the structural operation so an integer index
                     // retains the union of the tuple's actual components.
                     self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
+                } else if dispatch_receiver_type == Type::String
+                    && matches!(name.as_str(), "bytes" | "codepoints")
+                {
+                    // Some vendored RBIs expose String#bytes and
+                    // String#codepoints without a useful return contract.
+                    // The structural String model knows both methods return
+                    // Array[Integer], including when the receiver is a
+                    // variable rather than a string literal.
+                    self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
                 } else if matches!(&dispatch_receiver_type, Type::Array(_) | Type::Tuple(_))
                     && self
                         .resolve_method_key(&key)

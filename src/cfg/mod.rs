@@ -141,6 +141,11 @@ pub enum OperationKind {
     BuildInterpolated {
         kind: hir::InterpolatedKind,
     },
+    BuildRange {
+        left: Option<ValueId>,
+        right: Option<ValueId>,
+        exclude_end: bool,
+    },
     /// Record a joined expression value without introducing another runtime
     /// operation. This is used for begin/conditional join expressions whose
     /// value is carried by a block parameter.

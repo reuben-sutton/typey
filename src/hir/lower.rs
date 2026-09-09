@@ -560,6 +560,9 @@ impl<'src> Lowerer<'src> {
         if let Some(or) = node.as_or_node() {
             return self.lower_logical(node, or.left(), or.right(), LogicalKind::Or);
         }
+        if let Some(range) = node.as_range_node() {
+            return self.lower_range(node, range.left(), range.right(), range.is_exclude_end());
+        }
         if let Some(super_node) = node.as_super_node() {
             return self.lower_special_call(
                 node,
@@ -1167,6 +1170,25 @@ impl<'src> Lowerer<'src> {
         let left = self.lower_node(&left);
         let right = self.lower_node(&right);
         self.push_expr(node, ExprKind::Logical { left, right, kind })
+    }
+
+    fn lower_range(
+        &mut self,
+        node: &Node<'_>,
+        left: Option<Node<'_>>,
+        right: Option<Node<'_>>,
+        exclude_end: bool,
+    ) -> ExprId {
+        let left = left.map(|left| self.lower_node(&left));
+        let right = right.map(|right| self.lower_node(&right));
+        self.push_expr(
+            node,
+            ExprKind::Range {
+                left,
+                right,
+                exclude_end,
+            },
+        )
     }
 
     fn call_assignment_target_span(

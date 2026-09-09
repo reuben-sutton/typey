@@ -244,6 +244,11 @@ pub enum ExprKind {
         kind: InterpolatedKind,
         parts: Vec<ExprId>,
     },
+    Range {
+        left: Option<ExprId>,
+        right: Option<ExprId>,
+        exclude_end: bool,
+    },
     Logical {
         left: ExprId,
         right: ExprId,

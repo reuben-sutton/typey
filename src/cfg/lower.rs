@@ -374,6 +374,11 @@ impl<'program> Builder<'program> {
             ExprKind::Interpolated { kind, parts } => {
                 self.lower_interpolated(expression, block, span, kind, parts)
             }
+            ExprKind::Range {
+                left,
+                right,
+                exclude_end,
+            } => self.lower_range(expression, block, span, left, right, exclude_end),
             ExprKind::Logical { left, right, kind } => {
                 self.lower_logical(expression, block, span, left, right, kind)
             }
@@ -528,6 +533,51 @@ impl<'program> Builder<'program> {
             false,
         );
         self.normal(expression, join, Some(joined))
+    }
+
+    fn lower_range(
+        &mut self,
+        expression: ExprId,
+        block: BlockId,
+        span: Span,
+        left: Option<ExprId>,
+        right: Option<ExprId>,
+        exclude_end: bool,
+    ) -> Flow {
+        let mut block = block;
+        let left = match left {
+            Some(left) => {
+                let flow = self.lower_expr(left, block);
+                if !flow.reachable {
+                    return self.abrupt(expression, flow.block);
+                }
+                block = flow.block;
+                Some(flow.value.expect("range left produces a value"))
+            }
+            None => None,
+        };
+        let right = match right {
+            Some(right) => {
+                let flow = self.lower_expr(right, block);
+                if !flow.reachable {
+                    return self.abrupt(expression, flow.block);
+                }
+                block = flow.block;
+                Some(flow.value.expect("range right produces a value"))
+            }
+            None => None,
+        };
+        let value = self.emit(
+            block,
+            span,
+            OperationKind::BuildRange {
+                left,
+                right,
+                exclude_end,
+            },
+            true,
+        );
+        self.normal(expression, block, value)
     }
 
     fn lower_read(&mut self, expression: ExprId, block: BlockId, span: Span, read: Read) -> Flow {

@@ -173,6 +173,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::BuildArray { .. }
                         | cfg::OperationKind::BuildHash { .. }
                         | cfg::OperationKind::BuildInterpolated { .. }
+                        | cfg::OperationKind::BuildRange { .. }
                         | cfg::OperationKind::Record { .. }
                         | cfg::OperationKind::ApplyAssertion { .. }
                         | cfg::OperationKind::SetOutcome { .. }
@@ -444,6 +445,24 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         Type::union([Type::Nil, Type::Integer])
                     }
                 },
+                cfg::OperationKind::BuildRange {
+                    left,
+                    right,
+                    exclude_end: _,
+                } => {
+                    let left = left
+                        .and_then(|value| next.value(value))
+                        .unwrap_or(Type::Nil);
+                    let right = right
+                        .and_then(|value| next.value(value))
+                        .unwrap_or(Type::Nil);
+                    let type_ = Type::Named("Range".to_owned(), vec![left, right]);
+                    self.analyzer.apply_inline_assertion_in_environment_at(
+                        site,
+                        type_,
+                        &next.environment,
+                    )
+                }
                 cfg::OperationKind::Record { value } => {
                     let type_ = value
                         .as_ref()

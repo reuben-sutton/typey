@@ -141,6 +141,15 @@ fn expr_transfer_failure(
             }
             Ok(())
         }
+        ExprKind::Range { left, right, .. } => {
+            if let Some(left) = left {
+                expr_transfer_failure(program, *left, visiting, loop_depth, context)?;
+            }
+            if let Some(right) = right {
+                expr_transfer_failure(program, *right, visiting, loop_depth, context)?;
+            }
+            Ok(())
+        }
         ExprKind::Logical { left, right, .. } => {
             expr_transfer_failure(program, *left, visiting, loop_depth, context)?;
             expr_transfer_failure(program, *right, visiting, loop_depth, context)
