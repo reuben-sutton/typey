@@ -1,3 +1,4 @@
+use super::hash_shape::HashShape;
 use super::MethodKey;
 use crate::types::{Type, TypeLattice};
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,6 +29,9 @@ pub struct Environment {
     pub(super) known_nonempty_arrays: BTreeSet<String>,
     pub(super) predicate_aliases: BTreeMap<String, PredicateAlias>,
     pub(super) known_truthiness: BTreeMap<String, bool>,
+    /// Flow-local refinements for hashes whose literal keys are known. The
+    /// ordinary local/ivar type remains an aggregate `Type::Hash`.
+    pub(super) hash_shapes: BTreeMap<String, HashShape>,
     pub(super) self_type: Type,
     pub(super) method_key: Option<MethodKey>,
 }
@@ -42,6 +46,7 @@ impl Default for Environment {
             known_nonempty_arrays: BTreeSet::new(),
             predicate_aliases: BTreeMap::new(),
             known_truthiness: BTreeMap::new(),
+            hash_shapes: BTreeMap::new(),
             self_type: Type::Object,
             method_key: None,
         }
@@ -68,6 +73,8 @@ impl Environment {
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.remove(&name);
         self.known_truthiness.remove(&name);
+        self.hash_shapes.remove(&name);
+        self.hash_shapes.remove(&format!("\u{1}local:{name}"));
     }
 
     pub(super) fn remove(&mut self, name: &str) {
@@ -78,6 +85,8 @@ impl Environment {
         self.known_nonempty_arrays.remove(name);
         self.predicate_aliases.remove(name);
         self.known_truthiness.remove(name);
+        self.hash_shapes.remove(name);
+        self.hash_shapes.remove(&format!("\u{1}local:{name}"));
     }
 
     pub(super) fn mark_inferred(&mut self, name: impl Into<String>) {
@@ -118,6 +127,8 @@ impl Environment {
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.insert(name.clone(), alias);
         self.known_truthiness.remove(&name);
+        self.hash_shapes.remove(&name);
+        self.hash_shapes.remove(&format!("\u{1}local:{name}"));
     }
 
     pub(super) fn predicate_alias(&self, name: &str) -> Option<&PredicateAlias> {
@@ -130,6 +141,19 @@ impl Environment {
 
     pub(super) fn known_truthiness(&self, name: &str) -> Option<bool> {
         self.known_truthiness.get(name).copied()
+    }
+
+    pub(super) fn hash_shape(&self, name: &str) -> Option<&HashShape> {
+        self.hash_shapes.get(name)
+    }
+
+    pub(super) fn set_hash_shape(&mut self, name: impl Into<String>, shape: Option<HashShape>) {
+        let name = name.into();
+        if let Some(shape) = shape {
+            self.hash_shapes.insert(name, shape);
+        } else {
+            self.hash_shapes.remove(&name);
+        }
     }
 
     pub(super) fn set_known_nonempty_array(&mut self, name: impl Into<String>, nonempty: bool) {
@@ -189,6 +213,7 @@ impl Environment {
                         .then(|| (name.clone(), *truthy))
                 })
                 .collect(),
+            hash_shapes: BTreeMap::new(),
             self_type: self.self_type.clone(),
             method_key: self.method_key.clone(),
         };
@@ -202,6 +227,16 @@ impl Environment {
                 (None, None) => Type::Any,
             };
             result.locals.insert(name.clone(), type_);
+        }
+        for name in self.hash_shapes.keys().chain(other.hash_shapes.keys()) {
+            if result.hash_shapes.contains_key(name) {
+                continue;
+            }
+            let shape = match (self.hash_shapes.get(name), other.hash_shapes.get(name)) {
+                (Some(left), Some(right)) => left.join(right),
+                _ => continue,
+            };
+            result.hash_shapes.insert(name.clone(), shape);
         }
         result
     }

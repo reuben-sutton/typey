@@ -1,10 +1,43 @@
 //! Owned CFG transfer for writes and iteration bindings.
 
+use super::super::hash_shape::HashShape;
 use super::super::{ivar_refinement_key, Analyzer, Environment, SourceSite};
 use super::globals::cfg_global_refinement_key;
 use crate::cfg;
 use crate::hir;
 use crate::types::Type;
+
+pub(super) fn hash_shape_key(analyzer: &Analyzer<'_>, place: &cfg::Place) -> Option<String> {
+    match place {
+        cfg::Place::Local(local) => analyzer
+            .program
+            .hir_program
+            .local_name(*local)
+            .map(|name| format!("\u{1}local:{}", name.as_str())),
+        cfg::Place::InstanceVariable(name) => Some(ivar_refinement_key(name.as_str())),
+        cfg::Place::ClassVariable(name) => Some(format!("\u{1}classvar:{}", name.as_str())),
+        cfg::Place::Global(name) => Some(cfg_global_refinement_key(name.as_str())),
+        cfg::Place::Constant(path) => Some(format!("\u{1}constant:{}", path.as_str())),
+    }
+}
+
+pub(super) fn hash_shape_key_for_read(analyzer: &Analyzer<'_>, read: &hir::Read) -> Option<String> {
+    match read {
+        hir::Read::Local(local) => analyzer
+            .program
+            .hir_program
+            .local_name(*local)
+            .map(|name| format!("\u{1}local:{}", name.as_str())),
+        hir::Read::InstanceVariable(name) => Some(ivar_refinement_key(name.as_str())),
+        hir::Read::ClassVariable(name) => Some(format!("\u{1}classvar:{}", name.as_str())),
+        hir::Read::Global(name) => Some(cfg_global_refinement_key(name.as_str())),
+        hir::Read::Constant(path) => Some(format!("\u{1}constant:{}", path.as_str())),
+        hir::Read::SelfValue
+        | hir::Read::Numbered(_)
+        | hir::Read::It
+        | hir::Read::BackReference(_) => None,
+    }
+}
 
 pub(super) fn transfer_write<'src>(
     analyzer: &mut Analyzer<'src>,
@@ -12,6 +45,7 @@ pub(super) fn transfer_write<'src>(
     place: &cfg::Place,
     expression: Option<hir::ExprId>,
     actual: Type,
+    hash_shape: Option<HashShape>,
     logical: bool,
     environment: &mut Environment,
 ) -> Type {
@@ -37,7 +71,8 @@ pub(super) fn transfer_write<'src>(
             } else {
                 type_
             };
-            environment.bind(name, type_.clone());
+            environment.bind(&name, type_.clone());
+            environment.set_hash_shape(format!("\u{1}local:{name}"), hash_shape);
             type_
         }
         cfg::Place::InstanceVariable(name) => {
@@ -50,22 +85,27 @@ pub(super) fn transfer_write<'src>(
                 type_
             };
             analyzer.observe_ivar(environment, name.clone(), &type_, false);
-            environment.bind(ivar_refinement_key(&name), type_.clone());
+            let refinement = ivar_refinement_key(&name);
+            environment.bind(&refinement, type_.clone());
+            environment.set_hash_shape(refinement, hash_shape);
             type_
         }
         cfg::Place::ClassVariable(name) => {
             let type_ = analyzer.apply_inline_assertion_at(site, actual);
             analyzer.observe_class_var(environment, name.as_str().to_owned(), &type_);
+            environment.set_hash_shape(format!("\u{1}classvar:{}", name.as_str()), hash_shape);
             type_
         }
         cfg::Place::Global(name) => {
             let type_ = analyzer.apply_inline_assertion_at(site, actual);
             environment.bind(cfg_global_refinement_key(name.as_str()), type_.clone());
+            environment.set_hash_shape(cfg_global_refinement_key(name.as_str()), hash_shape);
             type_
         }
         cfg::Place::Constant(path) => {
             let type_ = analyzer.apply_inline_assertion_at(site, actual);
             analyzer.observe_constant(environment, path.as_str().to_owned(), &type_);
+            environment.set_hash_shape(format!("\u{1}constant:{}", path.as_str()), hash_shape);
             type_
         }
     }
@@ -92,6 +132,7 @@ pub(super) fn transfer_for_target<'src>(
         &place,
         None,
         element_type,
+        None,
         false,
         environment,
     ))

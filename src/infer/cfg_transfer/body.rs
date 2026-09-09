@@ -386,6 +386,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             place,
                             operation.expression,
                             actual,
+                            next.hash_shape(*value),
                             *logical,
                             &mut next.environment,
                         )
@@ -457,6 +458,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             })?,
                             &next.values,
                             &self.fixed_array_elements,
+                            &mut next.hash_shapes,
                             &mut next.environment,
                         )
                         .map_err(|reason| format!("call transfer failed: {reason}"))?;
@@ -647,6 +649,27 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
             };
             if let Some(result) = operation.result {
                 next.set_value(result, type_.clone());
+                let shape = match &operation.kind {
+                    cfg::OperationKind::BuildHash { elements } => {
+                        super::super::hash_shape::from_cfg_hash(
+                            &self.analyzer.program.hir_program,
+                            operation.expression,
+                            elements,
+                            &next.values,
+                            &next.hash_shapes,
+                        )
+                    }
+                    cfg::OperationKind::Read { place } => {
+                        super::assignment::hash_shape_key(self.analyzer, place)
+                            .and_then(|key| next.environment.hash_shape(&key).cloned())
+                    }
+                    cfg::OperationKind::Record { value } => {
+                        value.and_then(|value| next.hash_shape(value))
+                    }
+                    cfg::OperationKind::ApplyAssertion { value } => next.hash_shape(*value),
+                    _ => None,
+                };
+                next.set_hash_shape(result, shape);
             }
         }
 
@@ -665,7 +688,9 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     let type_ = next
                         .value(*argument)
                         .ok_or_else(|| format!("missing jump operand {:?}", argument))?;
+                    let shape = next.hash_shape(*argument);
                     next.set_value(parameter.value, type_);
+                    next.set_hash_shape(parameter.value, shape);
                 }
                 Ok(vec![edge(*target, next)])
             }
@@ -869,7 +894,9 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         let type_ = normal
                             .value(*argument)
                             .ok_or_else(|| format!("missing ensure operand {:?}", argument))?;
+                        let shape = normal.hash_shape(*argument);
                         normal.set_value(parameter.value, type_);
+                        normal.set_hash_shape(parameter.value, shape);
                     }
                     if let Some(value) = arguments.first().and_then(|value| normal.value(*value)) {
                         if let Some(expression) =
@@ -902,6 +929,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             let mut pending = next.clone();
                             if let Some(parameter) = target_block.parameters.first() {
                                 pending.set_value(parameter.value, type_);
+                                pending.set_hash_shape(parameter.value, None);
                             }
                             pending.flow = Flow::normal();
                             edges.push(edge(*pending_target, pending));

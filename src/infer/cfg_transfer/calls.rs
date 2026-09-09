@@ -1,5 +1,6 @@
 //! Shared call-specific semantics for owned CFG transfer.
 
+use super::super::hash_shape::{HashKey, HashShape};
 use super::super::{Analyzer, Environment, Eval, OwnedCallInput, UntypedOrigin};
 use crate::cfg;
 use crate::hir;
@@ -40,6 +41,7 @@ pub(super) fn transfer_call(
     input: OwnedCallInput,
     values: &[Option<Type>],
     fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
+    hash_shapes: &mut [Option<HashShape>],
     environment: &mut Environment,
 ) -> Result<Eval, String> {
     analyzer.cfg_transfer_calls = analyzer.cfg_transfer_calls.saturating_add(1);
@@ -70,6 +72,12 @@ pub(super) fn transfer_call(
         cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => environment.self_type.clone(),
     };
     let receiver_type = compound_assignment_receiver(analyzer, &input, receiver_type);
+    let receiver_value = match input.receiver {
+        cfg::ReceiverOperand::Value(value) => Some(value),
+        _ => None,
+    };
+    let receiver_hash_shape =
+        receiver_value.and_then(|value| hash_shapes.get(value.0 as usize).cloned().flatten());
     let mut block_result = None;
     let dynamic_instance_variable_type = if matches!(
         input.name.as_str(),
@@ -151,10 +159,19 @@ pub(super) fn transfer_call(
             &call_arguments,
             values,
             environment,
+            receiver_hash_shape.as_ref(),
         )?;
         block_result = receiver.block_result;
         (receiver.type_, receiver.untyped_origin)
     };
+    update_hash_shape_after_call(
+        analyzer,
+        &input,
+        receiver_value,
+        &call_arguments,
+        hash_shapes,
+        environment,
+    );
     Ok(super::outcomes::finish_call(
         analyzer,
         &input,
@@ -164,4 +181,86 @@ pub(super) fn transfer_call(
         untyped_origin,
         environment,
     ))
+}
+
+fn update_hash_shape_after_call(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    receiver_value: Option<cfg::ValueId>,
+    arguments: &super::super::CallArguments<'_>,
+    hash_shapes: &mut [Option<HashShape>],
+    environment: &mut Environment,
+) {
+    if input.name.as_str() != "[]=" {
+        return;
+    }
+    let Some(receiver_value) = receiver_value else {
+        return;
+    };
+    let key = assigned_hash_key(analyzer, input)
+        .or_else(|| super::builtins::owned_hash_key(analyzer, input));
+    let value = arguments.argument_types.last().cloned();
+    if let (Some(key), Some(value)) = (key, value) {
+        if let Some(shape) = hash_shapes
+            .get_mut(receiver_value.0 as usize)
+            .and_then(Option::as_mut)
+        {
+            shape.write(key.clone(), value.clone());
+        }
+        if let Some(read) = input
+            .expression
+            .and_then(|id| analyzer.program.hir_program.expression(id))
+            .and_then(|expression| match &expression.kind {
+                hir::ExprKind::Call(call) => match call.receiver {
+                    hir::Receiver::Explicit(receiver) => analyzer
+                        .program
+                        .hir_program
+                        .expression(receiver)
+                        .and_then(|receiver| match &receiver.kind {
+                            hir::ExprKind::Read(read) => Some(read),
+                            _ => None,
+                        }),
+                    _ => None,
+                },
+                hir::ExprKind::Assign { target, .. } => match target {
+                    hir::AssignTarget::Index { receiver, .. } => analyzer
+                        .program
+                        .hir_program
+                        .expression(*receiver)
+                        .and_then(|receiver| match &receiver.kind {
+                            hir::ExprKind::Read(read) => Some(read),
+                            _ => None,
+                        }),
+                    _ => None,
+                },
+                _ => None,
+            })
+        {
+            if let Some(storage_key) = super::assignment::hash_shape_key_for_read(analyzer, read) {
+                if let Some(shape) = environment.hash_shape(&storage_key).cloned() {
+                    let mut shape = shape;
+                    shape.write(key, value);
+                    environment.set_hash_shape(storage_key, Some(shape));
+                }
+            }
+        }
+    } else if let Some(shape) = hash_shapes.get_mut(receiver_value.0 as usize) {
+        *shape = None;
+    }
+}
+
+fn assigned_hash_key(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<HashKey> {
+    let expression = input
+        .expression
+        .and_then(|id| analyzer.program.hir_program.expression(id))?;
+    let hir::ExprKind::Assign { target, .. } = &expression.kind else {
+        return None;
+    };
+    let hir::AssignTarget::Index { arguments, .. } = target else {
+        return None;
+    };
+    let hir::Argument::Positional(argument) = arguments.first()? else {
+        return None;
+    };
+    super::super::hash_shape::literal_key(&analyzer.program.hir_program, *argument)
 }

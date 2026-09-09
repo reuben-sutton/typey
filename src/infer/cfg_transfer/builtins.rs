@@ -4,6 +4,7 @@
 //! transfer. This layer supplies the structural contracts that the recursive
 //! evaluator historically obtained from Prism-backed builtin hooks.
 
+use super::super::hash_shape::{HashKey, HashShape};
 use super::super::{name_matches, Analyzer, CallArguments, Environment, Eval, OwnedCallInput};
 use crate::types::Type;
 use crate::{hir, signature};
@@ -15,14 +16,22 @@ pub(super) fn transfer_builtin_call(
     arguments: &CallArguments<'_>,
     values: &[Option<Type>],
     environment: &mut Environment,
+    hash_shape: Option<&HashShape>,
 ) -> Option<(Type, Option<Eval>)> {
     let name = input.name.as_str();
     if let Type::Union(members) = receiver {
         if input.block.is_none() {
             let mut result = Type::Never;
             for member in members {
-                let (type_, _) =
-                    transfer_builtin_call(analyzer, input, member, arguments, values, environment)?;
+                let (type_, _) = transfer_builtin_call(
+                    analyzer,
+                    input,
+                    member,
+                    arguments,
+                    values,
+                    environment,
+                    hash_shape,
+                )?;
                 result = result.join(&type_);
             }
             return (!result.is_never()).then_some((result, None));
@@ -176,7 +185,14 @@ pub(super) fn transfer_builtin_call(
             transfer_array_builtin(analyzer, input, &element, arguments)
         }
         Type::Hash(key, value) => match name {
-            "[]" | "default" | "dig" => Some(Type::union([Type::Nil, value.as_ref().clone()])),
+            "[]" => {
+                let literal_key = owned_hash_key(analyzer, input);
+                Some(match (literal_key, hash_shape) {
+                    (Some(key), Some(hash_shape)) => hash_shape.value_for(&key),
+                    _ => Type::union([Type::Nil, value.as_ref().clone()]),
+                })
+            }
+            "default" | "dig" => Some(Type::union([Type::Nil, value.as_ref().clone()])),
             "[]=" => Some(
                 arguments
                     .argument_types
@@ -259,6 +275,19 @@ fn owned_inline_record_key(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> O
         | hir::ExprKind::Literal(hir::Literal::String(name)) => Some(name.clone()),
         _ => None,
     }
+}
+
+pub(super) fn owned_hash_key(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<HashKey> {
+    let expression = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))?;
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return None;
+    };
+    let hir::Argument::Positional(argument) = call.arguments.first()? else {
+        return None;
+    };
+    super::super::hash_shape::literal_key(&analyzer.program.hir_program, *argument)
 }
 
 fn transfer_array_builtin(

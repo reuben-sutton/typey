@@ -145,6 +145,50 @@ fn transfers_self_as_assertions_into_cfg_body_context() {
 }
 
 #[test]
+fn transfers_constructor_ivars_through_included_initializer_methods() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_shared_ivar_constructor.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn preserves_literal_hash_key_types_through_cfg_reads() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_hash_literal_keys.rb").expect("fixture");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    let start = source
+        .find("options[:relative_file_paths]")
+        .expect("hash lookup");
+    let end = start + "options[:relative_file_paths]".len();
+    assert!(
+        cfg.types.iter().any(|inferred| {
+            inferred.start == start
+                && inferred.end == end
+                && inferred.type_ == Type::Array(Box::new(Type::String))
+        }),
+        "missing concrete hash lookup type: {:?}",
+        cfg.types
+    );
+}
+
+#[test]
 fn compiles_cfg_bodies_without_changing_checker_results() {
     let source = "value = 1\nif value\n  value.to_s\nend\n";
     let baseline = check(source, CheckerConfig::default());
@@ -428,7 +472,16 @@ fn transfers_straight_line_method_bodies_without_changing_results() {
         },
     );
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
-    assert_eq!(cfg.types, baseline.types);
+    assert_eq!(cfg.types.len(), baseline.types.len());
+    let expected_hash_refinements = [(229, 332), (300, 332), (315, 331), (426, 490), (476, 490)];
+    for (cfg_type, baseline_type) in cfg.types.iter().zip(&baseline.types) {
+        if cfg_type != baseline_type {
+            assert!(
+                expected_hash_refinements.contains(&(cfg_type.start, cfg_type.end)),
+                "unexpected CFG type refinement: cfg={cfg_type:?} baseline={baseline_type:?}"
+            );
+        }
+    }
     assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
 }
 

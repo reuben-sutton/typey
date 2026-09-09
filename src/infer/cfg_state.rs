@@ -1,3 +1,4 @@
+use super::hash_shape::HashShape;
 use super::{Environment, Flow, FlowKind, MethodKey, OutcomeTypes, Strictness};
 use crate::cfg;
 use crate::hir;
@@ -11,6 +12,7 @@ use crate::types::Type;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct BlockState {
     pub(super) values: Vec<Option<Type>>,
+    pub(super) hash_shapes: Vec<Option<HashShape>>,
     pub(super) environment: Environment,
     pub(super) flow: Flow,
     /// The exception currently being routed through an unwind edge. A
@@ -31,6 +33,7 @@ impl BlockState {
     ) -> Self {
         Self {
             values,
+            hash_shapes: Vec::new(),
             environment,
             flow,
             pending_exception: None,
@@ -55,6 +58,14 @@ impl BlockState {
                 },
             )
             .collect();
+        let hash_shapes = (0..self.hash_shapes.len().max(other.hash_shapes.len()))
+            .map(
+                |index| match (self.hash_shapes.get(index), other.hash_shapes.get(index)) {
+                    (Some(Some(left)), Some(Some(right))) => Some(left.join(right)),
+                    _ => None,
+                },
+            )
+            .collect();
         let pending_exception = match (&self.pending_exception, &other.pending_exception) {
             (Some(left), Some(right)) => Some(left.join(right)),
             (Some(exception), None) | (None, Some(exception)) => Some(exception.clone()),
@@ -63,6 +74,7 @@ impl BlockState {
         let pending_outcomes = self.pending_outcomes.join(&other.pending_outcomes);
         Self {
             values,
+            hash_shapes,
             environment,
             flow: self.flow.union(other.flow),
             pending_exception,
@@ -80,6 +92,18 @@ impl BlockState {
             self.values.resize(index + 1, None);
         }
         self.values[index] = Some(type_);
+    }
+
+    pub(super) fn hash_shape(&self, id: cfg::ValueId) -> Option<HashShape> {
+        self.hash_shapes.get(id.0 as usize).cloned().flatten()
+    }
+
+    pub(super) fn set_hash_shape(&mut self, id: cfg::ValueId, shape: Option<HashShape>) {
+        let index = id.0 as usize;
+        if self.hash_shapes.len() <= index {
+            self.hash_shapes.resize(index + 1, None);
+        }
+        self.hash_shapes[index] = shape;
     }
 
     pub(super) fn route_exception(&mut self, exception: Type) {

@@ -7,8 +7,9 @@
 //! leaves the surrounding CFG transfer independent of individual receiver
 //! models.
 
+use super::super::hash_shape::HashShape;
 use super::super::{
-    proc_parts, Analyzer, CallArguments, Environment, Eval, OwnedCallInput, SourceSite,
+    proc_parts, Analyzer, CallArguments, Environment, Eval, MethodKey, OwnedCallInput, SourceSite,
     UntypedOrigin,
 };
 use crate::types::Type;
@@ -26,6 +27,7 @@ pub(super) fn transfer_receiver_call(
     arguments: &CallArguments<'_>,
     values: &[Option<Type>],
     environment: &mut Environment,
+    hash_shape: Option<&HashShape>,
 ) -> Result<ReceiverTransfer, String> {
     if let Type::Union(members) = receiver {
         // A union receiver has no single method key. Dispatch each concrete
@@ -48,6 +50,7 @@ pub(super) fn transfer_receiver_call(
                 arguments,
                 values,
                 &mut member_environment,
+                hash_shape,
             )?;
             result_type = result_type.join(&result.type_);
             block_result = match (block_result, result.block_result) {
@@ -102,6 +105,32 @@ pub(super) fn transfer_receiver_call(
     }
 
     if name == "new" {
+        if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
+            if let Some(owner) = Analyzer::named_type_name(&instance) {
+                let explicit_new = analyzer
+                    .resolve_method_key(&MethodKey {
+                        owner: Some(owner.clone()),
+                        name: name.to_owned(),
+                        singleton: true,
+                    })
+                    .is_some_and(|resolved| resolved.owner.as_deref() == Some(owner.as_str()));
+                if !explicit_new {
+                    analyzer.infer_initializer_call_at(
+                        input.site,
+                        &owner,
+                        arguments,
+                        input.block.is_some(),
+                        environment,
+                    );
+                    analyzer.observe_struct_constructor(&owner, arguments);
+                    return Ok(ReceiverTransfer {
+                        type_: analyzer.instantiate_generic_class(instance),
+                        block_result: None,
+                        untyped_origin: UntypedOrigin::InferredMethod,
+                    });
+                }
+            }
+        }
         if let Some(owner) = Analyzer::named_type_name(receiver)
             .filter(|owner| analyzer.declarations.struct_fields.contains_key(owner))
         {
@@ -118,6 +147,21 @@ pub(super) fn transfer_receiver_call(
                 block_result: None,
                 untyped_origin: UntypedOrigin::InferredMethod,
             });
+        }
+    }
+
+    // A literal hash carries a flow-local key/value refinement alongside its
+    // aggregate `Type::Hash`. Use that refinement before ordinary RBI method
+    // lookup, whose generic `Hash#[]` contract necessarily loses the key.
+    if name == "[]" && matches!(receiver, Type::Hash(_, _)) {
+        if let Some(hash_shape) = hash_shape {
+            if let Some(key) = super::builtins::owned_hash_key(analyzer, input) {
+                return Ok(ReceiverTransfer {
+                    type_: hash_shape.value_for(&key),
+                    block_result: None,
+                    untyped_origin: UntypedOrigin::Propagated,
+                });
+            }
         }
     }
 
@@ -185,6 +229,7 @@ pub(super) fn transfer_receiver_call(
         arguments,
         values,
         environment,
+        hash_shape,
     ) {
         return Ok(ReceiverTransfer {
             type_,

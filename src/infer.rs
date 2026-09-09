@@ -29,6 +29,7 @@ mod exceptions;
 mod fixpoint;
 mod flow;
 mod framework_hooks;
+mod hash_shape;
 mod intrinsics;
 mod keys;
 mod legacy_bridge;
