@@ -323,6 +323,45 @@ impl<'src> Analyzer<'src> {
                     Some(hir::Argument::Positional(value)) => Some(*value),
                     Some(_) => return,
                 };
+                let node_helpers_receiver = match call.receiver {
+                    hir::Receiver::Explicit(receiver) => self
+                        .program
+                        .hir_program
+                        .expression(receiver)
+                        .is_some_and(|expression| {
+                            matches!(
+                                &expression.kind,
+                                hir::ExprKind::Read(Read::Constant(path))
+                                    if self.nominal_names_match(path.as_str(), "NodeHelpers")
+                            )
+                        }),
+                    _ => false,
+                };
+                if truthy && call.name.as_str() == "string?" && node_helpers_receiver {
+                    if let Some(argument_id) = argument_id {
+                        if let Some(hir::ExprKind::Read(Read::Local(local))) = self
+                            .program
+                            .hir_program
+                            .expression(argument_id)
+                            .map(|expression| &expression.kind)
+                        {
+                            let Some(name) = self
+                                .program
+                                .hir_program
+                                .local_name(*local)
+                                .map(|name| name.as_str().to_owned())
+                            else {
+                                return;
+                            };
+                            let current = environment.get(&name);
+                            environment.bind(
+                                name,
+                                Type::intersection([current, Type::named("AST::StringNode")]),
+                            );
+                        }
+                    }
+                    return;
+                }
                 match call.receiver {
                     hir::Receiver::Explicit(receiver) => {
                         let Some(receiver_kind) = self

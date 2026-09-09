@@ -7040,8 +7040,7 @@ T.reveal_type(YAML.load_file("config.yml"))
 
 #[test]
 fn narrows_ast_nodes_after_string_predicates() {
-    let result = check(
-        r#"
+    let source = r#"
 module NodeHelpers
   #: (AST::Node) -> bool
   def self.string?(node)
@@ -7066,9 +7065,8 @@ def extract(node)
 end
 
 T.reveal_type(extract(AST::Node.new))
-"#,
-        CheckerConfig::default(),
-    );
+"#;
+    let result = check(source, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
@@ -7078,6 +7076,24 @@ T.reveal_type(extract(AST::Node.new))
         }),
         "{:?}",
         result.diagnostics
+    );
+
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+    assert!(
+        cfg.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T.nilable(String)`")
+        }),
+        "{:?}",
+        cfg.diagnostics
     );
 }
 
