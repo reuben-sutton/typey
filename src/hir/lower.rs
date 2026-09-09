@@ -1416,6 +1416,7 @@ impl<'src> Lowerer<'src> {
                     HashElement::Pair {
                         key: self.lower_node(&assoc.key()),
                         value: self.lower_node(&assoc.value()),
+                        shorthand: assoc.value().as_implicit_node().is_some(),
                     }
                 } else if let Some(splat) = child.as_assoc_splat_node() {
                     if let Some(value) = splat.value() {
@@ -1651,6 +1652,9 @@ impl<'src> Lowerer<'src> {
 
     fn lower_class(&mut self, node: &Node<'_>, class: &ruby_prism::ClassNode<'_>) -> ExprId {
         let name = ConstantPath::new(self.text(&class.constant_path()));
+        let superclass = class
+            .superclass()
+            .map(|superclass| self.lower_node(&superclass));
         let body = class.body().map(|body| {
             self.push_scope();
             let root = self.lower_node(&body);
@@ -1666,7 +1670,11 @@ impl<'src> Lowerer<'src> {
         let declaration = DeclId(self.program.declarations.len() as u32);
         self.program.declarations.push(Declaration {
             span: self.span(node),
-            kind: DeclarationKind::Class { name, body },
+            kind: DeclarationKind::Class {
+                name,
+                superclass,
+                body,
+            },
         });
         self.push_expr(node, ExprKind::Definition(declaration))
     }
@@ -1698,6 +1706,7 @@ impl<'src> Lowerer<'src> {
         node: &Node<'_>,
         singleton: &ruby_prism::SingletonClassNode<'_>,
     ) -> ExprId {
+        let expression = self.lower_node(&singleton.expression());
         let body = singleton.body().map(|body| {
             self.push_scope();
             let root = self.lower_node(&body);
@@ -1713,7 +1722,7 @@ impl<'src> Lowerer<'src> {
         let declaration = DeclId(self.program.declarations.len() as u32);
         self.program.declarations.push(Declaration {
             span: self.span(node),
-            kind: DeclarationKind::SingletonClass { body },
+            kind: DeclarationKind::SingletonClass { expression, body },
         });
         self.push_expr(node, ExprKind::Definition(declaration))
     }

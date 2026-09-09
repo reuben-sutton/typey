@@ -54,6 +54,10 @@ pub struct Conditional {
     pub truthy: BlockId,
     pub falsy: BlockId,
     pub join: BlockId,
+    /// Loop conditions retain Ruby's conservative nil result for a truthy
+    /// first iteration, even when ordinary branch narrowing can prove the
+    /// condition itself truthy.
+    pub loop_condition: bool,
 }
 
 impl Cfg {
@@ -165,6 +169,7 @@ pub enum OperationKind {
     /// effects have an owned transfer contract.
     Definition {
         declaration: hir::DeclId,
+        value: Option<ValueId>,
     },
     /// Record a joined expression value without introducing another runtime
     /// operation. This is used for begin/conditional join expressions whose

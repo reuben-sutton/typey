@@ -129,6 +129,7 @@ impl BlockState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct BodyContext {
     pub(super) body: hir::BodyId,
+    pub(super) top_level: bool,
     pub(super) method: Option<MethodKey>,
     pub(super) self_type: Type,
     pub(super) parameters: hir::Parameters,

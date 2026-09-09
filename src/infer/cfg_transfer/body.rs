@@ -21,6 +21,7 @@ pub(super) struct BodyTransfer<'analyzer, 'src> {
     pub(super) abrupt: OutcomeTypes,
     pub(super) terminal_flow: Flow,
     pub(super) final_environment: Option<Environment>,
+    pub(super) top_level_terminated: bool,
 }
 
 impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
@@ -221,6 +222,7 @@ impl<'src> Analyzer<'src> {
         };
         let context = BodyContext {
             body: body_id,
+            top_level: matches!(body.owner, hir::BodyOwner::TopLevel),
             method: environment.method_key.clone(),
             self_type: environment.self_type.clone(),
             parameters: body.parameters.clone(),
@@ -252,6 +254,7 @@ impl<'src> Analyzer<'src> {
             abrupt: OutcomeTypes::default(),
             terminal_flow: Flow::empty(),
             final_environment: None,
+            top_level_terminated: false,
         };
         let worklist = match cfg::transfer::run(&graph, &mut transfer, initial) {
             Ok(worklist) => worklist,
@@ -273,7 +276,11 @@ impl<'src> Analyzer<'src> {
                 return None;
             }
         };
-        let normal_type = transfer.normal_type.clone();
+        let normal_type = if transfer.top_level_terminated {
+            Type::Never
+        } else {
+            transfer.normal_type.clone()
+        };
         let abrupt = transfer.abrupt.clone();
         let terminal_flow = transfer.terminal_flow;
         let mut final_environment = transfer
@@ -467,7 +474,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         .ok_or_else(|| format!("unsupported for target at {:?}", operation.span))?
                     }
                     cfg::OperationKind::Call { .. } => {
-                        let result = super::calls::transfer_call(
+                        let mut result = super::calls::transfer_call(
                             self.analyzer,
                             OwnedCallInput::from_operation(operation).ok_or_else(|| {
                                 format!("missing owned call input at {:?}", operation.span)
@@ -478,6 +485,17 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             &mut next.environment,
                         )
                         .map_err(|reason| format!("call transfer failed: {reason}"))?;
+                        if self.context.method.is_none()
+                            && block.unwind.is_none()
+                            && result.flow.contains(FlowKind::Raise)
+                        {
+                            // At the top level, a terminating method call is
+                            // represented as `T.noreturn` by the recursive
+                            // evaluator. There is no rescue edge here, so it
+                            // must not widen the enclosing program value to
+                            // the fallback exception class.
+                            result.abrupt.raise_type = Type::Never;
+                        }
                         if result.flow.contains(FlowKind::Raise) {
                             let exception = result.abrupt.raise_type.clone();
                             if let Some(edge) = super::exceptions::exception_edge(
@@ -508,11 +526,23 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                                 self.analyzer.reporting.report,
                                 None,
                             );
-                            return Ok(OperationTransfer::Stop);
+                            if self.context.method.is_some() || block.unwind.is_some() {
+                                return Ok(OperationTransfer::Stop);
+                            }
+                            if self.context.top_level {
+                                self.top_level_terminated = true;
+                            }
+                            // Top-level Ruby keeps checking later statements
+                            // after a raising expression for reveals and
+                            // diagnostics. Preserve that behavior by carrying
+                            // the non-normal value through the owned graph;
+                            // method and closure bodies still terminate here.
+                            result.normal_type.unwrap_or(Type::Never)
+                        } else {
+                            result.normal_type.ok_or_else(|| {
+                                format!("call has no normal result at {:?}", operation.span)
+                            })?
                         }
-                        result.normal_type.ok_or_else(|| {
-                            format!("call has no normal result at {:?}", operation.span)
-                        })?
                     }
                     cfg::OperationKind::BuildArray {
                         elements,
@@ -541,7 +571,21 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         )
                         .ok_or_else(|| format!("hash transfer failed at {:?}", operation.span))?
                     }
-                    cfg::OperationKind::Definition { .. } => Type::Nil,
+                    cfg::OperationKind::Definition { declaration, value } => {
+                        let context_type = value.and_then(|value| next.value(value));
+                        if let Some(value) = value {
+                            next.value(*value).ok_or_else(|| {
+                                format!("missing declaration operand {:?}", value)
+                            })?;
+                        }
+                        self.analyzer
+                            .eval_owned_definition(
+                                *declaration,
+                                context_type,
+                                &mut next.environment,
+                            )
+                            .map_err(|reason| format!("definition transfer failed: {reason}"))?
+                    }
                     cfg::OperationKind::BuildInterpolated { kind } => match kind {
                         crate::hir::InterpolatedKind::String
                         | crate::hir::InterpolatedKind::XString => Type::String,

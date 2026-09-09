@@ -40,6 +40,7 @@ mod method_lookup;
 mod method_state;
 mod method_types;
 mod owned_blocks;
+mod owned_definitions;
 mod predicate_flow;
 mod registration;
 mod runner;

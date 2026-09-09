@@ -11,7 +11,6 @@ use std::collections::HashSet;
 struct ControlContext {
     allow_return: bool,
     allow_block_outcomes: bool,
-    allow_method_definitions: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +39,15 @@ pub(super) fn body_transfer_failure(
     body_id: hir::BodyId,
 ) -> Option<PreflightFailure> {
     let body = program.body(body_id)?;
+    if matches!(body.owner, hir::BodyOwner::TopLevel)
+        && has_top_level_legacy_control(program, body.root)
+    {
+        return Some(failure(
+            program,
+            body.root,
+            "top-level loop/begin accounting still uses the recursive evaluator",
+        ));
+    }
     let mut visiting = HashSet::new();
     let context = ControlContext {
         allow_return: body_allows_return(program, body),
@@ -50,12 +58,108 @@ pub(super) fn body_transfer_failure(
                     .closure(*closure_id)
                 .is_some_and(|closure| closure.kind == hir::ClosureKind::Block)
         ),
-        allow_method_definitions: matches!(
-            &body.owner,
-            hir::BodyOwner::Method { .. } | hir::BodyOwner::Closure(_)
-        ),
     };
     expr_transfer_failure(program, body.root, &mut visiting, 0, context).err()
+}
+
+fn has_top_level_legacy_control(program: &hir::Program, expression: hir::ExprId) -> bool {
+    fn visit(
+        program: &hir::Program,
+        expression_id: hir::ExprId,
+        visiting: &mut HashSet<hir::ExprId>,
+    ) -> bool {
+        if !visiting.insert(expression_id) {
+            return false;
+        }
+        let Some(expression) = program.expression(expression_id) else {
+            visiting.remove(&expression_id);
+            return false;
+        };
+        let result = match &expression.kind {
+            ExprKind::Assign { value, .. }
+            | ExprKind::Defined { value }
+            | ExprKind::Splat(value)
+            | ExprKind::Return(Some(value))
+            | ExprKind::Break(Some(value))
+            | ExprKind::Next(Some(value)) => visit(program, *value, visiting),
+            ExprKind::MultiAssign { value, .. } => visit(program, *value, visiting),
+            ExprKind::Call(call) => {
+                let receiver = match &call.receiver {
+                    hir::Receiver::Explicit(receiver) => visit(program, *receiver, visiting),
+                    _ => false,
+                };
+                let arguments = call.arguments.iter().any(|argument| match argument {
+                    hir::Argument::Positional(value)
+                    | hir::Argument::Splat(value)
+                    | hir::Argument::KeywordSplat(value)
+                    | hir::Argument::Keyword { value, .. } => visit(program, *value, visiting),
+                    hir::Argument::Forwarded => false,
+                });
+                receiver || arguments
+            }
+            ExprKind::Array(elements) => elements.iter().any(|element| match element {
+                ArrayElement::Value(value) | ArrayElement::Splat { value, .. } => {
+                    visit(program, *value, visiting)
+                }
+            }),
+            ExprKind::Hash(elements) => elements.iter().any(|element| match element {
+                HashElement::Pair { key, value, .. } => {
+                    visit(program, *key, visiting) || visit(program, *value, visiting)
+                }
+                HashElement::Splat { value, .. } => visit(program, *value, visiting),
+            }),
+            ExprKind::Interpolated { parts, .. } => {
+                parts.iter().any(|part| visit(program, *part, visiting))
+            }
+            ExprKind::Range { left, right, .. } => left
+                .iter()
+                .chain(right.iter())
+                .any(|value| visit(program, *value, visiting)),
+            ExprKind::Logical { left, right, .. } => {
+                visit(program, *left, visiting) || visit(program, *right, visiting)
+            }
+            ExprKind::Sequence(expressions) => expressions
+                .iter()
+                .any(|expression| visit(program, *expression, visiting)),
+            ExprKind::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                visit(program, *condition, visiting)
+                    || visit(program, *then_body, visiting)
+                    || else_body.is_some_and(|body| visit(program, body, visiting))
+            }
+            ExprKind::Case(case) => {
+                case.scrutinee
+                    .is_some_and(|scrutinee| visit(program, scrutinee, visiting))
+                    || case.arms.iter().any(|arm| {
+                        arm.conditions
+                            .iter()
+                            .any(|condition| visit(program, *condition, visiting))
+                            || visit(program, arm.body, visiting)
+                    })
+                    || case
+                        .else_body
+                        .is_some_and(|body| visit(program, body, visiting))
+            }
+            ExprKind::Loop(_) | ExprKind::Begin(_) => true,
+            ExprKind::Nil
+            | ExprKind::Literal(_)
+            | ExprKind::Read(_)
+            | ExprKind::Closure(_)
+            | ExprKind::Return(None)
+            | ExprKind::Break(None)
+            | ExprKind::Next(None)
+            | ExprKind::Retry
+            | ExprKind::Definition(_)
+            | ExprKind::Unsupported(_) => false,
+        };
+        visiting.remove(&expression_id);
+        result
+    }
+
+    visit(program, expression, &mut HashSet::new())
 }
 
 fn body_allows_return(program: &hir::Program, body: &hir::Body) -> bool {
@@ -132,7 +236,7 @@ fn expr_transfer_failure(
         ExprKind::Hash(elements) => {
             for element in elements {
                 match element {
-                    HashElement::Pair { key, value } => {
+                    HashElement::Pair { key, value, .. } => {
                         expr_transfer_failure(program, *key, visiting, loop_depth, context)?;
                         expr_transfer_failure(program, *value, visiting, loop_depth, context)?;
                     }
@@ -355,19 +459,31 @@ fn expr_transfer_failure(
                 return Err(failure(program, expression, "missing HIR declaration"));
             };
             match declaration.kind {
-                hir::DeclarationKind::Method { .. } if context.allow_method_definitions => Ok(()),
-                hir::DeclarationKind::Method { .. } => Err(failure(
-                    program,
-                    expression,
-                    "method declaration is outside this owned body transfer",
-                )),
-                hir::DeclarationKind::Class { .. }
-                | hir::DeclarationKind::Module { .. }
-                | hir::DeclarationKind::SingletonClass { .. } => Err(failure(
-                    program,
-                    expression,
-                    "class/module declaration effects are not represented by owned CFG transfer",
-                )),
+                hir::DeclarationKind::Method { body, .. } => {
+                    body_transfer_failure(program, body).map_or(Ok(()), Err)
+                }
+                hir::DeclarationKind::Class {
+                    superclass, body, ..
+                } => {
+                    if let Some(superclass) = superclass {
+                        expr_transfer_failure(program, superclass, visiting, loop_depth, context)?;
+                    }
+                    if let Some(body) = body {
+                        if let Some(failure) = body_transfer_failure(program, body) {
+                            return Err(failure);
+                        }
+                    }
+                    Ok(())
+                }
+                hir::DeclarationKind::Module { body, .. }
+                | hir::DeclarationKind::SingletonClass { body, .. } => {
+                    if let Some(body) = body {
+                        if let Some(failure) = body_transfer_failure(program, body) {
+                            return Err(failure);
+                        }
+                    }
+                    Ok(())
+                }
             }
         }
         ExprKind::Unsupported(unsupported) => {

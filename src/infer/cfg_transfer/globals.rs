@@ -22,8 +22,10 @@ pub(super) fn seed_cfg_global_state(
             continue;
         };
         let name = name.as_str();
-        let type_ = analyzer.globals.get(name).cloned().unwrap_or(Type::Any);
-        environment.bind(cfg_global_refinement_key(name), type_);
+        if !environment.contains(&cfg_global_refinement_key(name)) {
+            let type_ = analyzer.globals.get(name).cloned().unwrap_or(Type::Any);
+            environment.bind(cfg_global_refinement_key(name), type_);
+        }
     }
 }
 

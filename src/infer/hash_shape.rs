@@ -106,7 +106,11 @@ pub(super) fn from_cfg_hash(
     for (hir_element, cfg_element) in hir_elements.iter().zip(elements) {
         match (hir_element, cfg_element) {
             (
-                HashElement::Pair { key, value: _ },
+                HashElement::Pair {
+                    key,
+                    value: _,
+                    shorthand,
+                },
                 cfg::HashOperand::Pair {
                     key: key_id,
                     value: value_id,
@@ -114,6 +118,11 @@ pub(super) fn from_cfg_hash(
             ) => {
                 let value = values.get(value_id.0 as usize).cloned().flatten()?;
                 if let Some(key) = literal_key(program, *key) {
+                    let value = if *shorthand {
+                        Type::union([Type::Nil, value])
+                    } else {
+                        value
+                    };
                     shape.insert(key, value);
                 } else {
                     shape.unknown_value = Some(match shape.unknown_value.take() {

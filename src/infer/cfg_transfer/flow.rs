@@ -30,11 +30,22 @@ pub(super) fn conditional_reachability(
     source: &Type,
     state: &BlockState,
 ) -> (bool, bool) {
-    let condition = graph
+    let conditional = graph
         .conditionals
         .iter()
         .find(|conditional| conditional.truthy == truthy && conditional.falsy == falsy)
+        .cloned();
+    let condition = conditional
+        .as_ref()
         .map(|conditional| conditional.condition);
+    if conditional.is_some_and(|conditional| conditional.loop_condition)
+        && !source.truthy_part().is_never()
+    {
+        // Ruby's while/until expression type includes nil for the path where
+        // the loop does not produce a break value. Keep that path alive when
+        // a truthy condition would otherwise prune the normal loop exit.
+        return (true, true);
+    }
     if let Some(hir::ExprKind::Read(Read::Local(local))) = condition
         .and_then(|condition| analyzer.program.hir_program.expression(condition))
         .map(|expression| &expression.kind)

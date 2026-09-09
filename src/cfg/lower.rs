@@ -422,8 +422,32 @@ impl<'program> Builder<'program> {
             ExprKind::Next(value) => self.lower_next(expression, block, value),
             ExprKind::Retry => self.lower_retry(expression, block, span),
             ExprKind::Definition(declaration) => {
-                let value = self.emit(block, span, OperationKind::Definition { declaration }, true);
-                self.normal(expression, block, value)
+                let value_expression = self.program.declaration(declaration).and_then(
+                    |declaration| match &declaration.kind {
+                        hir::DeclarationKind::Class { superclass, .. } => *superclass,
+                        hir::DeclarationKind::SingletonClass { expression, .. } => {
+                            Some(*expression)
+                        }
+                        hir::DeclarationKind::Method { .. }
+                        | hir::DeclarationKind::Module { .. } => None,
+                    },
+                );
+                let (block, value) = if let Some(value_expression) = value_expression {
+                    let flow = self.lower_expr(value_expression, block);
+                    if !flow.reachable {
+                        return self.abrupt(expression, flow.block);
+                    }
+                    (flow.block, flow.value)
+                } else {
+                    (block, None)
+                };
+                let result = self.emit(
+                    block,
+                    span,
+                    OperationKind::Definition { declaration, value },
+                    true,
+                );
+                self.normal(expression, block, result)
             }
             ExprKind::Unsupported(unsupported) => {
                 self.cfg.unsupported_spans.push(span);
@@ -898,7 +922,7 @@ impl<'program> Builder<'program> {
         let mut lowered = Vec::new();
         for element in elements {
             match element {
-                hir::HashElement::Pair { key, value } => {
+                hir::HashElement::Pair { key, value, .. } => {
                     let key_flow = self.lower_expr(key, block);
                     if !key_flow.reachable {
                         return self.abrupt(expression, key_flow.block);
@@ -966,6 +990,7 @@ impl<'program> Builder<'program> {
             truthy: then_block,
             falsy: else_block,
             join,
+            loop_condition: false,
         });
 
         let then_flow = self.lower_expr(then_body, then_block);
@@ -1523,6 +1548,7 @@ impl<'program> Builder<'program> {
                 truthy,
                 falsy,
                 join: exit,
+                loop_condition: true,
             });
             match loop_expr.kind {
                 LoopKind::Until => {

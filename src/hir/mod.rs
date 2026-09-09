@@ -352,8 +352,15 @@ pub enum ArrayElement {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HashElement {
-    Pair { key: ExprId, value: ExprId },
-    Splat { value: ExprId, span: Span },
+    Pair {
+        key: ExprId,
+        value: ExprId,
+        shorthand: bool,
+    },
+    Splat {
+        value: ExprId,
+        span: Span,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -453,6 +460,7 @@ pub enum DeclarationKind {
     },
     Class {
         name: ConstantPath,
+        superclass: Option<ExprId>,
         body: Option<BodyId>,
     },
     Module {
@@ -460,6 +468,7 @@ pub enum DeclarationKind {
         body: Option<BodyId>,
     },
     SingletonClass {
+        expression: ExprId,
         body: Option<BodyId>,
     },
 }

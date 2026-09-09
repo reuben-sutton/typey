@@ -21,7 +21,7 @@ impl<'src> Analyzer<'src> {
                 }
             }),
             ExprKind::Hash(elements) => elements.iter().all(|element| match element {
-                HashElement::Pair { key, value } => {
+                HashElement::Pair { key, value, .. } => {
                     Self::owned_value_tree_supported(program, *key)
                         && Self::owned_value_tree_supported(program, *value)
                 }
@@ -137,6 +137,7 @@ impl<'src> Analyzer<'src> {
                 HashElement::Pair {
                     key: key_id,
                     value: value_id,
+                    ..
                 } => {
                     key = key.join(&self.eval_owned_value(key_id, environment).type_);
                     value = value.join(&self.eval_owned_value(value_id, environment).type_);

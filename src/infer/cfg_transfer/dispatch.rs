@@ -116,6 +116,36 @@ pub(super) fn transfer_receiver_call(
         });
     }
 
+    let is_struct_constructor = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+        .and_then(|expression| match &expression.kind {
+            crate::hir::ExprKind::Call(call) => match call.receiver {
+                crate::hir::Receiver::Explicit(receiver) => analyzer
+                    .program
+                    .hir_program
+                    .expression(receiver)
+                    .and_then(|receiver| match &receiver.kind {
+                        crate::hir::ExprKind::Read(crate::hir::Read::Constant(name)) => {
+                            Some(name.as_str().trim_start_matches("::") == "Struct")
+                        }
+                        _ => None,
+                    }),
+                _ => Some(false),
+            },
+            _ => None,
+        })
+        .unwrap_or(false);
+    if name == "new" && is_struct_constructor {
+        analyzer.observe_struct_constructor("Struct", arguments);
+        return Ok(ReceiverTransfer {
+            type_: Analyzer::class_object_type("Struct"),
+            block_result: None,
+            untyped_origin: UntypedOrigin::InferredMethod,
+            missing_method: false,
+        });
+    }
+
     if name == "new" {
         if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
             if let Some(owner) = Analyzer::named_type_name(&instance) {
@@ -223,6 +253,21 @@ pub(super) fn transfer_receiver_call(
             }
         }
     }
+
+    // Struct accessors are generated from the fields observed at construction
+    // time. Resolve them before the ordinary method table: a broad RBI method
+    // entry must not erase the concrete field contract.
+    if let Some(owner) = Analyzer::named_type_name(receiver) {
+        if let Some(type_) = analyzer.struct_field_type(&owner, name, environment) {
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result: None,
+                untyped_origin: UntypedOrigin::InferredMethod,
+                missing_method: false,
+            });
+        }
+    }
+
     let key = analyzer.receiver_method_key(None, receiver, name, environment);
     if let Some(key) = key {
         analyzer.record_method_dependency(&key, environment);
@@ -270,14 +315,6 @@ pub(super) fn transfer_receiver_call(
     }
 
     if let Some(owner) = Analyzer::named_type_name(receiver) {
-        if let Some(type_) = analyzer.struct_field_type(&owner, name, environment) {
-            return Ok(ReceiverTransfer {
-                type_,
-                block_result: None,
-                untyped_origin: UntypedOrigin::InferredMethod,
-                missing_method: false,
-            });
-        }
         if let Some(type_) = analyzer.inferred_accessor_ivar_type(&owner, name, false, environment)
         {
             return Ok(ReceiverTransfer {
