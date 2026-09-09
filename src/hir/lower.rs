@@ -297,6 +297,42 @@ impl<'src> Lowerer<'src> {
             return self.lower_singleton_class(node, &singleton);
         }
 
+        if let Some(write) = node.as_multi_write_node() {
+            let lefts = write
+                .lefts()
+                .into_iter()
+                .map(|target| self.lower_for_target(&target))
+                .collect::<Option<Vec<_>>>();
+            let rest = match write
+                .rest()
+                .and_then(|rest| rest.as_splat_node().and_then(|splat| splat.expression()))
+            {
+                Some(target) => match self.lower_for_target(&target) {
+                    Some(target) => Some(target),
+                    None => return self.unsupported(node),
+                },
+                None => None,
+            };
+            let rights = write
+                .rights()
+                .into_iter()
+                .map(|target| self.lower_for_target(&target))
+                .collect::<Option<Vec<_>>>();
+            if let (Some(lefts), Some(rights)) = (lefts, rights) {
+                let value = self.lower_node(&write.value());
+                return self.push_expr(
+                    node,
+                    ExprKind::MultiAssign {
+                        lefts,
+                        rest,
+                        rights,
+                        value,
+                    },
+                );
+            }
+            return self.unsupported(node);
+        }
+
         // Assignment nodes must be recognized before ordinary calls. Their
         // target and operator are semantically significant and must not be
         // flattened into a setter send during lowering.

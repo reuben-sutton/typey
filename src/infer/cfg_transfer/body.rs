@@ -10,12 +10,13 @@ use super::preflight;
 use crate::cfg;
 use crate::hir::{self, Read};
 use crate::types::Type;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub(super) struct BodyTransfer<'analyzer, 'src> {
     pub(super) analyzer: &'analyzer mut Analyzer<'src>,
     pub(super) context: BodyContext,
     pub(super) fixed_array_elements: HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
+    pub(super) fixed_shape_array_elements: HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
     pub(super) normal_type: Type,
     pub(super) abrupt: OutcomeTypes,
     pub(super) terminal_flow: Flow,
@@ -129,7 +130,7 @@ impl<'src> Analyzer<'src> {
             .flat_map(|block| block.operations.iter())
             .filter_map(|operation| {
                 let result = operation.result?;
-                let cfg::OperationKind::BuildArray { elements } = &operation.kind else {
+                let cfg::OperationKind::BuildArray { elements, .. } = &operation.kind else {
                     return None;
                 };
                 let elements = elements
@@ -142,6 +143,7 @@ impl<'src> Analyzer<'src> {
                 Some((result, elements))
             })
             .collect::<HashMap<_, _>>();
+        let fixed_array_elements = fixed_array_candidates.clone();
         let splatted_values = graph
             .blocks
             .iter()
@@ -155,8 +157,8 @@ impl<'src> Analyzer<'src> {
                 cfg::ArgumentOperand::Splat(value) => Some(*value),
                 _ => None,
             })
-            .collect::<HashSet<_>>();
-        let fixed_array_elements = fixed_array_candidates
+            .collect::<std::collections::HashSet<_>>();
+        let fixed_shape_array_elements = fixed_array_candidates
             .into_iter()
             .filter(|(value, _)| splatted_values.contains(value))
             .collect::<HashMap<_, _>>();
@@ -168,6 +170,7 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::Read { .. }
                         | cfg::OperationKind::ReadSpecial { .. }
                         | cfg::OperationKind::Write { .. }
+                        | cfg::OperationKind::MultiWrite { .. }
                         | cfg::OperationKind::Call { .. }
                         | cfg::OperationKind::MakeClosure { .. }
                         | cfg::OperationKind::BuildArray { .. }
@@ -215,6 +218,7 @@ impl<'src> Analyzer<'src> {
             analyzer: self,
             context,
             fixed_array_elements,
+            fixed_shape_array_elements,
             normal_type: Type::Never,
             abrupt: OutcomeTypes::default(),
             terminal_flow: Flow::empty(),
@@ -354,6 +358,39 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         &mut next.environment,
                     )
                 }
+                cfg::OperationKind::MultiWrite {
+                    value,
+                    lefts,
+                    rest,
+                    rights,
+                } => {
+                    let actual = next
+                        .value(*value)
+                        .ok_or_else(|| format!("missing multi-write operand {:?}", value))?;
+                    let value_type = if let Some(elements) = self.fixed_array_elements.get(value) {
+                        let elements = elements
+                            .iter()
+                            .map(|element| {
+                                next.value(*element).ok_or_else(|| {
+                                    format!("missing fixed array element {:?}", element)
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Type::Tuple(elements)
+                    } else {
+                        actual
+                    };
+                    super::assignment::transfer_multi_write(
+                        self.analyzer,
+                        site,
+                        value_type,
+                        lefts,
+                        rest.as_ref(),
+                        rights,
+                        &mut next.environment,
+                    )
+                    .ok_or_else(|| format!("multi-write transfer failed at {:?}", operation.span))?
+                }
                 cfg::OperationKind::BindForTarget { collection, target } => {
                     let collection_type = next.value(*collection).ok_or_else(|| {
                         format!("missing for collection operand {:?}", collection)
@@ -415,14 +452,18 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         format!("call has no normal result at {:?}", operation.span)
                     })?
                 }
-                cfg::OperationKind::BuildArray { elements } => super::construction::transfer_array(
+                cfg::OperationKind::BuildArray {
+                    elements,
+                    preserve_fixed_shape,
+                } => super::construction::transfer_array(
                     self.analyzer,
                     site,
                     elements,
                     &next.values,
-                    operation
-                        .result
-                        .is_some_and(|result| self.fixed_array_elements.contains_key(&result)),
+                    *preserve_fixed_shape
+                        || operation.result.is_some_and(|result| {
+                            self.fixed_shape_array_elements.contains_key(&result)
+                        }),
                     operation.defer_inline_assertion,
                     &mut next.environment,
                 )

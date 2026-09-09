@@ -237,6 +237,12 @@ pub enum ExprKind {
         value: ExprId,
         operator: AssignOperator,
     },
+    MultiAssign {
+        lefts: Vec<AssignTarget>,
+        rest: Option<AssignTarget>,
+        rights: Vec<AssignTarget>,
+        value: ExprId,
+    },
     Call(Call),
     Array(Vec<ArrayElement>),
     Hash(Vec<HashElement>),

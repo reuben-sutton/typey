@@ -368,6 +368,12 @@ impl<'program> Builder<'program> {
                 operator,
                 ..
             } => self.lower_assignment(expression, block, span, target, value, operator),
+            ExprKind::MultiAssign {
+                lefts,
+                rest,
+                rights,
+                value,
+            } => self.lower_multi_assignment(expression, block, span, lefts, rest, rights, value),
             ExprKind::Call(call) => self.lower_call(expression, block, call),
             ExprKind::Array(elements) => self.lower_array(expression, block, span, elements),
             ExprKind::Hash(elements) => self.lower_hash(expression, block, span, elements),
@@ -841,7 +847,10 @@ impl<'program> Builder<'program> {
         let value = self.emit(
             block,
             span,
-            OperationKind::BuildArray { elements: lowered },
+            OperationKind::BuildArray {
+                elements: lowered,
+                preserve_fixed_shape: false,
+            },
             true,
         );
         self.normal(expression, block, value)
@@ -1086,6 +1095,55 @@ impl<'program> Builder<'program> {
                 let computed = computed.expect("binary assignment produces a value");
                 let written = self.write_runtime(rhs_flow.block, span, runtime, computed, false);
                 self.normal(expression, written.0, written.1)
+            }
+        }
+    }
+
+    fn lower_multi_assignment(
+        &mut self,
+        expression: ExprId,
+        block: BlockId,
+        span: Span,
+        lefts: Vec<AssignTarget>,
+        rest: Option<AssignTarget>,
+        rights: Vec<AssignTarget>,
+        value: ExprId,
+    ) -> Flow {
+        let value_flow = self.lower_expr(value, block);
+        if !value_flow.reachable {
+            return self.abrupt(expression, value_flow.block);
+        }
+        let value = value_flow
+            .value
+            .expect("multi-assignment RHS produces a value");
+        self.mark_array_value_fixed_shape(value);
+        let result = self.emit(
+            value_flow.block,
+            span,
+            OperationKind::MultiWrite {
+                value,
+                lefts,
+                rest,
+                rights,
+            },
+            true,
+        );
+        self.normal(expression, value_flow.block, result)
+    }
+
+    fn mark_array_value_fixed_shape(&mut self, value: ValueId) {
+        for block in &mut self.cfg.blocks {
+            for operation in &mut block.operations {
+                if operation.result != Some(value) {
+                    continue;
+                }
+                if let OperationKind::BuildArray {
+                    preserve_fixed_shape,
+                    ..
+                } = &mut operation.kind
+                {
+                    *preserve_fixed_shape = true;
+                }
             }
         }
     }

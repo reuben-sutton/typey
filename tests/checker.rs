@@ -902,6 +902,23 @@ fn preserves_positional_types_in_multi_assignment_rhs_tuples() {
 }
 
 #[test]
+fn transfers_multi_assignment_through_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/multi_assignment_tuple.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+}
+
+#[test]
 fn preserves_tuple_components_through_conditional_multi_assignment() {
     let result = check_fixture("tests/fixtures/conditional_tuple_multi_assignment.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

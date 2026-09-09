@@ -122,6 +122,12 @@ pub enum OperationKind {
         value: ValueId,
         logical: bool,
     },
+    MultiWrite {
+        value: ValueId,
+        lefts: Vec<hir::AssignTarget>,
+        rest: Option<hir::AssignTarget>,
+        rights: Vec<hir::AssignTarget>,
+    },
     Call {
         receiver: ReceiverOperand,
         name: Name,
@@ -134,6 +140,7 @@ pub enum OperationKind {
     },
     BuildArray {
         elements: Vec<ArrayOperand>,
+        preserve_fixed_shape: bool,
     },
     BuildHash {
         elements: Vec<HashOperand>,

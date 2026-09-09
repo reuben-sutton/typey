@@ -222,6 +222,31 @@ fn expr_transfer_failure(
             }
             expr_transfer_failure(program, *value, visiting, loop_depth, context)
         }
+        ExprKind::MultiAssign {
+            lefts,
+            rest,
+            rights,
+            value,
+        } => {
+            if lefts
+                .iter()
+                .chain(rest.iter())
+                .chain(rights.iter())
+                .any(|target| {
+                    matches!(
+                        target,
+                        hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. }
+                    )
+                })
+            {
+                return Err(failure(
+                    program,
+                    expression,
+                    "multi-assignment target requires a setter call",
+                ));
+            }
+            expr_transfer_failure(program, *value, visiting, loop_depth, context)
+        }
         ExprKind::Sequence(expressions) => {
             for expression in expressions {
                 expr_transfer_failure(program, *expression, visiting, loop_depth, context)?;

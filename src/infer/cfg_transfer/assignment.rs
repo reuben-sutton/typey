@@ -86,3 +86,41 @@ pub(super) fn transfer_for_target<'src>(
         environment,
     ))
 }
+
+pub(super) fn transfer_multi_write<'src>(
+    analyzer: &mut Analyzer<'src>,
+    site: SourceSite,
+    value_type: Type,
+    lefts: &[hir::AssignTarget],
+    rest: Option<&hir::AssignTarget>,
+    rights: &[hir::AssignTarget],
+    environment: &mut Environment,
+) -> Option<Type> {
+    let known_length = match &value_type {
+        Type::Tuple(elements) => Some(elements.len()),
+        _ => None,
+    };
+    for (index, target) in lefts.iter().enumerate() {
+        let element_type = analyzer.multi_assignment_element_type(&value_type, index, known_length);
+        transfer_for_target(analyzer, site, target, element_type, environment)?;
+    }
+    if let Some(target) = rest {
+        let element_type = analyzer.array_element_type(&value_type);
+        transfer_for_target(
+            analyzer,
+            site,
+            target,
+            Type::union([Type::Nil, Type::Array(Box::new(element_type))]),
+            environment,
+        )?;
+    }
+    let right_start = known_length
+        .map(|length| lefts.len().max(length.saturating_sub(rights.len())))
+        .unwrap_or(0);
+    for (index, target) in rights.iter().enumerate() {
+        let element_type =
+            analyzer.multi_assignment_element_type(&value_type, right_start + index, known_length);
+        transfer_for_target(analyzer, site, target, element_type, environment)?;
+    }
+    Some(value_type)
+}
