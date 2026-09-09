@@ -580,12 +580,23 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
                         type_
                     }
-                    cfg::OperationKind::MakeClosure { closure } => self
-                        .analyzer
-                        .cfg_owned_closure_type(*closure, &next.environment)
-                        .ok_or_else(|| {
-                            format!("closure transfer failed at {:?}", operation.span)
-                        })?,
+                    cfg::OperationKind::MakeClosure { closure } => {
+                        let type_ = self
+                            .analyzer
+                            .cfg_owned_closure_type(*closure, &next.environment)
+                            .ok_or_else(|| {
+                                format!("closure transfer failed at {:?}", operation.span)
+                            })?;
+                        if operation.defer_inline_assertion {
+                            type_
+                        } else {
+                            self.analyzer.apply_inline_assertion_in_environment_at(
+                                site,
+                                type_,
+                                &next.environment,
+                            )
+                        }
+                    }
                     _ => return Err(format!("unsupported CFG operation at {:?}", operation.span)),
                 };
                 if !self.suppress_internal_assignment_record(operation)

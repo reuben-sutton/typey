@@ -6,6 +6,7 @@
 //! contracts and then the current method's owner.
 
 use super::super::{Analyzer, CallArguments, Environment, Eval, OwnedCallInput, UntypedOrigin};
+use crate::cfg;
 use crate::types::Type;
 
 pub(super) struct ContextTransfer {
@@ -79,6 +80,18 @@ pub(super) fn transfer_implicit_call(
     values: &[Option<Type>],
     environment: &mut Environment,
 ) -> Result<ContextTransfer, String> {
+    if matches!(input.name.as_str(), "lambda" | "proc") {
+        if let Some(cfg::BlockOperand::Inline(closure)) = input.block.as_ref() {
+            let type_ = analyzer
+                .cfg_owned_closure_type(*closure, environment)
+                .ok_or_else(|| "proc/lambda closure transfer failed".to_owned())?;
+            return Ok(ContextTransfer {
+                type_,
+                block_result: None,
+                untyped_origin: UntypedOrigin::Propagated,
+            });
+        }
+    }
     if let Some(type_) = analyzer.global_call_type(input.name.as_str(), &arguments.argument_types) {
         return Ok(ContextTransfer {
             type_,

@@ -7343,6 +7343,14 @@ end
 "#;
     let result = check(source, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
 }
 
 #[test]
