@@ -94,12 +94,9 @@ pub(super) fn transfer_call(
     } else {
         None
     };
-    let (type_, untyped_origin) = if let Some(result) = super::intrinsics::transfer_intrinsic_call(
-        analyzer,
-        &input,
-        &receiver_type,
-        &call_arguments,
-    ) {
+    let (type_, untyped_origin) = if let Some(result) =
+        super::intrinsics::transfer_intrinsic_call(&input, &receiver_type, &call_arguments)
+    {
         result
     } else if let Some(type_) = dynamic_instance_variable_type {
         (type_, UntypedOrigin::Propagated)
