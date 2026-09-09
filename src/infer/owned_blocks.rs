@@ -26,7 +26,6 @@ impl<'src> Analyzer<'src> {
         _values: &[Option<Type>],
         environment: &mut Environment,
     ) -> Option<(Type, Option<Eval>)> {
-        let class_object = Self::class_object_instance_type(receiver);
         let name = input.name.as_str();
         let is_declaration = matches!(
             name,
@@ -47,6 +46,10 @@ impl<'src> Analyzer<'src> {
                 | "public_constant"
                 | "refine"
         );
+        if !is_declaration && !matches!(name, "define_method" | "define_singleton_method") {
+            return None;
+        }
+        let class_object = Self::class_object_instance_type(receiver);
         if class_object.is_none() {
             return None;
         }
