@@ -19,7 +19,7 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, 419 checker tests,
+The current local gates include 22 CFG tests, 12 HIR tests, 424 checker tests,
 226 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
 checker, local conformance, and upstream smoke gates pass; the upstream suite
 takes about 66 seconds because each fixture reloads the bundled RBI set. The
@@ -303,47 +303,57 @@ The first modularization steps are now in place:
   regression test. Inferred methods called from DSL callbacks no longer treat
   an unevaluated provisional `Never` summary as a guaranteed terminating path.
 
-The latest release Spoom CFG run transferred 8,722 bodies and 34,569 calls with
-zero unsupported-operation fallbacks, zero unsupported edges, and zero legacy
-bridges. It reports 2 diagnostics in 1.91 seconds including repository
-checking (1.36 seconds through the checker); the legacy path reports 4. There
-are now no CFG-only findings. The two remaining differences are legacy-only:
-an unreachable-code diagnostic and a nilable return mismatch. The run reached
-final convergence in four worklist rounds.
+The latest release Spoom CFG run compiled 58,854 HIR bodies and transferred
+8,670 bodies and 34,184 calls with zero unsupported-operation fallbacks, zero
+unsupported edges, and zero legacy bridges. It reports the same 3 diagnostics
+as the recursive path; the CFG run takes 7.23 seconds including repository
+checking versus 7.08 seconds recursively, and reaches final convergence in
+four worklist rounds. The three shared findings are a real nilable `Time`
+argument, an impossible branch under the vendored Prism model, and a nilable
+array comparison result.
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
 semantics in some receiver contexts. On the latest Packwerk regression run,
-the owned path transferred 8,894 bodies and 38,026 calls with zero
-unsupported-operation fallbacks, zero unsupported edges, and zero legacy
-bridges. Its substantive diagnostics match the legacy path (the current totals
-are 22 owned versus 23 recursive because of an unrelated reporting-count
-difference). The `YAML = Psych` standard-library alias is now modeled through
-the owned declaration path, so the earlier 11 YAML diagnostics are gone. The
-remaining Packwerk difference is accounting: the owned path has 119
-application sends without a recorded type, while the recursive path records
-all 1,578 application sends. This is a publication/send-tracking gap, not
-evidence that the owned path is more correct.
+the owned path compiled 73,396 HIR bodies, transferred 8,886 bodies and
+38,024 calls, and reached convergence in four rounds with zero unsupported
+operation, edge, or legacy-bridge fallbacks. Its 22 diagnostics match the
+recursive path exactly. The `YAML = Psych` standard-library alias is modeled
+through the owned declaration path, so the earlier YAML diagnostics are gone.
+The remaining Packwerk difference is accounting: the owned path has 119
+application sends without a recorded type and records 14,382 types, while the
+recursive path records all 1,578 application sends and 41,773 types. This is
+a publication/send-tracking gap, not evidence that the owned path is more
+correct.
 
 The latest full ActiveSupport run is the current large-component boundary:
-27,099 HIR bodies were compiled and 14,198 bodies and 46,124 calls transferred
+27,099 HIR bodies were compiled and 14,247 bodies and 46,255 calls transferred
 across five worklist rounds. Static `undef` is now an owned operation, leaving
 zero unsupported-operation records, zero unsupported-edge fallbacks, zero
 legacy bridges, and zero unsupported HIR handoffs in this component. The CFG
-run reports 583 diagnostics and completes in 164.1 seconds; the fresh legacy
-recursive run reports 700 diagnostics in 162.3 seconds. Runtime is therefore
-approximately at parity, but the 117-diagnostic difference and the reduced CFG
-type publication still require differential classification. The CFG path is
-not yet a replacement: remaining work is primarily the 117-diagnostic/type-
-publication difference, complete `undef` method-removal semantics, the
-remaining parser-backed call and passed/forwarded-block bridges, and making
-CFG the default only after those gates agree.
+run reports 568 diagnostics and 38,834 recorded types in 214.4 seconds; the
+fresh legacy recursive run reports 689 diagnostics and 43,378 recorded types
+in 212.6 seconds. Of the diagnostic sets, 501 findings are shared, 188 are
+recursive-only, and 67 are CFG-only. Runtime is therefore approximately at
+parity, but the diagnostic and type-publication differences still require
+differential classification. CFG is not yet a replacement: the remaining work
+is primarily ActiveSupport differential analysis, owned send/type publication,
+the remaining parser-backed call and passed/forwarded-block bridges, and
+making CFG the default only after those gates agree.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
+
+As of 2026-09-09, the implementation is therefore in the final parity phase,
+not at the exit condition. The checker gate is 424/424, Spoom and Packwerk
+diagnostics agree exactly, and the CFG transfer surface has zero measured
+fallbacks on all three repository checks. What remains is not broad CFG
+coverage: it is reconciling ActiveSupport's 255 non-shared diagnostics,
+restoring the missing owned type publications, and then rerunning the full
+differential gates before retiring the recursive path.
 
 ## Design
 
