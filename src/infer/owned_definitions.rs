@@ -137,6 +137,24 @@ impl<'src> Analyzer<'src> {
             &state,
             &mut method_environment,
         );
+        for parameter in &parameters.parameters {
+            let Some(default_body) = parameter.default_body else {
+                continue;
+            };
+            // A default is evaluated only on the path where its argument is
+            // omitted. Analyze it in a fork so calls and shared dependencies
+            // are published, while local effects join the method's normal
+            // entry state instead of becoming unconditional assignments.
+            let mut default_environment = method_environment.clone();
+            self.eval_cfg_body_owned(
+                self.owned_body_site(default_body),
+                default_body,
+                &mut default_environment,
+                true,
+            )
+            .ok_or_else(|| "parameter default requires a legacy transfer".to_owned())?;
+            method_environment = method_environment.join(&default_environment);
+        }
 
         let previous_expected_return = self.expected_return_type.take();
         self.expected_return_type = if state.explicit && !state.is_void {

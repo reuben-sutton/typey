@@ -312,6 +312,19 @@ end
     assert!(program.expressions.iter().any(|expression| {
         matches!(&expression.kind, ExprKind::Call(call) if call.name.as_str() == "expand_path")
     }));
+    let default_body = program
+        .bodies
+        .iter()
+        .flat_map(|body| body.parameters.parameters.iter())
+        .find_map(|parameter| parameter.default_body)
+        .expect("default body");
+    assert!(matches!(
+        program
+            .body(default_body)
+            .and_then(|body| program.expression(body.root))
+            .map(|expression| &expression.kind),
+        Some(ExprKind::Call(call)) if call.name.as_str() == "expand_path"
+    ));
 }
 
 #[test]

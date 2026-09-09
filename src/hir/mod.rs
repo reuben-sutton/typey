@@ -160,6 +160,10 @@ pub struct Parameter {
     pub name: Option<Name>,
     pub kind: ParameterKind,
     pub span: Span,
+    /// An optional or optional-keyword parameter's default expression is an
+    /// owned body so it can be transferred with the same CFG semantics as
+    /// the method body. Other parameter kinds have no default body.
+    pub default_body: Option<BodyId>,
 }
 
 /// The parameter list for a body or closure.

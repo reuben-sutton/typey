@@ -1709,12 +1709,36 @@ impl<'src> Lowerer<'src> {
             .as_deref()
             .filter(|name| required_name || !name.is_empty())
             .map(|name| self.new_local(name));
+        let default_body = match kind {
+            ParameterKind::Optional => node
+                .as_optional_parameter_node()
+                .map(|parameter| self.lower_parameter_default(parameter.value())),
+            ParameterKind::OptionalKeyword => node
+                .as_optional_keyword_parameter_node()
+                .map(|parameter| self.lower_parameter_default(parameter.value())),
+            _ => None,
+        };
         parameters.parameters.push(Parameter {
             local,
             name: name.map(Name::new),
             kind,
             span: self.span(node),
+            default_body,
         });
+    }
+
+    fn lower_parameter_default(&mut self, node: Node<'_>) -> BodyId {
+        let span = self.span(&node);
+        let root = self.lower_node(&node);
+        self.push_body(
+            BodyOwner::Method {
+                name: Name::new("<parameter-default>"),
+                singleton: false,
+            },
+            Parameters::default(),
+            root,
+            span,
+        )
     }
 
     fn lower_definition(

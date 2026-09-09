@@ -2623,6 +2623,36 @@ end
 }
 
 #[test]
+fn transfers_optional_parameter_defaults_through_owned_cfg() {
+    let source = r#"# typed: true
+
+class UsesDefault
+  def initialize(value = "default".upcase)
+    value
+  end
+end
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    let send = "\"default\".upcase";
+    let start = source.find(send).expect("default send");
+    let end = start + send.len();
+    assert!(cfg.types.iter().any(|inferred| {
+        inferred.start == start
+            && inferred.end == end
+            && inferred.is_send
+            && inferred.type_ == Type::String
+    }));
+}
+
+#[test]
 fn infers_generic_hash_types_from_nested_pair_arrays() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs load");
