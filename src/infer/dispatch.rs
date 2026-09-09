@@ -7,6 +7,20 @@ use ruby_prism::Node;
 use std::collections::BTreeSet;
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn common_method_helper_shadowed(
+        &self,
+        receiver: &Type,
+        name: &str,
+        environment: &Environment,
+    ) -> bool {
+        matches!(name, "method" | "public_method" | "singleton_method")
+            && Self::class_object_instance_type(receiver).is_some()
+            && self
+                .receiver_method_key(None, receiver, name, environment)
+                .and_then(|key| self.resolve_method_key(&key))
+                .is_some()
+    }
+
     pub(super) fn eval_dynamic_method_body(
         &mut self,
         name: &str,

@@ -942,13 +942,20 @@ impl<'src> Analyzer<'src> {
                             all_normal &= block_result.callback_has_normal_path();
                         }
                         let block_return_type = block_result.as_ref().map(Self::block_value_type);
-                        let type_ = if let Some(type_) = self.eval_node_helpers_method(
+                        let helper_type = (!self.common_method_helper_shadowed(
                             &dispatch_receiver_type,
                             &name,
-                            argument_types,
-                        ) {
-                            type_
-                        } else {
+                            environment,
+                        ))
+                        .then(|| {
+                            self.eval_node_helpers_method(
+                                &dispatch_receiver_type,
+                                &name,
+                                argument_types,
+                            )
+                        })
+                        .flatten();
+                        let type_ = helper_type.unwrap_or_else(|| {
                             self.invoke_signature(
                                 node,
                                 &name,
@@ -957,7 +964,7 @@ impl<'src> Analyzer<'src> {
                                 Some(&dispatch_receiver_type),
                                 block_return_type.as_ref(),
                             )
-                        };
+                        });
                         let type_ = self.widen_recursive_call_return(&key, type_, environment);
                         let type_ = if name == "new"
                             && Self::class_object_instance_type(&dispatch_receiver_type).is_some()

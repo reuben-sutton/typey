@@ -153,9 +153,14 @@ pub(super) fn transfer_receiver_call(
         });
     }
 
-    if let Some(type_) =
+    let helper_type = if analyzer.common_method_helper_shadowed(receiver, name, environment) {
+        // An explicit singleton method shadows Kernel#method on a class
+        // object. Let the declared method path below handle the collision.
+        None
+    } else {
         analyzer.eval_node_helpers_method(receiver, name, &arguments.argument_types)
-    {
+    };
+    if let Some(type_) = helper_type {
         return Ok(ReceiverTransfer {
             type_,
             block_result: None,
