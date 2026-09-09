@@ -9,8 +9,8 @@
 
 use super::super::hash_shape::HashShape;
 use super::super::{
-    proc_parts, Analyzer, CallArguments, Environment, Eval, MethodKey, OwnedCallInput, SourceSite,
-    UntypedOrigin,
+    name_matches, proc_parts, Analyzer, CallArguments, Environment, Eval, MethodKey,
+    OwnedCallInput, SourceSite, UntypedOrigin,
 };
 use crate::types::Type;
 
@@ -124,6 +124,29 @@ pub(super) fn transfer_receiver_call(
             untyped_origin: UntypedOrigin::Propagated,
             missing_method: false,
         });
+    }
+
+    // Psych's generated gem RBI exposes these methods without useful return
+    // signatures. Ruby's `YAML` constant is an alias of `Psych`, so preserve
+    // the same concrete standard-library contracts as the recursive path
+    // before an untyped declaration can win ordinary method dispatch.
+    let psych_receiver = Analyzer::class_object_instance_type(receiver).is_some_and(|instance| {
+        Analyzer::named_type_name(&instance)
+            .is_some_and(|name| name_matches(&name, "Psych") || name_matches(&name, "YAML"))
+    });
+    if psych_receiver {
+        let type_ = match name {
+            "dump" if arguments.argument_types.len() == 1 => Some(Type::String),
+            _ => None,
+        };
+        if let Some(type_) = type_ {
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result: None,
+                untyped_origin: UntypedOrigin::FallbackCall,
+                missing_method: false,
+            });
+        }
     }
 
     if matches!(name, "include" | "prepend" | "extend")
@@ -424,6 +447,19 @@ pub(super) fn transfer_receiver_call(
                 missing_method: false,
             });
         }
+    }
+
+    // If no Psych declaration was available, retain the recursive path's
+    // gradual fallback for dynamically shaped YAML documents. An explicit
+    // Psych RBI method has already returned above, so this does not turn an
+    // intentionally untyped declaration into a spurious nilability error.
+    if psych_receiver && matches!(name, "load" | "load_file") {
+        return Ok(ReceiverTransfer {
+            type_: Type::union([Type::Nil, Type::Object]),
+            block_result: None,
+            untyped_origin: UntypedOrigin::FallbackCall,
+            missing_method: false,
+        });
     }
 
     if let Some(owner) = Analyzer::named_type_name(receiver) {

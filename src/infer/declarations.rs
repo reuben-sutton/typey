@@ -655,6 +655,10 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         let name = self.constant_assignment_name(&prism::text(self.source, &target.as_node()));
         if let Some(type_) = self.parse_typed_constant(&node.value()) {
             self.declarations.constants.insert(name.clone(), type_);
+        } else if let Some(target) = self.constant_alias_target(&node.value()) {
+            self.declarations
+                .constants
+                .insert(name.clone(), Self::class_object_type(&target));
         }
         self.register_type_alias(name, &node.value());
         ruby_prism::visit_constant_path_write_node(self, node);
@@ -673,6 +677,10 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
         let name = self.constant_assignment_name(&constant_name);
         if let Some(type_) = self.parse_typed_constant(&node.value()) {
             self.declarations.constants.insert(name.clone(), type_);
+        } else if let Some(target) = self.constant_alias_target(&node.value()) {
+            self.declarations
+                .constants
+                .insert(name.clone(), Self::class_object_type(&target));
         }
         self.register_type_alias(name, &node.value());
 
@@ -1256,6 +1264,29 @@ impl MethodRegistrar<'_> {
             .into_iter()
             .nth(1)
             .map(|argument| signature::parse_type(&prism::text(self.source, &argument)))
+    }
+
+    /// RBI files commonly expose a standard-library namespace through a
+    /// constant alias (`YAML = Psych`). RBI bodies are declaration input and
+    /// are not executed during inference, so retain the class-object identity
+    /// of a statically named RHS while registering the constant.
+    fn constant_alias_target<'node>(&self, value: &Node<'node>) -> Option<String> {
+        let value_text = prism::text(self.source, value);
+        let text = value_text.trim();
+        let target = text.strip_prefix("::").unwrap_or(text);
+        (!target.is_empty()
+            && target.split("::").all(|part| {
+                !part.is_empty()
+                    && part.as_bytes()[0].is_ascii_uppercase()
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            }))
+        .then(|| target.to_owned())
+    }
+
+    fn class_object_type(target: &str) -> Type {
+        Type::Named("Class".to_owned(), vec![Type::named(target)])
     }
 
     fn parse_generic_member<'node>(&self, value: &Node<'node>) -> Option<GenericMember> {

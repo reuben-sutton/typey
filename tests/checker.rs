@@ -7756,6 +7756,39 @@ T.reveal_type(YAML.load_file("config.yml"))
 }
 
 #[test]
+fn transfers_rbi_constant_aliases_through_owned_cfg() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_rbi_constant_alias.rb").expect("fixture");
+    files.push(WorkspaceFile::new("cfg_rbi_constant_aliases.rb", source));
+    let result = check_workspace(
+        &files,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .diagnostic
+            .message
+            .contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .diagnostic
+            .message
+            .contains("Revealed type: `T.untyped`")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn narrows_ast_nodes_after_string_predicates() {
     let source = r#"
 module NodeHelpers
