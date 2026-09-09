@@ -233,6 +233,30 @@ impl<'src> Analyzer<'src> {
                 | Type::AttachedClassOf(_) => Type::Any,
             });
         }
+        if Self::class_object_instance_type(receiver).is_some() {
+            match name {
+                "name" => return Some(Type::union([Type::Nil, Type::String])),
+                "===" => return Some(Type::bool()),
+                "const_source_location" => {
+                    return Some(Type::union([
+                        Type::Nil,
+                        Type::Tuple(vec![Type::String, Type::Integer]),
+                    ]));
+                }
+                _ => {}
+            }
+        }
+        match name {
+            "to_yaml" => return Some(Type::String),
+            "freeze" | "dup" | "clone" => return Some(receiver.clone()),
+            "id" | "object_id" | "hash" => return Some(Type::Integer),
+            "respond_to?" | "frozen?" | "nil?" | "is_a?" | "kind_of?" | "instance_of?" | "=="
+            | "!=" | "equal?" | "eql?" | "!" => return Some(Type::bool()),
+            "to_s" | "inspect" => return Some(Type::String),
+            "to_enum" | "enum_for" => return Some(Type::named("Enumerator")),
+            "to_a" => return Some(Type::Array(Box::new(Type::Any))),
+            _ => {}
+        }
         if *receiver == Type::String && matches!(name, "bytes" | "codepoints") {
             return Some(Type::Array(Box::new(Type::Integer)));
         }
