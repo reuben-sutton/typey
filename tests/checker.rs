@@ -5683,6 +5683,33 @@ fn transfers_inline_blocks_without_a_block_contract_through_owned_cfg() {
 }
 
 #[test]
+fn transfers_blocks_on_modeled_implicit_globals_through_owned_cfg() {
+    let path = "tests/fixtures/cfg_implicit_global_blocks.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    for send in ["\"implicit each\".upcase", "\"implicit enum\".upcase"] {
+        let start = source.find(send).expect("inline block send");
+        let end = start + send.len();
+        assert!(
+            cfg.types.iter().any(|inferred| {
+                inferred.start == start
+                    && inferred.end == end
+                    && inferred.is_send
+                    && inferred.type_ == Type::String
+            }),
+            "missing {send} in {:?}",
+            cfg.types
+        );
+    }
+}
+
+#[test]
 fn splits_union_generic_class_objects_in_owned_dispatch() {
     let path = "tests/fixtures/cfg_class_object_union_dispatch.rb";
     let source = std::fs::read_to_string(path).expect("fixture");

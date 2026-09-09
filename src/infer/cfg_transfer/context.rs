@@ -58,19 +58,21 @@ pub(super) fn transfer_super_call(
     else {
         return Ok(ContextTransfer {
             type_: Type::Any,
-            block_result: None,
+            block_result: transfer_inline_block_without_contract(analyzer, input, environment),
             untyped_origin: UntypedOrigin::FallbackCall,
         });
     };
-    let block_result = analyzer.cfg_block_return_type(
-        input,
-        &key,
-        &signature,
-        arguments,
-        receiver,
-        values,
-        environment,
-    );
+    let block_result = analyzer
+        .cfg_block_return_type(
+            input,
+            &key,
+            &signature,
+            arguments,
+            receiver,
+            values,
+            environment,
+        )
+        .or_else(|| transfer_inline_block_without_contract(analyzer, input, environment));
     let block_return_type = block_result.as_ref().map(Analyzer::block_value_type);
     let type_ = analyzer.invoke_signature_at(
         input.site,
@@ -132,7 +134,11 @@ pub(super) fn transfer_implicit_call(
     if let Some(type_) = analyzer.global_call_type(input.name.as_str(), &arguments.argument_types) {
         return Ok(ContextTransfer {
             type_,
-            block_result: None,
+            // Structural global contracts such as Kernel#each and
+            // Kernel#to_enum do not carry a callback signature. Ruby still
+            // type-checks an inline block supplied to them, so preserve the
+            // owned traversal even though the call result is known here.
+            block_result: transfer_inline_block_without_contract(analyzer, input, environment),
             untyped_origin: UntypedOrigin::Propagated,
         });
     }
@@ -150,7 +156,7 @@ pub(super) fn transfer_implicit_call(
         );
         return Ok(ContextTransfer {
             type_,
-            block_result: None,
+            block_result: transfer_inline_block_without_contract(analyzer, input, environment),
             untyped_origin: UntypedOrigin::InferredMethod,
         });
     }
@@ -186,15 +192,17 @@ pub(super) fn transfer_implicit_call(
         .observe_call(&key, arguments, input.block.is_some())
         .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
     {
-        let block_result = analyzer.cfg_block_return_type(
-            input,
-            &key,
-            &signature,
-            arguments,
-            receiver,
-            values,
-            environment,
-        );
+        let block_result = analyzer
+            .cfg_block_return_type(
+                input,
+                &key,
+                &signature,
+                arguments,
+                receiver,
+                values,
+                environment,
+            )
+            .or_else(|| transfer_inline_block_without_contract(analyzer, input, environment));
         let block_return_type = block_result.as_ref().map(Analyzer::block_value_type);
         let type_ = analyzer.invoke_signature_at(
             input.site,
@@ -230,17 +238,31 @@ pub(super) fn transfer_implicit_call(
     // inline block with an unknown contract so the enclosing body can remain
     // on the owned path.
     analyzer.report_missing_method_if_needed_at(input.site, receiver, input.name.as_str(), false);
-    let block_result = match input.block.as_ref() {
-        Some(cfg::BlockOperand::Inline(closure)) => {
-            analyzer.transfer_owned_closure_body(*closure, &[Type::Any], None, None, environment)
-        }
-        Some(cfg::BlockOperand::Passed(_)) | None => None,
-    };
+    let block_result = transfer_inline_block_without_contract(analyzer, input, environment);
     Ok(ContextTransfer {
         type_: Type::Any,
         block_result,
         untyped_origin: UntypedOrigin::FallbackCall,
     })
+}
+
+fn transfer_inline_block_without_contract(
+    analyzer: &mut Analyzer<'_>,
+    input: &OwnedCallInput,
+    environment: &mut Environment,
+) -> Option<Eval> {
+    // `sig { ... }` is a declaration block. Its calls describe a method
+    // signature during registration and are not a runtime callback that the
+    // CFG should evaluate as Ruby expressions.
+    if input.name.as_str() == "sig" {
+        return None;
+    }
+    match input.block.as_ref() {
+        Some(cfg::BlockOperand::Inline(closure)) => {
+            analyzer.transfer_owned_closure_body(*closure, &[Type::Any], None, None, environment)
+        }
+        Some(cfg::BlockOperand::Passed(_)) | None => None,
+    }
 }
 
 pub(super) fn owned_mixin_module_name(
