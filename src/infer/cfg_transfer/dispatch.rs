@@ -105,6 +105,31 @@ pub(super) fn transfer_receiver_call(
         });
     }
 
+    if name == "tap" {
+        let block_result = match input.block.as_ref() {
+            Some(crate::cfg::BlockOperand::Inline(closure)) => analyzer
+                .transfer_owned_closure_body(
+                    *closure,
+                    &[receiver.clone()],
+                    None,
+                    Some(receiver),
+                    environment,
+                ),
+            Some(crate::cfg::BlockOperand::Passed(value)) => values
+                .get(value.0 as usize)
+                .and_then(Option::as_ref)
+                .and_then(super::super::proc_parts)
+                .map(|(_, result)| Eval::value(result.clone())),
+            None => None,
+        };
+        return Ok(ReceiverTransfer {
+            type_: receiver.clone(),
+            block_result,
+            untyped_origin: UntypedOrigin::InferredMethod,
+            missing_method: false,
+        });
+    }
+
     if let Some(type_) =
         analyzer.eval_node_helpers_method(receiver, name, &arguments.argument_types)
     {
