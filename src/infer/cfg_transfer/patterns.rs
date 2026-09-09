@@ -170,27 +170,35 @@ pub(super) fn case_pattern_is_type_test(
     };
     match &expression.kind {
         ExprKind::Literal(Literal::Nil | Literal::True | Literal::False) => true,
-        ExprKind::Read(Read::Constant(path)) => matches!(
-            path.as_str().rsplit("::").next(),
-            Some(
-                "Array"
-                    | "BasicObject"
-                    | "Class"
-                    | "Complex"
-                    | "FalseClass"
-                    | "Float"
-                    | "Hash"
-                    | "Integer"
-                    | "NilClass"
-                    | "Numeric"
-                    | "Object"
-                    | "Rational"
-                    | "Regexp"
-                    | "String"
-                    | "Symbol"
-                    | "TrueClass"
-            )
-        ),
+        ExprKind::Read(Read::Constant(path)) => {
+            let name = path.as_str().trim_start_matches("::");
+            // A namespaced constant ending in a built-in class name is not
+            // necessarily a class object. For example,
+            // `Definition::Kind::Class` is an enum value, not a `Class` case
+            // test. Treat it as a type test only when the complete constant
+            // names a declared class, or when it is one of Ruby's top-level
+            // built-in class constants.
+            analyzer.declarations.classes.contains_key(name)
+                || matches!(
+                    name,
+                    "Array"
+                        | "BasicObject"
+                        | "Class"
+                        | "Complex"
+                        | "FalseClass"
+                        | "Float"
+                        | "Hash"
+                        | "Integer"
+                        | "NilClass"
+                        | "Numeric"
+                        | "Object"
+                        | "Rational"
+                        | "Regexp"
+                        | "String"
+                        | "Symbol"
+                        | "TrueClass"
+                )
+        }
         // Other literals and constant values are ordinary `===` patterns,
         // not class tests. Their runtime value may match only some instances
         // of the source type, so their branch must remain reachable.
