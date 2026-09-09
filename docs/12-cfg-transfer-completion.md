@@ -233,6 +233,17 @@ The first modularization steps are now in place:
   checks, overridable-`noreturn` widening, and termination recognition now
   live in `infer/call_dispatch.rs`; `calls.rs` retains argument evaluation and
   the outer call protocol.
+* owned CFG calls now have the same semantic layering: `arguments.rs` owns
+  HIR/CFG argument materialization, `context.rs` owns `super` and implicit
+  global dispatch, `dispatch.rs` owns explicit receiver contracts and
+  conservative member-by-member union dispatch, and `outcomes.rs` owns safe
+  navigation, callback outcomes, raised-state assembly, and inline
+  assertions. The owned call protocol no longer mixes receiver selection with
+  final `Eval` construction.
+* implicit `raise`, `fail`, `abort`, `exit`, and `exit!` are shared global
+  contracts rather than unresolved owned calls. Abrupt-only CFG bodies record
+  `T.noreturn` as their expression type while retaining the exception type in
+  the separate raised outcome, matching recursive transfer and rescue flow.
 * parser-backed `if`/`unless` flow transfer now lives with the loop and `for`
   compatibility routines in `infer/control_flow.rs`; predicate narrowing and
   environment joins remain shared flow services rather than coordinator code.
