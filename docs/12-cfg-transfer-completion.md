@@ -19,15 +19,16 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates are 18 CFG tests, 12 HIR tests, 374 checker tests, and
-194 conformance tests passing. The
-implementation note records parity with the existing Spoom baseline. The CFG
-path is still opt-in because the transfer host has semantic bridges in the
-legacy recursive path: the recursive evaluator still uses Prism children for
-exact diagnostics and builtin hooks, while parser-backed callback contracts and
-some conditional and loop helpers still evaluate child bodies recursively.
-Ordinary inline callbacks now use an owned HIR contract; a body containing an
-unsupported operation or an unmigrated callback shape falls back as a whole.
+The current local gates include 19 CFG tests, 12 HIR tests, 382 checker tests,
+and 199 conformance tests. The focused CFG and checker gates pass; the full
+conformance run remains a longer-running gate. The implementation note records
+parity with the existing Spoom baseline. The CFG path is still opt-in because
+the transfer host has semantic bridges in the legacy recursive path: the
+recursive evaluator still uses Prism children for exact diagnostics and
+builtin hooks, while parser-backed callback contracts and some conditional and
+loop helpers still evaluate child bodies recursively. Ordinary inline callbacks
+now use an owned HIR contract; a body containing an unsupported operation or an
+unmigrated callback shape falls back as a whole.
 
 The next step is therefore not another scheduler abstraction. It is to make
 CFG transfer an owned-HIR abstract interpreter, complete the remaining control
@@ -282,11 +283,11 @@ The first modularization steps are now in place:
   carries facts from a composite predicate into the normal path after an
   `unless`/`if`, preserving concrete receiver types without a parser fallback.
 
-The latest release Spoom CFG run is a useful architectural checkpoint: 4,753
-bodies, 25,524 calls, 17,204 assignments, and 78,758 values transferred; 465
+The latest release Spoom CFG run is a useful architectural checkpoint: 4,997
+bodies, 27,884 calls, 16,839 assignments, and 76,961 values transferred; 361
 explicitly classified unsupported-operation fallbacks, zero unsupported edges,
-zero legacy bridges, and zero diagnostics. The run completed in 3.14 seconds
-including repository checking (2.16 seconds in the checker after the final
+zero legacy bridges, and zero diagnostics. The run completed in 2.35 seconds
+including repository checking (1.70 seconds in the checker after the final
 pass).
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
@@ -294,11 +295,15 @@ call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
 semantics in some receiver contexts. On the Packwerk regression run, the
-current owned-CFG boundary is 12 unique fallback spans: one declaration body,
-one dynamic `name` call, and ten missing or invalid library/flow contracts;
-the `defined?` and module-mixin `define_method` spans are no longer among them.
-Removing those requires moving
-their diagnostic and block contracts to owned source sites rather than
+current owned-CFG boundary is seven unique fallback spans: one declaration
+body and six operation spans involving nil/false receivers, an implicit
+`name`, and `any?` on a Set/Array union. The run produces no
+application-library diagnostics; the remaining printed diagnostics are the
+known minitest shim and node-helper test-input baseline. It transferred 1,331
+bodies, 4,123 calls, 39,425 assignments, and 168,628 values with 23
+classified unsupported-operation fallbacks, zero unsupported edges, and zero
+legacy bridges; total measured time was 2.46 seconds. Removing those requires
+moving their diagnostic and block contracts to owned source sites rather than
 weakening the checker. CFG fallback telemetry now distinguishes unsupported
 operations, unsupported edges, and legacy bridges; the migrated ordinary-body
 path now uses explicit outcome routing for non-local `return`, `break`, and
