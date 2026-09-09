@@ -590,6 +590,12 @@ pub(super) struct CallArguments<'node> {
     /// argument list at this syntax site; it is the caller's complete
     /// positional, keyword, and block argument set.
     pub(super) forwards_arguments: bool,
+    /// For mixed calls such as `target(value, ...)`, the prefix before this
+    /// positional index is concrete and may still contribute inference. The
+    /// forwarded suffix remains opaque for arity and contract checking.
+    pub(super) forwarded_positional_start: Option<usize>,
+    /// The call forwards keyword arguments as well as its positional tail.
+    pub(super) forwards_keywords: bool,
 }
 
 pub(super) struct CallArgumentEvaluation<'node> {

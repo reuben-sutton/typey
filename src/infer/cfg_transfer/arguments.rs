@@ -32,6 +32,8 @@ pub(super) struct OwnedCallArguments {
     has_unknown_positional_splat: bool,
     has_unknown_keyword_splat: bool,
     forwards_arguments: bool,
+    forwarded_positional_start: Option<usize>,
+    forwards_keywords: bool,
 }
 
 impl OwnedCallArguments {
@@ -63,6 +65,8 @@ impl OwnedCallArguments {
             has_unknown_positional_splat: self.has_unknown_positional_splat,
             has_unknown_keyword_splat: self.has_unknown_keyword_splat,
             forwards_arguments: self.forwards_arguments,
+            forwarded_positional_start: self.forwarded_positional_start,
+            forwards_keywords: self.forwards_keywords,
         }
     }
 }
@@ -76,18 +80,16 @@ impl<'src> Analyzer<'src> {
         fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
         environment: &Environment,
     ) -> Option<OwnedCallArguments> {
-        if call
+        let has_forwarded = call
             .arguments
             .iter()
-            .any(|argument| matches!(argument, hir::Argument::Forwarded))
-        {
-            if !call
+            .any(|argument| matches!(argument, hir::Argument::Forwarded));
+        if has_forwarded
+            && call
                 .arguments
                 .iter()
                 .all(|argument| matches!(argument, hir::Argument::Forwarded))
-            {
-                return None;
-            }
+        {
             let method = environment.method_key.as_ref()?;
             let state = self.declarations.methods.get(method)?;
             let positional_types = state.call_signature().params;
@@ -124,10 +126,18 @@ impl<'src> Analyzer<'src> {
                 .push(SourceSite::from_span(*span, None));
             let group = call.arguments.get(group_start..*group_end)?;
             if !group.is_empty()
-                && group.iter().all(|argument| {
+                && group.iter().any(|argument| {
                     matches!(
                         argument,
                         hir::Argument::Keyword { .. } | hir::Argument::KeywordSplat(_)
+                    )
+                })
+                && group.iter().all(|argument| {
+                    matches!(
+                        argument,
+                        hir::Argument::Keyword { .. }
+                            | hir::Argument::KeywordSplat(_)
+                            | hir::Argument::Forwarded
                     )
                 })
             {
@@ -192,6 +202,17 @@ impl<'src> Analyzer<'src> {
                                 }
                             }
                         }
+                        hir::Argument::Forwarded => {
+                            if !matches!(
+                                input.arguments.get(operand_index),
+                                Some(cfg::ArgumentOperand::Forwarded)
+                            ) {
+                                return None;
+                            }
+                            call_arguments.has_keyword_splat = true;
+                            call_arguments.forwards_arguments = true;
+                            call_arguments.forwards_keywords = true;
+                        }
                         _ => return None,
                     }
                     operand_index += 1;
@@ -209,6 +230,33 @@ impl<'src> Analyzer<'src> {
             }
             if group.len() != 1 {
                 return None;
+            }
+            if matches!(group[0], hir::Argument::Forwarded) {
+                if !matches!(
+                    input.arguments.get(operand_index),
+                    Some(cfg::ArgumentOperand::Forwarded)
+                ) {
+                    return None;
+                }
+                let method = environment.method_key.as_ref()?;
+                let signature = self.declarations.methods.get(method)?.call_signature();
+                let forwarded_type = signature
+                    .rest_index
+                    .and_then(|index| signature.params.get(index))
+                    .cloned()
+                    .unwrap_or(Type::Any);
+                call_arguments.forwarded_positional_start =
+                    Some(call_arguments.positional_types.len());
+                call_arguments.argument_types.push(forwarded_type.clone());
+                call_arguments.argument_indices.push(argument_index);
+                call_arguments.positional_indices.push(argument_index);
+                call_arguments.positional_types.push(forwarded_type);
+                call_arguments.has_keyword_splat = true;
+                call_arguments.forwards_arguments = true;
+                call_arguments.forwards_keywords = true;
+                operand_index += 1;
+                group_start = *group_end;
+                continue;
             }
             if let Some(cfg::ArgumentOperand::Splat(value)) = input.arguments.get(operand_index) {
                 let type_ = values.get(value.0 as usize).cloned().flatten()?;

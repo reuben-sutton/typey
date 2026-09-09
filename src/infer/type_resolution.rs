@@ -420,11 +420,17 @@ impl<'src> Analyzer<'src> {
             return bindings;
         }
 
-        let positional_types = if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
-            &arguments.positional_types
-        } else {
-            &arguments.argument_types
-        };
+        let positional_types: &[Type] =
+            if !signature.keywords.is_empty() || signature.accepts_keyword_rest {
+                &arguments.positional_types
+            } else {
+                &arguments.argument_types
+            };
+        let positional_types = arguments
+            .forwarded_positional_start
+            .map_or(positional_types, |start| {
+                positional_types.get(..start).unwrap_or_default()
+            });
         for (index, actual) in positional_types.iter().enumerate() {
             if let Some(expected) = signature.positional_type(index, positional_types.len()) {
                 self.collect_type_parameter_binding(expected, actual, &names, &mut bindings);

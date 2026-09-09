@@ -255,6 +255,8 @@ impl<'src> Analyzer<'src> {
                 has_unknown_positional_splat: false,
                 has_unknown_keyword_splat: false,
                 forwards_arguments: true,
+                forwarded_positional_start: None,
+                forwards_keywords: false,
             }
         } else {
             let argument_inputs = if let Some(call) = hir_call {

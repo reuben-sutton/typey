@@ -51,11 +51,12 @@ impl<'src> Analyzer<'src> {
                 });
             let state = self.declarations.methods.get_mut(&key)?;
             let mut changed = false;
-            let positional_types = if state.accepts_keyword_rest || !state.keywords.is_empty() {
-                &arguments.positional_types
-            } else {
-                &arguments.argument_types
-            };
+            let positional_types: &[Type] =
+                if state.accepts_keyword_rest || !state.keywords.is_empty() {
+                    &arguments.positional_types
+                } else {
+                    &arguments.argument_types
+                };
             // A direct recursive call often passes a value derived from the
             // current method parameter. Observing that provisional `Any`
             // argument would permanently poison the parameter summary before
@@ -65,12 +66,19 @@ impl<'src> Analyzer<'src> {
                     .keyword_arguments
                     .iter()
                     .all(|argument| !argument.type_.contains_any());
+            let partial_forwarding =
+                arguments.forwarded_positional_start.is_some() || arguments.forwards_keywords;
             if (!recursive_inferred || recursive_arguments_concrete)
-                && !arguments.forwards_arguments
+                && (!arguments.forwards_arguments || partial_forwarding)
                 && !arguments.has_unknown_positional_splat
                 && !arguments.has_unknown_keyword_splat
             {
-                changed |= state.observe_arguments(positional_types);
+                let observed_positional_types = arguments
+                    .forwarded_positional_start
+                    .map_or(positional_types, |start| {
+                        positional_types.get(..start).unwrap_or_default()
+                    });
+                changed |= state.observe_arguments(observed_positional_types);
                 if state.accepts_keyword_rest || !state.keywords.is_empty() {
                     for argument in &arguments.keyword_arguments {
                         changed |= state.observe_keyword(&argument.name, &argument.type_);

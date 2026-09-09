@@ -683,6 +683,40 @@ fn transfers_star_forwarding_through_owned_cfg() {
 }
 
 #[test]
+fn transfers_mixed_forwarding_through_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_mixed_forwarding.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(
+        baseline
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `T.untyped`")),
+        "legacy forwarding baseline unexpectedly became concrete: {:?}",
+        baseline.diagnostics
+    );
+    assert!(
+        cfg.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "CFG did not retain the explicit prefix type through forwarding: {:?}",
+        cfg.diagnostics
+    );
+    assert!(!cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.message.contains("Revealed type: `T.untyped`") }));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn refines_double_bang_operands_in_owned_logical_cfg() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_logical_double_bang.rb").expect("fixture");
