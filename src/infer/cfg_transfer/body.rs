@@ -12,7 +12,7 @@ use super::preflight;
 use crate::cfg;
 use crate::hir::{self, Read};
 use crate::types::Type;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(super) struct BodyTransfer<'analyzer, 'src> {
     pub(super) analyzer: &'analyzer mut Analyzer<'src>,
@@ -399,6 +399,43 @@ impl<'src> Analyzer<'src> {
             }
         }
         seed_cfg_global_state(self, &graph, &mut initial_environment);
+        let mut written_locals = HashSet::new();
+        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
+            let mut collect_target = |target: &hir::AssignTarget| {
+                if let hir::AssignTarget::Local(local) = target {
+                    written_locals.insert(*local);
+                }
+            };
+            match &operation.kind {
+                cfg::OperationKind::Write {
+                    place: cfg::Place::Local(local),
+                    ..
+                } => {
+                    written_locals.insert(*local);
+                }
+                cfg::OperationKind::MultiWrite {
+                    lefts,
+                    rest,
+                    rights,
+                    ..
+                } => {
+                    lefts.iter().for_each(&mut collect_target);
+                    if let Some(rest) = rest {
+                        collect_target(rest);
+                    }
+                    rights.iter().for_each(&mut collect_target);
+                }
+                cfg::OperationKind::BindForTarget { target, .. } => collect_target(target),
+                _ => {}
+            }
+        }
+        for local in written_locals {
+            if let Some(name) = self.program.hir_program.local_name(local) {
+                if !initial_environment.contains(name.as_str()) {
+                    initial_environment.bind(name.as_str().to_owned(), Type::Nil);
+                }
+            }
+        }
         let fallback_environment = initial_environment.clone();
         let initial = BlockState::with_values(initial_environment, Vec::new(), Flow::normal());
         let mut transfer = BodyTransfer {
@@ -484,7 +521,7 @@ impl<'src> Analyzer<'src> {
                 return None;
             }
             transfer.normal_type = normal_type.clone();
-            if !transfer.probe_normal_type.is_never() {
+            if region.may_raise && !transfer.probe_normal_type.is_never() {
                 normal_type = if normal_type.is_never() {
                     transfer.probe_normal_type.clone()
                 } else {

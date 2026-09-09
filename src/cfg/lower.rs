@@ -2068,6 +2068,9 @@ impl<'program> Builder<'program> {
             self.cfg.rescue_regions.push(RescueRegion {
                 entry: rescue_entry,
                 exit: after,
+                may_raise: begin
+                    .body
+                    .is_some_and(|body| self.expression_contains_call(body)),
             });
             let exception = self.add_parameter(rescue_entry);
             self.rescues.push(RescueContext {
@@ -2204,6 +2207,17 @@ impl<'program> Builder<'program> {
             .expression(expression)
             .map(|expr| expr.span)
             .unwrap_or(Span::new(hir::FileId(0), 0, 0))
+    }
+
+    fn expression_contains_call(&self, expression: ExprId) -> bool {
+        let Some(root) = self.program.expression(expression) else {
+            return false;
+        };
+        self.program.expressions.iter().any(|candidate| {
+            candidate.span.start >= root.span.start
+                && candidate.span.end <= root.span.end
+                && matches!(candidate.kind, hir::ExprKind::Call(_))
+        })
     }
 }
 

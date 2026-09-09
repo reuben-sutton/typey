@@ -49,10 +49,15 @@ pub struct Cfg {
     pub expression_values: Vec<Option<ValueId>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RescueRegion {
     pub entry: BlockId,
     pub exit: BlockId,
+    /// Whether the protected expression contains a send that can provide a
+    /// runtime exception path. Handler analysis still runs without this, but
+    /// a handler value is only part of the enclosing expression when such a
+    /// path exists.
+    pub may_raise: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
