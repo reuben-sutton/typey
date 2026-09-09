@@ -267,16 +267,40 @@ impl<'src> Analyzer<'src> {
                     self.narrow_cfg_predicate(*last, environment, truthy);
                 }
             }
-            hir::ExprKind::Logical { left, right, kind } => match kind {
-                hir::LogicalKind::And if truthy => {
-                    self.narrow_cfg_predicate(left, environment, true);
-                    self.narrow_cfg_predicate(right, environment, true);
+            hir::ExprKind::Logical { left, right, kind } => match (kind, truthy) {
+                (hir::LogicalKind::And, true) | (hir::LogicalKind::Or, false) => {
+                    self.narrow_cfg_predicate(left, environment, truthy);
+                    self.narrow_cfg_predicate(right, environment, truthy);
                 }
-                hir::LogicalKind::Or if !truthy => {
-                    self.narrow_cfg_predicate(left, environment, false);
-                    self.narrow_cfg_predicate(right, environment, false);
+                (hir::LogicalKind::Or, true) => {
+                    // `left || right` is true either because the left side
+                    // is true or because the left side is false and the
+                    // right side is true. Refine each feasible path from the
+                    // same pre-condition and join the resulting facts.
+                    let original = environment.clone();
+                    let mut left_truthy = original.clone();
+                    self.narrow_cfg_predicate(left, &mut left_truthy, true);
+
+                    let mut right_truthy = original;
+                    self.narrow_cfg_predicate(left, &mut right_truthy, false);
+                    self.narrow_cfg_predicate(right, &mut right_truthy, true);
+                    *environment = left_truthy.join(&right_truthy);
                 }
-                _ => {}
+                (hir::LogicalKind::And, false) => {
+                    // `left && right` is false either because the left side
+                    // is false or because the left side is true and the
+                    // right side is false. As above, retain facts from both
+                    // paths instead of treating the whole expression as an
+                    // opaque truthiness test.
+                    let original = environment.clone();
+                    let mut left_falsy = original.clone();
+                    self.narrow_cfg_predicate(left, &mut left_falsy, false);
+
+                    let mut right_falsy = original;
+                    self.narrow_cfg_predicate(left, &mut right_falsy, true);
+                    self.narrow_cfg_predicate(right, &mut right_falsy, false);
+                    *environment = left_falsy.join(&right_falsy);
+                }
             },
             hir::ExprKind::Read(Read::Local(local)) => {
                 self.narrow_cfg_local(local, environment, truthy)
