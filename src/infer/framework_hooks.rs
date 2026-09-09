@@ -121,9 +121,20 @@ impl<'src> Analyzer<'src> {
             || (owner == "Minitest::Test" && key.name == "test")
             || (owner == "ActiveSupport::Testing::SetupAndTeardown::ClassMethods"
                 && matches!(key.name.as_str(), "setup" | "teardown"));
-        binds_to_instance
-            .then(|| receiver_type.and_then(Self::class_object_instance_type))
-            .flatten()
+        let receiver_instance = receiver_type.and_then(Self::class_object_instance_type);
+        let receiver_is_test_case = receiver_instance.as_ref().is_some_and(|instance| {
+            let Some(name) = Self::named_type_name(instance) else {
+                return false;
+            };
+            self.nominal_subtype_names(&name, "Minitest::Test")
+                || self.nominal_subtype_names(&name, "ActiveSupport::TestCase")
+        });
+        (binds_to_instance
+            || (key.singleton
+                && receiver_is_test_case
+                && matches!(key.name.as_str(), "test" | "setup" | "teardown")))
+        .then_some(receiver_instance)
+        .flatten()
     }
 
     pub(super) fn observe_extend_hook<'node>(
