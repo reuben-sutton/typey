@@ -19,7 +19,7 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, 424 checker tests,
+The current local gates include 22 CFG tests, 12 HIR tests, 425 checker tests,
 226 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
 checker, local conformance, and upstream smoke gates pass; the upstream suite
 takes about 66 seconds because each fixture reloads the bundled RBI set. The
@@ -303,11 +303,17 @@ The first modularization steps are now in place:
   regression test. Inferred methods called from DSL callbacks no longer treat
   an unevaluated provisional `Never` summary as a guaranteed terminating path.
 
+* rescue handlers are analyzed from owned CFG region metadata even when the
+  protected call has no statically known raised outcome. The probe is isolated
+  at the handler join, seeded from the protected-entry state, and never follows
+  retry back into the protected body; handler sends are therefore published
+  without leaking handler-local assignments into normal flow.
+
 The latest release Spoom CFG run compiled 58,854 HIR bodies and transferred
-8,670 bodies and 34,184 calls with zero unsupported-operation fallbacks, zero
+8,673 bodies and 34,379 calls with zero unsupported-operation fallbacks, zero
 unsupported edges, and zero legacy bridges. It reports the same 3 diagnostics
-as the recursive path; the CFG run takes 7.23 seconds including repository
-checking versus 7.08 seconds recursively, and reaches final convergence in
+as the recursive path; the CFG run takes 3.50 seconds including repository
+checking versus 3.22 seconds recursively, and reaches final convergence in
 four worklist rounds. The three shared findings are a real nilable `Time`
 argument, an impossible branch under the vendored Prism model, and a nilable
 array comparison result.
@@ -317,26 +323,26 @@ call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
 semantics in some receiver contexts. On the latest Packwerk regression run,
-the owned path compiled 73,396 HIR bodies, transferred 8,886 bodies and
-38,024 calls, and reached convergence in four rounds with zero unsupported
+the owned path compiled 73,396 HIR bodies, transferred 9,000 bodies and
+39,088 calls, and reached convergence in four rounds with zero unsupported
 operation, edge, or legacy-bridge fallbacks. Its 22 diagnostics match the
 recursive path exactly. The `YAML = Psych` standard-library alias is modeled
 through the owned declaration path, so the earlier YAML diagnostics are gone.
-The remaining Packwerk difference is accounting: the owned path has 119
-application sends without a recorded type and records 14,382 types, while the
+The remaining Packwerk difference is accounting: the owned path has 89
+application sends without a recorded type and records 14,790 types, while the
 recursive path records all 1,578 application sends and 41,773 types. This is
 a publication/send-tracking gap, not evidence that the owned path is more
 correct.
 
 The latest full ActiveSupport run is the current large-component boundary:
-27,099 HIR bodies were compiled and 14,247 bodies and 46,255 calls transferred
+27,099 HIR bodies were compiled and 14,253 bodies and 47,045 calls transferred
 across five worklist rounds. Static `undef` is now an owned operation, leaving
 zero unsupported-operation records, zero unsupported-edge fallbacks, zero
 legacy bridges, and zero unsupported HIR handoffs in this component. The CFG
-run reports 568 diagnostics and 38,834 recorded types in 214.4 seconds; the
+run reports 598 diagnostics and 39,468 recorded types in 169.9 seconds; the
 fresh legacy recursive run reports 689 diagnostics and 43,378 recorded types
-in 212.6 seconds. Of the diagnostic sets, 501 findings are shared, 188 are
-recursive-only, and 67 are CFG-only. Runtime is therefore approximately at
+in 169.1 seconds. Of the diagnostic sets, 528 findings are shared, 161 are
+recursive-only, and 70 are CFG-only. Runtime is therefore approximately at
 parity, but the diagnostic and type-publication differences still require
 differential classification. CFG is not yet a replacement: the remaining work
 is primarily ActiveSupport differential analysis, owned send/type publication,
@@ -348,10 +354,10 @@ outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
 
 As of 2026-09-09, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 424/424, Spoom and Packwerk
+not at the exit condition. The checker gate is 425/425, Spoom and Packwerk
 diagnostics agree exactly, and the CFG transfer surface has zero measured
 fallbacks on all three repository checks. What remains is not broad CFG
-coverage: it is reconciling ActiveSupport's 255 non-shared diagnostics,
+coverage: it is reconciling ActiveSupport's 231 non-shared diagnostics,
 restoring the missing owned type publications, and then rerunning the full
 differential gates before retiring the recursive path.
 
