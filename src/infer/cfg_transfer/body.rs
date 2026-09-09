@@ -194,7 +194,18 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         let cfg::OperationKind::Call { name, .. } = &operation.kind else {
             return false;
         };
+        let Some(expression) = operation
+            .expression
+            .and_then(|id| self.analyzer.program.hir_program.expression(id))
+        else {
+            return false;
+        };
+        let is_safe_navigation_call = matches!(
+            &expression.kind,
+            hir::ExprKind::Call(call) if call.safe_navigation
+        );
         if operation.defer_inline_assertion
+            && is_safe_navigation_call
             && self
                 .analyzer
                 .inline_assertion_for_site(crate::infer::SourceSite::from_span(
@@ -209,12 +220,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             // source span.
             return true;
         }
-        let Some(expression) = operation
-            .expression
-            .and_then(|id| self.analyzer.program.hir_program.expression(id))
-        else {
-            return false;
-        };
         let operator = match &expression.kind {
             hir::ExprKind::Assign { operator, .. } => operator,
             _ => return false,

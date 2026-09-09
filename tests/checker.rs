@@ -2653,6 +2653,33 @@ end
 }
 
 #[test]
+fn records_asserted_logical_assignment_rhs_calls_through_owned_cfg() {
+    let source = r#"# typed: true
+
+value = nil
+value ||= "default".upcase #: as String
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    let send = "\"default\".upcase";
+    let start = source.find(send).expect("logical assignment RHS send");
+    let end = start + send.len();
+    assert!(cfg.types.iter().any(|inferred| {
+        inferred.start == start
+            && inferred.end == end
+            && inferred.is_send
+            && inferred.type_ == Type::String
+    }));
+}
+
+#[test]
 fn infers_generic_hash_types_from_nested_pair_arrays() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs load");
