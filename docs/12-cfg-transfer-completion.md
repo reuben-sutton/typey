@@ -284,33 +284,44 @@ The first modularization steps are now in place:
   The transfer layer carries truthiness through nested unary negation and
   carries facts from a composite predicate into the normal path after an
   `unless`/`if`, preserving concrete receiver types without a parser fallback.
+* method, class, module, and singleton-class declarations now lower their
+  owned runtime operands and transfer nested declaration bodies through the
+  same CFG worklist. Method summaries, class-body effects, superclass
+  expressions, singleton receivers, and Struct constructor field metadata no
+  longer require a declaration-shaped parser fallback.
+* top-level terminating calls preserve the legacy `T.noreturn` aggregate while
+  still transferring later reveal sites, and the loop/begin parity fixtures
+  now agree with the recursive evaluator. The remaining top-level fallback is
+  isolated to a source-file body whose legacy statement accounting still
+  needs to be represented directly in CFG.
 
-The latest release Spoom CFG run is a useful architectural checkpoint: 4,998
-bodies, 27,893 calls, 16,839 assignments, and 76,961 values transferred; 361
-explicitly classified unsupported-operation fallback events, zero unsupported
-edges, zero legacy bridges, and one diagnostic. That diagnostic is the known
-`Time?` passed to `Time` case in `coverage.rb`; the legacy path reports the same
+The latest release Spoom CFG run is a useful architectural checkpoint: 5,448
+bodies, 30,536 calls, 16,303 assignments, and 71,567 values transferred; six
+classified unsupported-operation fallback events, zero unsupported edges, zero
+legacy bridges, and one diagnostic. The fallback events are repeated passes
+over one top-level `SourceFileNode` body. That diagnostic is the known `Time?`
+passed to `Time` case in `coverage.rb`; the legacy path reports the same
 finding, while Sorbet accepts it through Thor's untyped option hash. The run
-reported 1,001 unknown application-library sends out of 5,979 (16.7%) and 284
-unique application fallback spans, and completed in 2.84 seconds including
-repository checking (2.05 seconds through the checker).
+reported 1,040 unknown application-library sends out of 5,979 (17.4%) and
+completed in 2.10 seconds including repository checking (1.46 seconds through
+the checker).
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
 semantics in some receiver contexts. On the latest Packwerk regression run,
-the owned path transferred 1,370 bodies, 4,187 calls, 39,404 assignments, and
-168,502 values. It recorded 11 early unsupported-operation fallback events,
-zero unsupported edges, zero legacy bridges, and 23 diagnostics. The 23 are
-unchanged from the legacy run: the known minitest shim signature diagnostics
-and node-helper test-input diagnostics. Packwerk reports 298 unknown
-application-library sends out of 1,578 (18.9%) and 73 unique application
-fallback spans; no application-library diagnostic is currently emitted. The
-run completed in 2.93 seconds including repository checking (2.04 seconds
-through the checker). The remaining fallback events are provisional calls on
-nil during early summary rounds, while the remaining application fallback
-spans and parser/DSL bridges require owned contracts or explicit allowlisting.
+the owned path transferred 1,389 bodies, 4,355 calls, 39,392 assignments, and
+169,072 values. It recorded nine classified unsupported-operation fallback
+events, zero unsupported edges, zero legacy bridges, and 23 diagnostics. The
+23 are unchanged from the legacy run: the known minitest shim signature
+diagnostics and node-helper test-input diagnostics. Packwerk reports 332
+unknown application-library sends out of 1,578 (21.0%) and no
+application-library diagnostic is currently emitted. The fallback events are
+repeated passes over the same top-level `SourceFileNode` body; the remaining
+application fallback spans and parser/DSL bridges require owned contracts or
+explicit allowlisting. The run completed in 2.10 seconds including repository
+checking (1.47 seconds through the checker).
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
