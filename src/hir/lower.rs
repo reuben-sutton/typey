@@ -180,7 +180,7 @@ impl<'src> Lowerer<'src> {
         let expression = self.push_expr(
             node,
             ExprKind::Unsupported(Unsupported {
-                kind: Name::new("prism-node"),
+                kind: Name::new(Self::node_kind(node)),
                 children: Vec::new(),
             }),
         );
@@ -193,6 +193,18 @@ impl<'src> Lowerer<'src> {
             unsupported.children = children;
         }
         expression
+    }
+
+    /// Keep the parser node's concrete kind in owned HIR diagnostics. Prism's
+    /// public node handle exposes the kind through its debug representation;
+    /// copying just the leading variant name keeps the HIR parser-independent
+    /// without retaining the parser node itself.
+    fn node_kind(node: &Node<'_>) -> String {
+        format!("{node:?}")
+            .split([' ', '{', '('])
+            .next()
+            .unwrap_or("prism-node")
+            .to_owned()
     }
 
     /// Unsupported parents still contain executable expressions. Keep calls

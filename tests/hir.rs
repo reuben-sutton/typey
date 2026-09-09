@@ -285,10 +285,15 @@ values[index] ||= local
 fn unsupported_syntax_is_explicit_and_source_mapped() {
     let source = "defined?(value)";
     let program = expressions(source);
-    assert!(program
+    let unsupported = program
         .expressions
         .iter()
-        .any(|expression| matches!(expression.kind, ExprKind::Unsupported(_))));
+        .find_map(|expression| match &expression.kind {
+            ExprKind::Unsupported(unsupported) => Some(unsupported),
+            _ => None,
+        })
+        .expect("unsupported expression");
+    assert_eq!(unsupported.kind.as_str(), "DefinedNode");
 }
 
 #[test]
