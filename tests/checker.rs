@@ -243,6 +243,39 @@ T.reveal_type(always_raises)
 }
 
 #[test]
+fn dispatches_owned_union_receivers_member_by_member() {
+    let source = r#"
+class Left
+  def value
+    1
+  end
+end
+
+class Right
+  def value
+    "right"
+  end
+end
+
+#: (Left | Right) -> (Integer | String)
+def read_value(value)
+  T.reveal_type(value.value)
+end
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_known_dynamic_instance_variables_through_owned_calls() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_dynamic_instance_variable_get.rb")
         .expect("fixture");

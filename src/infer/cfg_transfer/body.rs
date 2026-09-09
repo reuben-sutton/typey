@@ -258,7 +258,12 @@ impl<'src> Analyzer<'src> {
         };
         let mut result = Eval::from_parts(normal_type, abrupt, flow);
         if record_result {
-            result.type_ = self.record_at(body_site, result.type_.clone(), false, None);
+            let expression_type = if result.normal_type.is_some() {
+                result.type_.clone()
+            } else {
+                Type::Never
+            };
+            result.type_ = self.record_at(body_site, expression_type, false, None);
         }
         Some(result)
     }

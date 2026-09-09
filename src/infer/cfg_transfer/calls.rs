@@ -283,7 +283,7 @@ pub(super) fn cfg_call_raise_type(
     if matches!(&input.receiver, cfg::ReceiverOperand::Implicit) {
         return match input.name.as_str() {
             "exit" | "exit!" | "abort" => Type::named("SystemExit"),
-            "raise" | "fail" => Type::named("RuntimeError"),
+            "raise" | "fail" => Type::named("StandardError"),
             _ => Type::Never,
         };
     }

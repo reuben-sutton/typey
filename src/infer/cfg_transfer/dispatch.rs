@@ -27,6 +27,44 @@ pub(super) fn transfer_receiver_call(
     values: &[Option<Type>],
     environment: &mut Environment,
 ) -> Result<ReceiverTransfer, String> {
+    if let Type::Union(members) = receiver {
+        // A union receiver has no single method key. Dispatch each concrete
+        // member through the same contract order instead of collapsing the
+        // whole receiver to a parser-era fallback. Calls with blocks remain
+        // outside this path until callback state can be joined per member.
+        if input.block.is_none() {
+            let mut result_type = Type::Never;
+            let mut untyped_origin = UntypedOrigin::Propagated;
+            for member in members {
+                let result = transfer_receiver_call(
+                    analyzer,
+                    input,
+                    member,
+                    arguments,
+                    values,
+                    environment,
+                )?;
+                result_type = result_type.join(&result.type_);
+                if result.untyped_origin == UntypedOrigin::FallbackCall {
+                    untyped_origin = UntypedOrigin::FallbackCall;
+                } else if untyped_origin != UntypedOrigin::FallbackCall
+                    && result.untyped_origin == UntypedOrigin::DeclaredSignature
+                {
+                    untyped_origin = UntypedOrigin::DeclaredSignature;
+                } else if untyped_origin != UntypedOrigin::FallbackCall
+                    && result.untyped_origin == UntypedOrigin::InferredMethod
+                    && untyped_origin == UntypedOrigin::Propagated
+                {
+                    untyped_origin = UntypedOrigin::InferredMethod;
+                }
+            }
+            return Ok(ReceiverTransfer {
+                type_: result_type,
+                block_result: None,
+                untyped_origin,
+            });
+        }
+    }
     let name = input.name.as_str();
     let callable_type = if matches!(name, "call" | "[]") {
         transfer_callable_call(analyzer, input.site, receiver, arguments)
