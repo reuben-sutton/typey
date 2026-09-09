@@ -5444,6 +5444,25 @@ fn transfers_tap_blocks_through_owned_cfg() {
 }
 
 #[test]
+fn transfers_inline_blocks_on_unknown_receivers_through_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_unknown_receiver_block.rb").expect("fixture");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    let start = source.find("value.to_s").expect("send in fixture");
+    let end = start + "value.to_s".len();
+    assert!(cfg
+        .types
+        .iter()
+        .any(|inferred| inferred.start == start && inferred.end == end && inferred.is_send));
+}
+
+#[test]
 fn splits_union_generic_class_objects_in_owned_dispatch() {
     let path = "tests/fixtures/cfg_class_object_union_dispatch.rb";
     let source = std::fs::read_to_string(path).expect("fixture");

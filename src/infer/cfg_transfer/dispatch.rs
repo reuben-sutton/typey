@@ -12,6 +12,7 @@ use super::super::{
     name_matches, proc_parts, Analyzer, CallArguments, Environment, Eval, MethodKey,
     OwnedCallInput, SourceSite, UntypedOrigin,
 };
+use crate::cfg;
 use crate::types::Type;
 
 pub(super) struct ReceiverTransfer {
@@ -619,9 +620,19 @@ pub(super) fn transfer_receiver_call(
         return Err(format!("intrinsic `{name}` has no owned contract"));
     }
 
+    let block_result = match input.block.as_ref() {
+        Some(cfg::BlockOperand::Inline(closure)) => {
+            // Ruby type-checks an inline block even when the receiver's method
+            // is dynamic. There is no contract to specialize its parameters,
+            // but the owned body still needs to be visited so its sends and
+            // diagnostics are not silently lost behind T.untyped dispatch.
+            analyzer.transfer_owned_closure_body(*closure, &[Type::Any], None, None, environment)
+        }
+        Some(cfg::BlockOperand::Passed(_)) | None => None,
+    };
     Ok(ReceiverTransfer {
         type_: Type::Any,
-        block_result: None,
+        block_result,
         untyped_origin: UntypedOrigin::FallbackCall,
         missing_method: true,
     })

@@ -206,7 +206,7 @@ pub(super) fn transfer_call(
                 format!("Used `&.` operator on `{receiver_type}`, which can never be nil"),
             );
         }
-        let receiver = super::dispatch::transfer_receiver_call(
+        let mut receiver = super::dispatch::transfer_receiver_call(
             analyzer,
             &input,
             &dispatch_receiver,
@@ -215,6 +215,22 @@ pub(super) fn transfer_call(
             environment,
             receiver_hash_shape.as_ref(),
         )?;
+        if receiver.block_result.is_none() && receiver_type.is_any() {
+            // A dynamic receiver has no reliable method contract, but Ruby
+            // still type-checks an inline block supplied at the call site.
+            // Visit it with gradual parameters so its owned sends and
+            // diagnostics are published instead of disappearing with the
+            // receiver's T.untyped result.
+            if let Some(cfg::BlockOperand::Inline(closure)) = input.block.as_ref() {
+                receiver.block_result = analyzer.transfer_owned_closure_body(
+                    *closure,
+                    &[Type::Any],
+                    None,
+                    None,
+                    environment,
+                );
+            }
+        }
         if receiver.missing_method && !is_static_type_receiver(&dispatch_receiver) {
             analyzer.report_missing_method_if_needed_at(
                 input.site,
