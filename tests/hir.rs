@@ -283,7 +283,7 @@ values[index] ||= local
 
 #[test]
 fn lowers_defined_operands_into_owned_hir() {
-    let source = "defined?(value)";
+    let source = "value = nil\ndefined?(value)";
     let program = expressions(source);
     let operand = program
         .expressions
