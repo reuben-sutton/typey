@@ -284,6 +284,16 @@ impl<'src> Lowerer<'src> {
                 .collect::<Vec<_>>();
             return self.push_expr(node, ExprKind::Sequence(expressions));
         }
+        // Ruby's keyword/hash shorthand (`value:`) is represented by Prism as
+        // an ImplicitNode whose value is the real local-variable read. Keep
+        // that read in owned HIR instead of treating the syntax wrapper as an
+        // unsupported expression. This is important for both keyword calls
+        // and hash literals: the shorthand is only syntax sugar, not an
+        // unknown runtime value.
+        if let Some(implicit) = node.as_implicit_node() {
+            let value = implicit.value();
+            return self.lower_node(&value);
+        }
         if let Some(definition) = node.as_def_node() {
             return self.lower_definition(node, &definition);
         }

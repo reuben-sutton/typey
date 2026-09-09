@@ -94,6 +94,22 @@ fn lowers_calls_left_to_right_without_flattening_argument_shapes() {
 }
 
 #[test]
+fn lowers_keyword_shorthand_as_an_owned_local_read() {
+    let graph = cfg("value = 1\noptions = { value: }\nconsume(value:)");
+    assert!(
+        graph.unsupported_spans.is_empty(),
+        "{:#?}",
+        graph.unsupported_spans
+    );
+    assert!(operations(&graph).iter().any(|operation| {
+        matches!(
+            &operation.kind,
+            OperationKind::Call { name, .. } if name.as_str() == "consume"
+        )
+    }));
+}
+
+#[test]
 fn lowers_safe_navigation_to_nil_and_call_paths() {
     let graph = cfg("receiver&.call(argument)");
     assert!(operations(&graph).iter().any(|operation| matches!(

@@ -87,6 +87,34 @@ fn preserves_positional_hash_argument_shape_through_hir_calls() {
 }
 
 #[test]
+fn preserves_keyword_shorthand_types_through_owned_hir() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_keyword_shorthand.rb").expect("fixture");
+    let baseline = check_fixture("tests/fixtures/cfg_keyword_shorthand.rb");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(baseline
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.message.contains("Revealed type: `T.untyped`") }));
+    assert!(cfg.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(String)`")
+    }));
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_owned_builtin_receiver_contracts() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_builtin_receiver_contracts.rb")
         .expect("fixture");
