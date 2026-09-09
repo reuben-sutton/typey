@@ -193,7 +193,7 @@ fn transfers_alias_keyword_through_owned_hir() {
 }
 
 #[test]
-fn keeps_unresolved_super_gradual_without_body_fallback() {
+fn preserves_unresolved_super_gradual_result() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_unresolved_super.rb").unwrap();
     let baseline = check(&source, CheckerConfig::default());
     let cfg = check(

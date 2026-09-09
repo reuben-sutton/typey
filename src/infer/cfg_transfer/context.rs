@@ -24,24 +24,13 @@ pub(super) fn transfer_super_call(
     values: &[Option<Type>],
     environment: &mut Environment,
 ) -> Result<ContextTransfer, String> {
-    let Some(current_method) = environment.method_key.as_ref() else {
-        return Ok(ContextTransfer {
-            type_: Type::Any,
-            block_result: None,
-            untyped_origin: UntypedOrigin::FallbackCall,
-        });
-    };
-    let Some(key) = analyzer.super_method_key(current_method) else {
-        // An isolated component can contain a valid `super` call whose parent
-        // declaration is outside the loaded workspace. Preserve the same
-        // gradual result as the recursive evaluator, but do not discard the
-        // rest of an otherwise representable CFG body.
-        return Ok(ContextTransfer {
-            type_: Type::Any,
-            block_result: None,
-            untyped_origin: UntypedOrigin::FallbackCall,
-        });
-    };
+    let current_method = environment
+        .method_key
+        .as_ref()
+        .ok_or_else(|| "super call has no enclosing method".to_owned())?;
+    let key = analyzer
+        .super_method_key(current_method)
+        .ok_or_else(|| "super call has no resolvable parent method".to_owned())?;
     analyzer.record_method_dependency(&key, environment);
     let Some(signature) = analyzer
         .observe_call(&key, arguments, input.block.is_some())
