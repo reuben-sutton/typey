@@ -19,7 +19,7 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, 406 checker tests,
+The current local gates include 22 CFG tests, 12 HIR tests, 410 checker tests,
 209 local conformance tests, and a 37-fixture upstream smoke suite. The CFG,
 checker, local conformance, and upstream smoke gates pass; the upstream suite
 takes about 66 seconds because each fixture reloads the bundled RBI set. The
@@ -332,12 +332,12 @@ were zero unsupported-edge and zero legacy-bridge fallbacks, but 502
 unsupported-operation records remain across 149 unique source spans, plus two
 unsupported HIR handoffs. The largest remaining groups are unresolved
 `super` contracts, missing implicit-call contracts, unavailable owned argument
-shapes, and definition/closure handoffs. The owned run reports 425 diagnostics
-and 12,626 application-library send sites, of which 7,968 (63.1%) are unknown;
-it completes in 151.9 seconds including final reporting after narrowing method
+shapes, and definition/closure handoffs. The owned run reports 424 diagnostics
+and 12,626 application-library send sites, of which 7,969 (63.1%) are unknown;
+it completes in 152.0 seconds including final reporting after narrowing method
 resolution invalidation to affected dependents. The fresh legacy recursive run
 on the same checkout reports 724 diagnostics in 164.5 seconds: 393 diagnostics
-match exactly, with 32 CFG-only findings and 331 legacy-only findings. The CFG
+match exactly, with 31 CFG-only findings and 331 legacy-only findings. The CFG
 path is therefore faster than the legacy path on this component, but it is not
 yet a replacement: the remaining work is primarily call contract/bridge parity,
 fallback classification, and differential type coverage.
