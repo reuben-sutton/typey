@@ -203,6 +203,13 @@ pub(super) fn hir_call_argument_inputs<'node>(
                             hir_entries.push(KeywordArgumentInput::Splat(value));
                             hir_index += 1;
                         }
+                        hir::Argument::Forwarded => {
+                            let Some(KeywordArgumentInput::Forwarded) = raw_entries.next() else {
+                                panic!("HIR keyword forwarding has no Prism child bridge");
+                            };
+                            hir_entries.push(KeywordArgumentInput::Forwarded);
+                            hir_index += 1;
+                        }
                         _ => break,
                     }
                 }
@@ -250,6 +257,18 @@ pub(super) fn hir_call_argument_inputs<'node>(
                     result.push(CallArgumentInput::Forwarded { node });
                     hir_index += 1;
                 }
+                Some(CallArgumentInput::KeywordHash { node, entries })
+                    if entries
+                        .iter()
+                        .all(|entry| matches!(entry, KeywordArgumentInput::Forwarded)) =>
+                {
+                    // A bare `**` is normalized by HIR to forwarded
+                    // arguments, but Prism keeps it inside a keyword hash.
+                    // Preserve the keyword-hash wrapper so argument
+                    // evaluation retains its keyword-forwarding semantics.
+                    result.push(CallArgumentInput::KeywordHash { node, entries });
+                    hir_index += 1;
+                }
                 Some(CallArgumentInput::Splat {
                     node,
                     expression: None,
@@ -260,7 +279,17 @@ pub(super) fn hir_call_argument_inputs<'node>(
                     result.push(CallArgumentInput::Forwarded { node });
                     hir_index += 1;
                 }
-                Some(_) | None => panic!("HIR forwarding did not match Prism argument bridge"),
+                Some(input) => panic!(
+                    "HIR forwarding did not match Prism argument bridge: raw {} at {:?}, HIR {arguments:?}",
+                    call_argument_input_kind(&input),
+                    prism::span(match &input {
+                        CallArgumentInput::Forwarded { node }
+                        | CallArgumentInput::Positional { node }
+                        | CallArgumentInput::Splat { node, .. }
+                        | CallArgumentInput::KeywordHash { node, .. } => node,
+                    }),
+                ),
+                None => panic!("HIR forwarding has no Prism child bridge: HIR {arguments:?}"),
             },
         }
     }
