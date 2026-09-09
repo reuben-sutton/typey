@@ -110,6 +110,38 @@ T.reveal_type(gem("library"))
 }
 
 #[test]
+fn transfers_source_line_through_owned_hir() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_source_line.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn transfers_rescue_modifier_through_owned_hir() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_rescue_modifier.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_lambda_outcomes_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_lambda_outcomes.rb").unwrap();
     let baseline = check(&source, CheckerConfig::default());

@@ -873,6 +873,27 @@ impl<'src> Lowerer<'src> {
         if let Some(begin) = node.as_begin_node() {
             return self.lower_begin(node, &begin);
         }
+        // A rescue modifier is the compact form of a begin/rescue that
+        // catches StandardError. Represent it with the ordinary owned begin
+        // vocabulary so exception routing stays in the CFG transfer rather
+        // than requiring a parser-backed child walk.
+        if let Some(rescue) = node.as_rescue_modifier_node() {
+            let body = self.lower_node(&rescue.expression());
+            let fallback = self.lower_node(&rescue.rescue_expression());
+            return self.push_expr(
+                node,
+                ExprKind::Begin(BeginExpr {
+                    body: Some(body),
+                    rescue: vec![RescueClause {
+                        exceptions: Vec::new(),
+                        reference: None,
+                        body: Some(fallback),
+                    }],
+                    else_body: None,
+                    ensure: None,
+                }),
+            );
+        }
 
         if node.as_nil_node().is_some() {
             return self.push_expr(node, ExprKind::Nil);
@@ -929,6 +950,12 @@ impl<'src> Lowerer<'src> {
         // the type-only HIR, but its concrete checker type is always String.
         if node.as_source_file_node().is_some() {
             return self.push_expr(node, ExprKind::Literal(Literal::String(String::new())));
+        }
+        // `__LINE__` is another parser pseudo-expression. The concrete line
+        // number is not needed by type inference; retaining the literal kind
+        // keeps the owned CFG path precise without a parser fallback.
+        if node.as_source_line_node().is_some() {
+            return self.push_expr(node, ExprKind::Literal(Literal::Integer("0".to_owned())));
         }
         if let Some(local) = node.as_local_variable_read_node() {
             let local = self.local(&prism::constant_name(local.name()));
