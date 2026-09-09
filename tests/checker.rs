@@ -72,6 +72,14 @@ fn checks_rbs_comments_and_trailing_assertions() {
 }
 
 #[test]
+fn registers_inline_constant_annotations_before_inference() {
+    let result = check_fixture("tests/fixtures/inline_constant_annotation.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `CfgInlineConstantNamespace::Color`")));
+}
+
+#[test]
 fn checks_sorbet_sig_calls() {
     check_fixture("tests/fixtures/sorbet_sig.rb");
     let source = std::fs::read_to_string("tests/fixtures/sorbet_sig.rb").expect("fixture");

@@ -1,7 +1,7 @@
 use super::{MethodKey, MethodState, ParameterShape};
 use crate::diagnostic::Diagnostic;
 use crate::prism;
-use crate::signature::{self, MethodSig};
+use crate::signature::{self, AssertionKind, MethodSig};
 use crate::types::Type;
 use ruby_prism::{CallNode, ClassNode, DefNode, Node, Visit};
 use std::collections::BTreeSet;
@@ -85,6 +85,7 @@ pub(super) struct MethodRegistrar<'a> {
     declarations: &'a mut DeclarationState,
     attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
     class_type_parameters: &'a BTreeMap<usize, Vec<String>>,
+    assertions: &'a BTreeMap<usize, signature::InlineAssertion>,
     class_stack: Vec<String>,
     singleton_stack: Vec<String>,
     dynamic_definition_stack: Vec<(String, bool)>,
@@ -100,6 +101,7 @@ impl<'a> MethodRegistrar<'a> {
         declarations: &'a mut DeclarationState,
         attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
         class_type_parameters: &'a BTreeMap<usize, Vec<String>>,
+        assertions: &'a BTreeMap<usize, signature::InlineAssertion>,
     ) -> Self {
         Self {
             source,
@@ -107,6 +109,7 @@ impl<'a> MethodRegistrar<'a> {
             declarations,
             attribute_annotations,
             class_type_parameters,
+            assertions,
             class_stack: Vec::new(),
             singleton_stack: Vec::new(),
             dynamic_definition_stack: Vec::new(),
@@ -130,6 +133,25 @@ fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
 }
 
 impl MethodRegistrar<'_> {
+    fn inline_constant_type<'node>(&self, node: &Node<'node>) -> Option<Type> {
+        let (_, end) = prism::span(node);
+        let line = self.source[..end]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count();
+        let assertion = self.assertions.get(&line)?;
+        if assertion.kind != AssertionKind::Let || assertion.offset < end {
+            return None;
+        }
+        if self.source[end..assertion.offset]
+            .iter()
+            .any(|byte| !byte.is_ascii_whitespace() && *byte != b',')
+        {
+            return None;
+        }
+        Some(assertion.type_.clone())
+    }
+
     fn for_each_preceding_comment_line(
         &self,
         node: &Node<'_>,
@@ -653,7 +675,10 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode<'pr>) {
         let target = node.target();
         let name = self.constant_assignment_name(&prism::text(self.source, &target.as_node()));
-        if let Some(type_) = self.parse_typed_constant(&node.value()) {
+        if let Some(type_) = self
+            .parse_typed_constant(&node.value())
+            .or_else(|| self.inline_constant_type(&node.as_node()))
+        {
             self.declarations.constants.insert(name.clone(), type_);
         } else if let Some(target) = self.constant_alias_target(&node.value()) {
             self.declarations
@@ -675,7 +700,10 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             }
         }
         let name = self.constant_assignment_name(&constant_name);
-        if let Some(type_) = self.parse_typed_constant(&node.value()) {
+        if let Some(type_) = self
+            .parse_typed_constant(&node.value())
+            .or_else(|| self.inline_constant_type(&node.as_node()))
+        {
             self.declarations.constants.insert(name.clone(), type_);
         } else if let Some(target) = self.constant_alias_target(&node.value()) {
             self.declarations
