@@ -821,13 +821,10 @@ fn refines_double_bang_operands_in_owned_logical_cfg() {
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
     let bang_start = source.find("!!value").expect("double-bang expression");
     let bang_end = bang_start + "!!value".len();
-    assert!(cfg
-        .types
-        .iter()
-        .any(|inferred| inferred.start == bang_start
-            && inferred.end == bang_end
-            && inferred.type_ == Type::bool()
-            && inferred.is_send));
+    assert!(cfg.types.iter().any(|inferred| inferred.start == bang_start
+        && inferred.end == bang_end
+        && inferred.type_ == Type::bool()
+        && inferred.is_send));
     assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
 }
 
@@ -5469,6 +5466,28 @@ fn transfers_inline_blocks_on_unknown_receivers_through_owned_cfg() {
         .types
         .iter()
         .any(|inferred| inferred.start == start && inferred.end == end && inferred.is_send));
+}
+
+#[test]
+fn transfers_inline_blocks_without_a_block_contract_through_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_unknown_receiver_block.rb").expect("fixture");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    let send = "\"value\".upcase";
+    let start = source.find(send).expect("send in fixture");
+    let end = start + send.len();
+    assert!(cfg.types.iter().any(|inferred| {
+        inferred.start == start
+            && inferred.end == end
+            && inferred.is_send
+            && inferred.type_ == Type::String
+    }));
 }
 
 #[test]

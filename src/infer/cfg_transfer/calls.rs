@@ -215,12 +215,13 @@ pub(super) fn transfer_call(
             environment,
             receiver_hash_shape.as_ref(),
         )?;
-        if receiver.block_result.is_none() && receiver_type.is_any() {
-            // A dynamic receiver has no reliable method contract, but Ruby
-            // still type-checks an inline block supplied at the call site.
+        if receiver.block_result.is_none() {
+            // A missing block contract does not mean that Ruby skips the
+            // inline block. This applies both to dynamic receivers and to
+            // concrete methods whose declaration simply omits `&block`.
             // Visit it with gradual parameters so its owned sends and
-            // diagnostics are published instead of disappearing with the
-            // receiver's T.untyped result.
+            // diagnostics are published instead of disappearing during
+            // dispatch.
             if let Some(cfg::BlockOperand::Inline(closure)) = input.block.as_ref() {
                 receiver.block_result = analyzer.transfer_owned_closure_body(
                     *closure,
