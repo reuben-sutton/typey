@@ -103,6 +103,30 @@ fn compiles_cfg_bodies_without_changing_checker_results() {
 }
 
 #[test]
+fn transfers_intrinsics_and_union_builtins_without_recursive_fallback() {
+    let source = r#"
+maybe = T.let(nil, T.nilable(String))
+T.reveal_type(T.must(maybe))
+T.reveal_type(T.cast("text", String))
+T.reveal_type(T.unsafe(maybe))
+T.reveal_type(maybe.to_s)
+T.reveal_type(maybe == "text")
+T.reveal_type(maybe.nil?)
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_hir_predicate_refinements_without_parser_walks() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_hir_predicate.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());

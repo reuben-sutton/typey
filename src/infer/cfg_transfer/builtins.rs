@@ -15,6 +15,17 @@ pub(super) fn transfer_builtin_call(
     values: &[Option<Type>],
     environment: &mut Environment,
 ) -> Option<(Type, Option<Eval>)> {
+    if let Type::Union(members) = receiver {
+        if input.block.is_none() {
+            let mut result = Type::Never;
+            for member in members {
+                let (type_, _) =
+                    transfer_builtin_call(analyzer, input, member, arguments, values, environment)?;
+                result = result.join(&type_);
+            }
+            return (!result.is_never()).then_some((result, None));
+        }
+    }
     let name = input.name.as_str();
     if receiver.is_any() || matches!(receiver, Type::Anything) {
         let type_ = match name {
@@ -138,7 +149,18 @@ pub(super) fn transfer_builtin_call(
             Some(Type::String)
         }
         Type::Nil | Type::True | Type::False | Type::Symbol | Type::Object | Type::Named(_, _)
-            if matches!(name, "nil?" | "!" | "==" | "!=" | "equal?" | "eql?") =>
+            if matches!(
+                name,
+                "nil?"
+                    | "is_a?"
+                    | "kind_of?"
+                    | "instance_of?"
+                    | "!"
+                    | "=="
+                    | "!="
+                    | "equal?"
+                    | "eql?"
+            ) =>
         {
             Some(Type::bool())
         }
