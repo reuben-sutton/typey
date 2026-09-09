@@ -172,7 +172,9 @@ impl<'src> Analyzer<'src> {
                         | cfg::OperationKind::MakeClosure { .. }
                         | cfg::OperationKind::BuildArray { .. }
                         | cfg::OperationKind::BuildHash { .. }
+                        | cfg::OperationKind::BuildInterpolated { .. }
                         | cfg::OperationKind::Record { .. }
+                        | cfg::OperationKind::ApplyAssertion { .. }
                         | cfg::OperationKind::SetOutcome { .. }
                         | cfg::OperationKind::PatternTest { .. }
                         | cfg::OperationKind::BindForTarget { .. }
@@ -433,11 +435,32 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     &mut next.environment,
                 )
                 .ok_or_else(|| format!("hash transfer failed at {:?}", operation.span))?,
+                cfg::OperationKind::BuildInterpolated { kind } => match kind {
+                    crate::hir::InterpolatedKind::String
+                    | crate::hir::InterpolatedKind::XString => Type::String,
+                    crate::hir::InterpolatedKind::RegularExpression => Type::named("Regexp"),
+                    crate::hir::InterpolatedKind::Symbol => Type::Symbol,
+                    crate::hir::InterpolatedKind::MatchLastLine => {
+                        Type::union([Type::Nil, Type::Integer])
+                    }
+                },
                 cfg::OperationKind::Record { value } => {
                     let type_ = value
                         .as_ref()
                         .and_then(|value| next.value(*value))
                         .unwrap_or(Type::Never);
+                    self.analyzer.record_at(site, type_.clone(), false, None);
+                    type_
+                }
+                cfg::OperationKind::ApplyAssertion { value } => {
+                    let type_ = next
+                        .value(*value)
+                        .ok_or_else(|| format!("missing assertion operand {:?}", value))?;
+                    let type_ = self.analyzer.apply_inline_assertion_in_environment_at(
+                        site,
+                        type_,
+                        &next.environment,
+                    );
                     self.analyzer.record_at(site, type_.clone(), false, None);
                     type_
                 }

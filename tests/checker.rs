@@ -174,6 +174,40 @@ fn transfers_owned_literals_and_reads_without_changing_results() {
 }
 
 #[test]
+fn transfers_interpolated_values_without_recursive_child_evaluation() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_interpolated_values.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn applies_safe_navigation_assertions_after_paths_join() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_safe_navigation_assertion.rb")
+        .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_owned_collection_trees_without_prism_child_evaluation() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_owned_collection_trees.rb").expect("fixture");
@@ -1473,6 +1507,23 @@ fn indexes_inline_record_types() {
             .any(|message| message.contains("Revealed type: `String`")),
         "{notes:?}"
     );
+}
+
+#[test]
+fn transfers_inline_record_indexes_through_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/inline_record_dispatch.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
 }
 
 #[test]

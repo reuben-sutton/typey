@@ -240,6 +240,10 @@ pub enum ExprKind {
     Call(Call),
     Array(Vec<ArrayElement>),
     Hash(Vec<HashElement>),
+    Interpolated {
+        kind: InterpolatedKind,
+        parts: Vec<ExprId>,
+    },
     Closure(ClosureId),
     Sequence(Vec<ExprId>),
     If {
@@ -256,6 +260,15 @@ pub enum ExprKind {
     Retry,
     Definition(DeclId),
     Unsupported(Unsupported),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterpolatedKind {
+    String,
+    RegularExpression,
+    Symbol,
+    XString,
+    MatchLastLine,
 }
 
 /// A call preserves syntax-level argument shape until inference evaluates it.

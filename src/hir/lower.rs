@@ -9,9 +9,9 @@
 use super::{
     Argument, ArrayElement, AssignOperator, AssignTarget, BeginExpr, Body, BodyId, BodyOwner,
     CaseArm, CaseExpr, Closure, ClosureId, ClosureKind, ConstantPath, DeclId, Declaration,
-    DeclarationKind, Expr, ExprId, ExprKind, FileId, HashElement, Literal, LocalId, LoopExpr,
-    LoopKind, Name, Parameter, ParameterKind, Parameters, Program, Read, Receiver, RescueClause,
-    ScopeId, Span, Unsupported,
+    DeclarationKind, Expr, ExprId, ExprKind, FileId, HashElement, InterpolatedKind, Literal,
+    LocalId, LoopExpr, LoopKind, Name, Parameter, ParameterKind, Parameters, Program, Read,
+    Receiver, RescueClause, ScopeId, Span, Unsupported,
 };
 use crate::prism;
 use ruby_prism::{ArgumentsNode, CallNode, Node, ParametersNode, Visit};
@@ -205,6 +205,16 @@ impl<'src> Lowerer<'src> {
             .next()
             .unwrap_or("prism-node")
             .to_owned()
+    }
+
+    fn lower_interpolated<'pr>(
+        &mut self,
+        node: &Node<'_>,
+        kind: InterpolatedKind,
+        parts: ruby_prism::NodeList<'pr>,
+    ) -> ExprId {
+        let parts = parts.iter().map(|part| self.lower_node(&part)).collect();
+        self.push_expr(node, ExprKind::Interpolated { kind, parts })
     }
 
     /// Unsupported parents still contain executable expressions. Keep calls
@@ -606,6 +616,38 @@ impl<'src> Lowerer<'src> {
         }
         if let Some(hash) = node.as_keyword_hash_node() {
             return self.lower_hash(node, hash.elements());
+        }
+        if let Some(string) = node.as_interpolated_string_node() {
+            return self.lower_interpolated(node, InterpolatedKind::String, string.parts());
+        }
+        if let Some(regexp) = node.as_interpolated_regular_expression_node() {
+            return self.lower_interpolated(
+                node,
+                InterpolatedKind::RegularExpression,
+                regexp.parts(),
+            );
+        }
+        if let Some(symbol) = node.as_interpolated_symbol_node() {
+            return self.lower_interpolated(node, InterpolatedKind::Symbol, symbol.parts());
+        }
+        if let Some(xstring) = node.as_interpolated_x_string_node() {
+            return self.lower_interpolated(node, InterpolatedKind::XString, xstring.parts());
+        }
+        if let Some(match_last_line) = node.as_interpolated_match_last_line_node() {
+            return self.lower_interpolated(
+                node,
+                InterpolatedKind::MatchLastLine,
+                match_last_line.parts(),
+            );
+        }
+        if let Some(embedded) = node.as_embedded_statements_node() {
+            return embedded
+                .statements()
+                .map(|statements| self.lower_node(&statements.as_node()))
+                .unwrap_or_else(|| self.nil(node));
+        }
+        if let Some(embedded) = node.as_embedded_variable_node() {
+            return self.lower_node(&embedded.variable());
         }
         if let Some(parentheses) = node.as_parentheses_node() {
             return if let Some(body) = parentheses.body() {

@@ -6,6 +6,7 @@
 
 use super::super::{Analyzer, CallArguments, Environment, Eval, OwnedCallInput};
 use crate::types::Type;
+use crate::{hir, signature};
 
 pub(super) fn transfer_builtin_call(
     analyzer: &mut Analyzer<'_>,
@@ -38,6 +39,15 @@ pub(super) fn transfer_builtin_call(
     }
     if receiver.is_never() {
         return Some((Type::Never, None));
+    }
+    if name == "[]" {
+        if let Type::Named(record, _) = receiver {
+            if let Some(key) = owned_inline_record_key(analyzer, input) {
+                if let Some(type_) = signature::parse_inline_record_field(record, &key) {
+                    return Some((type_, None));
+                }
+            }
+        }
     }
 
     let mut callback = |parameters: &[Type]| {
@@ -172,6 +182,24 @@ pub(super) fn transfer_builtin_call(
         _ => None,
     }?;
     Some((result, None))
+}
+
+fn owned_inline_record_key(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<String> {
+    let expression = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))?;
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return None;
+    };
+    let hir::Argument::Positional(argument) = call.arguments.first()? else {
+        return None;
+    };
+    let expression = analyzer.program.hir_program.expression(*argument)?;
+    match &expression.kind {
+        hir::ExprKind::Literal(hir::Literal::Symbol(name))
+        | hir::ExprKind::Literal(hir::Literal::String(name)) => Some(name.clone()),
+        _ => None,
+    }
 }
 
 fn transfer_array_builtin(

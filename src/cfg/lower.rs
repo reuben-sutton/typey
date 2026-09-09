@@ -371,6 +371,9 @@ impl<'program> Builder<'program> {
             ExprKind::Call(call) => self.lower_call(expression, block, call),
             ExprKind::Array(elements) => self.lower_array(expression, block, span, elements),
             ExprKind::Hash(elements) => self.lower_hash(expression, block, span, elements),
+            ExprKind::Interpolated { kind, parts } => {
+                self.lower_interpolated(expression, block, span, kind, parts)
+            }
             ExprKind::Closure(closure) => {
                 let value = self.emit(block, span, OperationKind::MakeClosure { closure }, true);
                 self.normal(expression, block, value)
@@ -433,6 +436,37 @@ impl<'program> Builder<'program> {
     ) -> Flow {
         let value = self.emit(block, span, OperationKind::Const { value: literal }, true);
         self.normal(expression, block, value)
+    }
+
+    fn lower_interpolated(
+        &mut self,
+        expression: ExprId,
+        block: BlockId,
+        span: Span,
+        kind: hir::InterpolatedKind,
+        parts: Vec<ExprId>,
+    ) -> Flow {
+        let mut flow = Flow {
+            block,
+            value: None,
+            reachable: true,
+        };
+        for part in parts {
+            if !flow.reachable {
+                break;
+            }
+            flow = self.lower_expr(part, flow.block);
+        }
+        if !flow.reachable {
+            return self.abrupt(expression, flow.block);
+        }
+        let value = self.emit(
+            flow.block,
+            span,
+            OperationKind::BuildInterpolated { kind },
+            true,
+        );
+        self.normal(expression, flow.block, value)
     }
 
     fn lower_read(&mut self, expression: ExprId, block: BlockId, span: Span, read: Read) -> Flow {
@@ -574,6 +608,12 @@ impl<'program> Builder<'program> {
             nil_block,
             call_block,
         );
+        // A safe-navigation expression has two runtime paths but one source
+        // expression.  Defer a trailing inline assertion until after those
+        // paths join; applying it to the synthetic nil branch would report a
+        // false error for `value&.method #: as !nil`.
+        let previous_defer_inline_assertions = self.defer_inline_assertions;
+        self.defer_inline_assertions = true;
         let nil_value = self.emit(
             nil_block,
             call.span,
@@ -599,10 +639,17 @@ impl<'program> Builder<'program> {
             },
             true,
         );
+        self.defer_inline_assertions = previous_defer_inline_assertions;
         self.jump(
             call_block,
             join,
             vec![call_value.expect("call produces a value")],
+        );
+        self.emit(
+            join,
+            call.span,
+            OperationKind::ApplyAssertion { value: joined },
+            false,
         );
         self.normal(expression, join, Some(joined))
     }

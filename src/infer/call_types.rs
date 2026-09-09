@@ -333,7 +333,25 @@ impl<'src> Analyzer<'src> {
                 environment,
             ),
             cfg::BlockOperand::Passed(value) => {
-                let expected = signature.block.as_ref().and_then(optional_proc_type);
+                let mut bindings = self.infer_type_parameter_bindings(signature, arguments, None);
+                bindings.extend(self.infer_generic_member_bindings(
+                    signature,
+                    arguments,
+                    Some(receiver_type),
+                ));
+                let expected =
+                    signature
+                        .block
+                        .as_ref()
+                        .and_then(optional_proc_type)
+                        .map(|expected| {
+                            self.substitute_signature_type(
+                                &expected,
+                                Some(receiver_type),
+                                &bindings,
+                                &signature.type_parameters,
+                            )
+                        });
                 if let (Some(expected), Some(name)) =
                     (expected.as_ref(), self.cfg_passed_symbol_name(input))
                 {

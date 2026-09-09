@@ -135,6 +135,12 @@ fn expr_transfer_failure(
             }
             Ok(())
         }
+        ExprKind::Interpolated { parts, .. } => {
+            for part in parts {
+                expr_transfer_failure(program, *part, visiting, loop_depth, context)?;
+            }
+            Ok(())
+        }
         ExprKind::Closure(closure) => {
             let Some(closure) = program.closure(*closure) else {
                 return Err(failure(program, expression, "missing closure"));

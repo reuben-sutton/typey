@@ -138,11 +138,21 @@ pub enum OperationKind {
     BuildHash {
         elements: Vec<HashOperand>,
     },
+    BuildInterpolated {
+        kind: hir::InterpolatedKind,
+    },
     /// Record a joined expression value without introducing another runtime
     /// operation. This is used for begin/conditional join expressions whose
     /// value is carried by a block parameter.
     Record {
         value: Option<ValueId>,
+    },
+    /// Publish a joined expression value after applying its source-level
+    /// inline assertion. This is distinct from `Record` because ordinary
+    /// control-flow joins such as logical assignments must not reapply an
+    /// assertion that belongs to one of their child writes.
+    ApplyAssertion {
+        value: ValueId,
     },
     /// Route a non-local control value through an active ensure region.
     SetOutcome {
