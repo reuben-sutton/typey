@@ -819,6 +819,15 @@ fn refines_double_bang_operands_in_owned_logical_cfg() {
         },
     );
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    let bang_start = source.find("!!value").expect("double-bang expression");
+    let bang_end = bang_start + "!!value".len();
+    assert!(cfg
+        .types
+        .iter()
+        .any(|inferred| inferred.start == bang_start
+            && inferred.end == bang_end
+            && inferred.type_ == Type::bool()
+            && inferred.is_send));
     assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
 }
 

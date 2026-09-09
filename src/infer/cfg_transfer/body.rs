@@ -191,11 +191,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
     }
 
     fn suppress_internal_call_record(&self, operation: &cfg::Operation) -> bool {
-        // The parser-backed evaluator uses `!value` as a control-flow
-        // predicate, so the source span remains associated with the operand
-        // rather than gaining a second recorded type for Ruby's boolean
-        // protocol call.  Keep the owned transfer's boolean result for branch
-        // narrowing, but preserve the same observable type recording.
         let cfg::OperationKind::Call { name, .. } = &operation.kind else {
             return false;
         };
@@ -212,9 +207,6 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             // the trailing assertion at the synthetic join. The branch call
             // must not publish a competing pre-assertion type for the same
             // source span.
-            return true;
-        }
-        if name.as_str() == "!" {
             return true;
         }
         let Some(expression) = operation
