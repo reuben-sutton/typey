@@ -1062,9 +1062,18 @@ impl<'src> Analyzer<'src> {
                     .and_then(Self::class_object_owner)
                     .is_some_and(|receiver_owner| receiver_owner == *owner)
             });
-        let attached_class = match attached_class_context {
-            Some(owner) => Type::AttachedClassOf(owner.to_owned()),
-            None => self.attached_class_type(receiver_type),
+        // Resolving an attached class for a receiver union can be expensive:
+        // the receiver of an implicit call may represent every class in the
+        // workspace. Most signature types do not mention `T.attached_class`,
+        // so avoid constructing that union unless substitution can observe
+        // it.
+        let attached_class = if Self::contains_attached_class_type(type_) {
+            match attached_class_context {
+                Some(owner) => Type::AttachedClassOf(owner.to_owned()),
+                None => self.attached_class_type(receiver_type),
+            }
+        } else {
+            Type::AttachedClass
         };
         if let Type::BoundProc {
             receiver,
