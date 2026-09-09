@@ -273,6 +273,10 @@ The first modularization steps are now in place:
   match-last-line expressions now lower to owned HIR/CFG construction
   operations with no child Prism evaluation; their conformance expectations
   are checked against the same source spans.
+* `defined?` now lowers its operand into owned HIR/CFG operations. Operand
+  sends and inferred values remain visible for accounting, while only the
+  probe's ordinary diagnostics are suppressed, matching the recursive
+  evaluator's behavior.
 * `&&` and `||` now lower to owned short-circuit CFG branches and a value join.
   The transfer layer carries truthiness through nested unary negation and
   carries facts from a composite predicate into the normal path after an
@@ -289,11 +293,15 @@ The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
-semantics. Removing those requires moving their diagnostic and block contracts
-to owned source sites rather than weakening the checker. CFG fallback telemetry now
-distinguishes unsupported operations, unsupported edges, and legacy bridges;
-the migrated ordinary-body path now uses explicit outcome routing for
-non-local `return`, `break`, and `next`, including through ensure regions.
+semantics in some receiver contexts. On the Packwerk regression run, the
+current owned-CFG boundary is 15 unique fallback spans: one declaration body,
+four dynamic-method/name calls, and ten missing or invalid library contracts;
+the `defined?` span is no longer among them. Removing those requires moving
+their diagnostic and block contracts to owned source sites rather than
+weakening the checker. CFG fallback telemetry now distinguishes unsupported
+operations, unsupported edges, and legacy bridges; the migrated ordinary-body
+path now uses explicit outcome routing for non-local `return`, `break`, and
+`next`, including through ensure regions.
 
 ## Design
 
