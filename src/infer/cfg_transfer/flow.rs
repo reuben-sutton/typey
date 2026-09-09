@@ -2,17 +2,10 @@
 
 use super::super::cfg_state::BlockState;
 use super::super::{Analyzer, Environment};
-use super::patterns::{case_match_reachability, truthiness_reachability};
+use super::patterns::truthiness_reachability;
 use crate::cfg;
 use crate::hir::{self, Read};
 use crate::types::Type;
-
-fn contains_class_object(type_: &Type) -> bool {
-    match type_ {
-        Type::Union(members) => members.iter().any(contains_class_object),
-        type_ => Analyzer::class_object_instance_type(type_).is_some(),
-    }
-}
 
 pub(super) fn narrow_conditional_branch(
     analyzer: &mut Analyzer<'_>,
@@ -30,7 +23,7 @@ pub(super) fn narrow_conditional_branch(
 }
 
 pub(super) fn conditional_reachability(
-    analyzer: &mut Analyzer<'_>,
+    analyzer: &Analyzer<'_>,
     graph: &cfg::Cfg,
     truthy: cfg::BlockId,
     falsy: cfg::BlockId,
@@ -62,53 +55,6 @@ pub(super) fn conditional_reachability(
         };
         if state.environment.is_inferred(name.as_str()) {
             return (true, true);
-        }
-    }
-    if let Some(condition) = condition {
-        if let Some(hir::ExprKind::Call(call)) = analyzer
-            .program
-            .hir_program
-            .expression(condition)
-            .map(|expression| expression.kind.clone())
-        {
-            if matches!(call.name.as_str(), "is_a?" | "kind_of?" | "instance_of?") {
-                if let hir::Receiver::Explicit(receiver) = call.receiver {
-                    let Some(hir::ExprKind::Read(Read::Local(local))) = analyzer
-                        .program
-                        .hir_program
-                        .expression(receiver)
-                        .map(|expression| &expression.kind)
-                    else {
-                        return truthiness_reachability(source);
-                    };
-                    let Some(hir::Argument::Positional(argument)) = call.arguments.first() else {
-                        return truthiness_reachability(source);
-                    };
-                    let Some(name) = analyzer
-                        .program
-                        .hir_program
-                        .local_name(*local)
-                        .map(|name| name.as_str().to_owned())
-                    else {
-                        return truthiness_reachability(source);
-                    };
-                    let current = state.environment.get(&name);
-                    let expected =
-                        analyzer.cfg_predicate_argument_type(*argument, &state.environment);
-                    if contains_class_object(&current) {
-                        // A class object is an instance of Class/Module, not
-                        // an instance of the class represented by its type
-                        // argument. The nominal instance disjointness rule
-                        // must not make reflective calls such as
-                        // `base.is_a?(Module)` unreachable.
-                        return truthiness_reachability(source);
-                    }
-                    if matches!(expected, Type::Any | Type::Anything | Type::TypeVar(_)) {
-                        return truthiness_reachability(source);
-                    }
-                    return case_match_reachability(analyzer, &current, &expected, true);
-                }
-            }
         }
     }
     truthiness_reachability(source)

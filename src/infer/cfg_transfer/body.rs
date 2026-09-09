@@ -5,7 +5,9 @@ use super::super::{
     Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput, SourceSite,
 };
 use super::globals::{clear_cfg_global_state, commit_cfg_global_state, seed_cfg_global_state};
-use super::patterns::{narrow_pattern_value, pattern_source, pattern_source_place};
+use super::patterns::{
+    case_match_reachability, narrow_pattern_value, pattern_source, pattern_source_place,
+};
 use super::preflight;
 use crate::cfg;
 use crate::hir::{self, Read};
@@ -22,6 +24,13 @@ pub(super) struct BodyTransfer<'analyzer, 'src> {
     pub(super) terminal_flow: Flow,
     pub(super) final_environment: Option<Environment>,
     pub(super) top_level_terminated: bool,
+}
+
+fn contains_class_object(type_: &Type) -> bool {
+    match type_ {
+        Type::Union(members) => members.iter().any(contains_class_object),
+        type_ => Analyzer::class_object_instance_type(type_).is_some(),
+    }
 }
 
 impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
@@ -65,12 +74,8 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         graph: &cfg::Cfg,
         truthy: cfg::BlockId,
         falsy: cfg::BlockId,
-        truthy_reachable: bool,
-        falsy_reachable: bool,
+        state: &BlockState,
     ) {
-        if truthy_reachable && falsy_reachable {
-            return;
-        }
         let Some(conditional) = graph
             .conditionals
             .iter()
@@ -98,6 +103,44 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                     )
             )
         {
+            return;
+        }
+        let hir::Receiver::Explicit(receiver) = call.receiver else {
+            return;
+        };
+        let Some(hir::ExprKind::Read(Read::Local(local))) = self
+            .analyzer
+            .program
+            .hir_program
+            .expression(receiver)
+            .map(|expression| &expression.kind)
+        else {
+            return;
+        };
+        let Some(name) = self
+            .analyzer
+            .program
+            .hir_program
+            .local_name(*local)
+            .map(|name| name.as_str().to_owned())
+        else {
+            return;
+        };
+        let current = state.environment.get(&name);
+        let Some(hir::Argument::Positional(argument)) = call.arguments.first() else {
+            return;
+        };
+        let expected = self
+            .analyzer
+            .cfg_predicate_argument_type(*argument, &state.environment);
+        if contains_class_object(&current)
+            || matches!(expected, Type::Any | Type::Anything | Type::TypeVar(_))
+        {
+            return;
+        }
+        let (truthy_reachable, falsy_reachable) =
+            case_match_reachability(self.analyzer, &current, &expected, true);
+        if truthy_reachable && falsy_reachable {
             return;
         }
         if !self.should_report_unreachable_branch(conditional.expression) {
@@ -1051,13 +1094,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         &next,
                     )
                 };
-                self.report_unreachable_branch(
-                    graph,
-                    *truthy,
-                    *falsy,
-                    truthy_reachable,
-                    falsy_reachable,
-                );
+                self.report_unreachable_branch(graph, *truthy, *falsy, &next);
                 let mut edges = Vec::with_capacity(2);
                 if truthy_reachable {
                     let mut state = next.clone();
