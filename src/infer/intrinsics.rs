@@ -334,6 +334,24 @@ impl<'src> Analyzer<'src> {
             // must still recognize its call without requiring an application
             // method or a parser-backed DSL bridge.
             "sig" => Some(Type::Nil),
+            "private_class_method"
+            | "has_attached_class!"
+            | "type_member"
+            | "type_template"
+            | "mixes_in_class_methods"
+            | "each"
+            | "alias_method"
+            | "attr_reader"
+            | "attr_writer"
+            | "attr_accessor"
+            | "private"
+            | "protected"
+            | "public"
+            | "module_function"
+            | "autoload"
+            | "private_constant"
+            | "public_constant"
+            | "refine" => Some(Type::Nil),
             _ => None,
         }
     }

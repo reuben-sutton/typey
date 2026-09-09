@@ -7827,8 +7827,7 @@ T.reveal_type(ActiveSupport::Inflector.classify("posts"))
 
 #[test]
 fn models_module_registration_calls() {
-    let result = check(
-        r#"
+    let source = r#"
 module Registry
   VALUE = 1
 
@@ -7839,9 +7838,17 @@ module Registry
 end
 
 T.reveal_type(Registry.configure)
-"#,
-        CheckerConfig::default(),
+"#;
+    let result = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
     );
+    assert_eq!(cfg.diagnostics, result.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
