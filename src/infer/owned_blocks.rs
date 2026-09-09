@@ -15,6 +15,56 @@ use crate::signature::MethodSig;
 use crate::types::Type;
 
 impl<'src> Analyzer<'src> {
+    /// `class_eval`/`module_eval` and their siblings have a block-only Ruby
+    /// form that is represented by a separate RBI overload. Dispatching that
+    /// overload through ordinary positional arity checking is incorrect: the
+    /// block is the operation's input, not an omitted required string. Keep
+    /// the dynamic-eval contract beside the owned closure transfer so both
+    /// inline and passed blocks use the same bound receiver semantics.
+    pub(super) fn cfg_dynamic_eval_call(
+        &mut self,
+        input: &OwnedCallInput,
+        receiver: &Type,
+        values: &[Option<Type>],
+        environment: &mut Environment,
+    ) -> Option<Eval> {
+        if !matches!(
+            input.name.as_str(),
+            "class_eval" | "module_eval" | "class_exec" | "instance_eval"
+        ) {
+            return None;
+        }
+        if !matches!(input.name.as_str(), "instance_eval")
+            && !receiver.is_any()
+            && Self::class_object_instance_type(receiver).is_none()
+            && !matches!(
+                receiver,
+                Type::Named(name, _)
+                    if super::name_matches(name, "Class") || super::name_matches(name, "Module")
+            )
+        {
+            return None;
+        }
+        match input.block.as_ref() {
+            Some(cfg::BlockOperand::Inline(closure)) => self.transfer_owned_closure_body(
+                *closure,
+                &[Type::Any],
+                None,
+                Some(receiver),
+                environment,
+            ),
+            Some(cfg::BlockOperand::Passed(value)) => values
+                .get(value.0 as usize)
+                .and_then(Option::as_ref)
+                .and_then(proc_parts)
+                .map_or_else(
+                    || Some(Eval::value(Type::Any)),
+                    |(_, result)| Some(Eval::value(result.clone())),
+                ),
+            None => Some(Eval::value(Type::Any)),
+        }
+    }
+
     pub(super) fn cfg_owned_closure_type(
         &mut self,
         closure_id: hir::ClosureId,

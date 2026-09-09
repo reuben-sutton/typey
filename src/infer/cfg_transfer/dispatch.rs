@@ -116,6 +116,16 @@ pub(super) fn transfer_receiver_call(
         });
     }
 
+    if let Some(result) = analyzer.cfg_dynamic_eval_call(input, receiver, values, environment) {
+        let type_ = result.type_.clone();
+        return Ok(ReceiverTransfer {
+            type_,
+            block_result: Some(result),
+            untyped_origin: UntypedOrigin::Propagated,
+            missing_method: false,
+        });
+    }
+
     if matches!(name, "include" | "prepend" | "extend")
         && Analyzer::class_object_owner(receiver).is_some()
     {

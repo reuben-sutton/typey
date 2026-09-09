@@ -1372,6 +1372,41 @@ fn transfers_open_array_appends_through_owned_cfg() {
 }
 
 #[test]
+fn transfers_dynamic_eval_blocks_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_dynamic_eval.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `Integer`")));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn accepts_dynamic_splats_after_required_arguments_through_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_dynamic_splat_after_required.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn does_not_treat_observed_argument_types_as_exhaustive_validation() {
     check_fixture("tests/fixtures/inferred_argument_validation.rb");
 }

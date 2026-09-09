@@ -327,8 +327,8 @@ impl<'src> Analyzer<'src> {
                 .accepts_rest
                 .then_some(signature.rest_index)
                 .flatten()
-                .filter(|index| *index == 0)
-                .and_then(|_| signature.params.first())
+                .filter(|index| *index <= argument_types.len())
+                .and_then(|index| signature.params.get(index))
                 .map(|expected| {
                     self.substitute_signature_type(
                         expected,
