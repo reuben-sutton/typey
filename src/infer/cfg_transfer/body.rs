@@ -211,7 +211,19 @@ impl<'src> Analyzer<'src> {
             strictness: self.strictness_at(body.span.start as usize),
             closure_kind,
         };
+        let original_self_type = environment.self_type.clone();
         let mut initial_environment = environment.clone();
+        if !self.defer_inline_assertions {
+            if let Some(assertion) = self
+                .inline_assertion_for_site(body_site)
+                .filter(|assertion| assertion.kind == crate::signature::AssertionKind::SelfAs)
+            {
+                initial_environment.self_type = self.resolve_type_names(
+                    &assertion.type_,
+                    self.lexical_owner(&initial_environment).as_deref(),
+                );
+            }
+        }
         seed_cfg_global_state(self, &graph, &mut initial_environment);
         let fallback_environment = initial_environment.clone();
         let initial = BlockState::with_values(initial_environment, Vec::new(), Flow::normal());
@@ -252,6 +264,10 @@ impl<'src> Analyzer<'src> {
             .final_environment
             .clone()
             .unwrap_or(fallback_environment);
+        // `self as` narrows only this expression/body evaluation. Do not
+        // publish the temporary receiver context to the enclosing method or
+        // caller environment.
+        final_environment.self_type = original_self_type;
         drop(worklist);
         drop(transfer);
         self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);

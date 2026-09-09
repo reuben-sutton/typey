@@ -129,6 +129,22 @@ fn transfers_union_enumerable_predicates_through_cfg() {
 }
 
 #[test]
+fn transfers_self_as_assertions_into_cfg_body_context() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_self_as_body.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn compiles_cfg_bodies_without_changing_checker_results() {
     let source = "value = 1\nif value\n  value.to_s\nend\n";
     let baseline = check(source, CheckerConfig::default());
