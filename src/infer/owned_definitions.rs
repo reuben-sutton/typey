@@ -58,6 +58,13 @@ impl<'src> Analyzer<'src> {
         body: hir::BodyId,
         outer: &mut Environment,
     ) -> Result<(), String> {
+        // RBI method bodies are declaration placeholders, not executable
+        // application code. Their signatures are registered above; executing
+        // bodies such as `def call(*args, **, &block); end` would only create
+        // CFG fallback noise for syntax that has no runtime semantics here.
+        if self.is_rbi_offset(span.start as usize) {
+            return Ok(());
+        }
         let registered_key = self
             .declarations
             .definitions
