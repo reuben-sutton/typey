@@ -19,6 +19,14 @@ pub(super) fn finish_call(
     untyped_origin: UntypedOrigin,
     environment: &mut Environment,
 ) -> Eval {
+    // A callback may be registered for a later event or run in another
+    // process/thread. Its abrupt paths are real paths for the callback, but
+    // they are not paths that terminate the call site. In particular,
+    // `Signal.trap("INT") { abort ... }` still returns the previous handler,
+    // and `Thread.new { ... }` still returns a Thread. Keep transferring the
+    // callback so its body is checked, while keeping its control outcomes in
+    // the callback's execution context.
+    let deferred_callback = callback_is_deferred(input, receiver_type);
     if input.safe_navigation && !receiver_type.is_any() {
         type_ = Type::union([Type::Nil, type_]);
     }
@@ -29,12 +37,17 @@ pub(super) fn finish_call(
         cfg_call_raise_type(analyzer, input, receiver_type, environment, &type_)
     };
     let has_normal_path = call_can_return
-        && block_result
+        && (deferred_callback
+            || block_result
+                .as_ref()
+                .is_none_or(|result| result.normal_type.is_some()));
+    let callback_outcomes = if deferred_callback {
+        OutcomeTypes::default()
+    } else {
+        block_result
             .as_ref()
-            .is_none_or(|result| result.normal_type.is_some());
-    let callback_outcomes = block_result
-        .as_ref()
-        .map_or_else(OutcomeTypes::default, Eval::callback_outcomes);
+            .map_or_else(OutcomeTypes::default, Eval::callback_outcomes)
+    };
     let normal_type = has_normal_path.then_some(type_.clone());
     let mut result = Eval::from_parts(
         normal_type,
@@ -58,6 +71,34 @@ pub(super) fn finish_call(
     }
     analyzer.remember_untyped_origin_at(input.site, &result.type_, untyped_origin);
     result
+}
+
+fn callback_is_deferred(input: &OwnedCallInput, receiver_type: &Type) -> bool {
+    let receiver_name = Analyzer::class_object_instance_type(receiver_type)
+        .and_then(|instance| Analyzer::named_type_name(&instance));
+    match input.name.as_str() {
+        // Kernel's trap and at_exit forms register callbacks rather than
+        // invoking them while evaluating the call.
+        "at_exit" => matches!(input.receiver, cfg::ReceiverOperand::Implicit),
+        "trap" => {
+            matches!(input.receiver, cfg::ReceiverOperand::Implicit)
+                || receiver_name
+                    .as_deref()
+                    .is_some_and(|name| name == "Signal" || name.ends_with("::Signal"))
+        }
+        // These blocks execute in a different Ruby execution context. Their
+        // return/raise behavior cannot terminate the creating call.
+        "new" => receiver_name.as_deref().is_some_and(|name| {
+            name == "Thread"
+                || name.ends_with("::Thread")
+                || name == "Ractor"
+                || name.ends_with("::Ractor")
+        }),
+        "fork" => receiver_name
+            .as_deref()
+            .is_some_and(|name| name == "Process" || name.ends_with("::Process")),
+        _ => false,
+    }
 }
 
 pub(super) fn cfg_call_raise_type(

@@ -4373,6 +4373,38 @@ T.reveal_type(require_relative("library"))
 }
 
 #[test]
+fn keeps_deferred_callbacks_from_terminating_the_creator() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_deferred_callbacks.rb")
+        .expect("fixture exists");
+    let builtin = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    let mut legacy_files = builtin.clone();
+    legacy_files.push(WorkspaceFile::new(
+        "cfg_deferred_callbacks.rb",
+        source.clone(),
+    ));
+    let legacy = check_workspace(&legacy_files, CheckerConfig::default());
+    assert!(!legacy.has_errors(), "{:#?}", legacy.diagnostics);
+
+    let mut cfg_files = builtin;
+    cfg_files.push(WorkspaceFile::new("cfg_deferred_callbacks.rb", source));
+    let cfg = check_workspace(
+        &cfg_files,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    let reveals = cfg
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.diagnostic.message.contains("Revealed type:"))
+        .count();
+    assert_eq!(reveals, 2, "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn uses_typed_constants_from_rbis() {
     let files = vec![
         WorkspaceFile::new(
