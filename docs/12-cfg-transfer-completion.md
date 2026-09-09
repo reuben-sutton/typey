@@ -310,36 +310,37 @@ is the known `Time?` passed to `Time` case in `coverage.rb`; the legacy path
 reports the same finding, while Sorbet accepts it through Thor's untyped option
 hash. The run reached final convergence in four worklist rounds, reported
 1,048 unknown application-library sends out of 5,979 (17.5%), and completed in
-2.53 seconds including repository checking (1.79 seconds through the checker).
+2.29 seconds including repository checking (1.70 seconds through the checker).
 
 The remaining bridges are deliberate and measurable: the recursive evaluator's
 call adapter still needs parser nodes for exact argument diagnostics and
 builtin hooks, while forwarded or passed blocks supplied to
 `define_method`/`define_singleton_method` still require future-method binding
 semantics in some receiver contexts. On the latest Packwerk regression run,
-the owned path transferred 9,238 bodies and 127,886 calls with zero
+the owned path transferred 8,897 bodies and 127,126 calls with zero
 unsupported-operation fallbacks, zero unsupported edges, and zero legacy
-bridges. It reports 22 diagnostics in 2.16 seconds through the checker (2.99
-seconds including repository discovery and reporting), and 398 unknown
+bridges. It reports 22 diagnostics in 1.97 seconds through the checker (2.61
+seconds including repository discovery and reporting), and 396 unknown
 application-library sends out of 1,578 (25.2%). The exact diagnostic set now
 matches the legacy run: 18 malformed Minitest shim diagnostics and four
 legitimate NodeHelpers array-index nilability findings.
 
 The latest full ActiveSupport run is the current large-component boundary:
-27,099 HIR bodies were compiled and 14,240 bodies, 52,785 calls, 3,359
-assignments, and 32,735 values transferred across six worklist rounds. There
-were zero unsupported-edge and zero legacy-bridge fallbacks, but 751
-unsupported-operation records remain across 150 unique source spans, plus two
-unsupported HIR handoffs. The largest remaining groups are unresolved `super`
-contracts (54 unique spans), missing implicit-call contracts, five unavailable
-owned argument shapes, and definition/closure handoffs. The owned run reports
-425 diagnostics and 12,626 application-library send sites, of which 7,968
-(63.1%) are unknown; it completes in 273.3 seconds including final reporting.
-The fresh legacy recursive run on the same checkout reports 724 diagnostics in
-164.5 seconds: 393 diagnostics match exactly, with 32 CFG-only findings and
-331 legacy-only findings. The CFG path is therefore transferring most method
-bodies, but it is not yet a replacement: the remaining work is primarily call
-contract/bridge parity and convergence cost, not basic CFG construction.
+27,099 HIR bodies were compiled and 9,690 bodies, 36,307 calls, 3,081
+assignments, and 30,702 values transferred across six worklist rounds. There
+were zero unsupported-edge and zero legacy-bridge fallbacks, but 502
+unsupported-operation records remain across 149 unique source spans, plus two
+unsupported HIR handoffs. The largest remaining groups are unresolved
+`super` contracts, missing implicit-call contracts, unavailable owned argument
+shapes, and definition/closure handoffs. The owned run reports 425 diagnostics
+and 12,626 application-library send sites, of which 7,968 (63.1%) are unknown;
+it completes in 151.9 seconds including final reporting after narrowing method
+resolution invalidation to affected dependents. The fresh legacy recursive run
+on the same checkout reports 724 diagnostics in 164.5 seconds: 393 diagnostics
+match exactly, with 32 CFG-only findings and 331 legacy-only findings. The CFG
+path is therefore faster than the legacy path on this component, but it is not
+yet a replacement: the remaining work is primarily call contract/bridge parity,
+fallback classification, and differential type coverage.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
