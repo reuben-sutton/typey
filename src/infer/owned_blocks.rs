@@ -105,9 +105,18 @@ impl<'src> Analyzer<'src> {
             cfg::ReceiverOperand::Value(_) => receiver_type,
             cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => return None,
         };
+        let receiver_is_declared_module = match receiver {
+            Type::Named(name, _) => self
+                .declarations
+                .classes
+                .get(name)
+                .is_some_and(|info| info.is_module),
+            _ => false,
+        };
         if binding == BlockReceiverBinding::Instance
             && Self::class_object_instance_type(receiver).is_none()
             && !receiver.is_any()
+            && !receiver_is_declared_module
         {
             return None;
         }

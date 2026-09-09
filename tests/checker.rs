@@ -7457,7 +7457,7 @@ fn traverses_direct_define_method_bodies() {
 fn transfers_inline_dynamic_method_bodies_through_cfg() {
     let path = "tests/fixtures/cfg_dynamic_define_method.rb";
     let source = std::fs::read_to_string(path).unwrap();
-    check_fixture(path);
+    let baseline = check_fixture(path);
     let result = check(
         &source,
         CheckerConfig {
@@ -7465,6 +7465,8 @@ fn transfers_inline_dynamic_method_bodies_through_cfg() {
             ..CheckerConfig::default()
         },
     );
+    assert_eq!(result.diagnostics, baseline.diagnostics);
+    assert_eq!(result.types, baseline.types);
     let start = source.rfind("\"ok\".upcase").expect("dynamic body send");
     assert!(
         result
