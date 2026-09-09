@@ -16,6 +16,7 @@ pub(super) fn transfer_builtin_call(
     values: &[Option<Type>],
     environment: &mut Environment,
 ) -> Option<(Type, Option<Eval>)> {
+    let name = input.name.as_str();
     if let Type::Union(members) = receiver {
         if input.block.is_none() {
             let mut result = Type::Never;
@@ -26,8 +27,34 @@ pub(super) fn transfer_builtin_call(
             }
             return (!result.is_never()).then_some((result, None));
         }
+        if matches!(name, "map" | "collect") {
+            let mut element = Type::Never;
+            for member in members {
+                let member_element = match member {
+                    Type::Array(element) => element.as_ref().clone(),
+                    Type::Tuple(elements) => {
+                        analyzer.array_element_type(&Type::Tuple(elements.clone()))
+                    }
+                    Type::Named(class, arguments) if name_matches(class, "Enumerator") => {
+                        arguments.first().cloned().unwrap_or(Type::Any)
+                    }
+                    _ => return None,
+                };
+                element = element.join(&member_element);
+            }
+            let callback = analyzer.cfg_owned_block_return_type(
+                input,
+                std::slice::from_ref(&element),
+                &Type::Anything,
+                values,
+                environment,
+            )?;
+            return Some((
+                Type::Array(Box::new(Analyzer::block_value_type(&callback))),
+                Some(callback),
+            ));
+        }
     }
-    let name = input.name.as_str();
     if receiver.is_any() || matches!(receiver, Type::Anything) {
         let type_ = match name {
             "to_s" | "to_str" | "inspect" => Type::String,
