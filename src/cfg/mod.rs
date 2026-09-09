@@ -37,12 +37,22 @@ pub struct Cfg {
     /// Entry blocks for ensure regions. The transfer phase uses this owned
     /// marker to distinguish an ensure completion from an ordinary jump.
     pub ensure_entries: Vec<BlockId>,
+    /// Rescue handler regions whose normal exits are separate from the
+    /// protected body. The transfer phase can inspect these handlers even
+    /// when no statically known call in the protected body raises.
+    pub rescue_regions: Vec<RescueRegion>,
     /// Source spans where lowering required a transitional unsupported handoff.
     pub unsupported_spans: Vec<Span>,
     /// The value produced by each HIR expression, when it has a normally
     /// completing path. This keeps the graph connected to source HIR without
     /// embedding parser or inference state in the CFG.
     pub expression_values: Vec<Option<ValueId>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RescueRegion {
+    pub entry: BlockId,
+    pub exit: BlockId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -60,18 +60,32 @@ pub fn run<T>(
 where
     T: BlockTransfer,
 {
-    let entry = cfg
-        .block(cfg.entry)
-        .ok_or(WorklistError::InvalidBlock(cfg.entry))?;
+    run_from(cfg, transfer, cfg.entry, initial)
+}
+
+/// Interpret a CFG from an explicitly selected block until every reachable
+/// block has a stable joined state. This is useful for transfer-side analysis
+/// of regions that are structurally present in the graph but are not reached
+/// by a currently known outcome, such as rescue handlers.
+pub fn run_from<T>(
+    cfg: &Cfg,
+    transfer: &mut T,
+    start: BlockId,
+    initial: T::State,
+) -> Result<WorklistResult<T::State>, WorklistError<T::Error>>
+where
+    T: BlockTransfer,
+{
+    let entry = cfg.block(start).ok_or(WorklistError::InvalidBlock(start))?;
     let _ = entry;
     let mut states = vec![None; cfg.blocks.len()];
     let mut pending = BinaryHeap::new();
     let mut queued = vec![false; cfg.blocks.len()];
     let (entry_state, changed) = transfer.join_state(None, initial);
-    states[cfg.entry.0 as usize] = Some(entry_state);
+    states[start.0 as usize] = Some(entry_state);
     if changed {
-        pending.push(Reverse(cfg.entry));
-        queued[cfg.entry.0 as usize] = true;
+        pending.push(Reverse(start));
+        queued[start.0 as usize] = true;
     }
 
     let mut visit_order = Vec::new();
@@ -210,6 +224,7 @@ mod tests {
             ],
             conditionals: Vec::new(),
             ensure_entries: Vec::new(),
+            rescue_regions: Vec::new(),
             unsupported_spans: Vec::new(),
             expression_values: Vec::new(),
         }

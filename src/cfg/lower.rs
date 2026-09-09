@@ -7,7 +7,7 @@
 use super::{
     ArgumentOperand, ArrayOperand, BasicBlock, BlockId, BlockOperand, BlockParameter, Cfg,
     Conditional, HashOperand, Operation, OperationKind, OutcomeKind, Pattern, Place,
-    ReceiverOperand, Terminator, ValueId,
+    ReceiverOperand, RescueRegion, Terminator, ValueId,
 };
 use crate::hir::{
     self, Argument, AssignOperator, AssignTarget, BeginExpr, BodyId, ExprId, ExprKind, LoopExpr,
@@ -162,6 +162,7 @@ impl<'program> Builder<'program> {
                 blocks: Vec::new(),
                 conditionals: Vec::new(),
                 ensure_entries: Vec::new(),
+                rescue_regions: Vec::new(),
                 unsupported_spans: Vec::new(),
                 expression_values: retain_expression_values
                     .then(|| vec![None; program.expressions.len()])
@@ -2064,6 +2065,10 @@ impl<'program> Builder<'program> {
         }
 
         if let Some(rescue_entry) = rescue_entry {
+            self.cfg.rescue_regions.push(RescueRegion {
+                entry: rescue_entry,
+                exit: after,
+            });
             let exception = self.add_parameter(rescue_entry);
             self.rescues.push(RescueContext {
                 retry_target: body_start,

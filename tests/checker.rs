@@ -1000,6 +1000,23 @@ fn transfers_rescue_after_noreturn_calls_without_losing_normal_completion() {
 }
 
 #[test]
+fn analyzes_rescue_handlers_after_normally_returning_calls() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_rescue_normal_call.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn preserves_struct_alias_identity_in_cfg_constructor_calls() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_struct_alias.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());
@@ -2702,7 +2719,18 @@ end
 
 #[test]
 fn preserves_nil_for_locals_assigned_only_in_unreached_rescues() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/rescue_definite_assignment.rb").expect("fixture");
     let result = check_fixture("tests/fixtures/rescue_definite_assignment.rb");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, result.diagnostics);
+    assert_eq!(cfg.types, result.types);
     assert!(
         result
             .diagnostics

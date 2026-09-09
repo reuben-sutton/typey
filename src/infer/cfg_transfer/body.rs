@@ -24,6 +24,11 @@ pub(super) struct BodyTransfer<'analyzer, 'src> {
     pub(super) terminal_flow: Flow,
     pub(super) final_environment: Option<Environment>,
     pub(super) top_level_terminated: bool,
+    /// An isolated transfer of a rescue handler stops at its enclosing
+    /// begin-expression's join rather than continuing into the protected
+    /// body's following statements.
+    probe_exit: Option<cfg::BlockId>,
+    probe_normal_type: Type,
 }
 
 fn contains_class_object(type_: &Type) -> bool {
@@ -241,6 +246,9 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
     }
 
     fn finish_outcome(&mut self, kind: FlowKind, type_: Type, environment: Environment) {
+        if self.probe_exit.is_some() {
+            return;
+        }
         if kind == FlowKind::Return && !self.return_is_non_local() {
             self.normal_type = if self.normal_type.is_never() {
                 type_
@@ -403,6 +411,8 @@ impl<'src> Analyzer<'src> {
             terminal_flow: Flow::empty(),
             final_environment: None,
             top_level_terminated: false,
+            probe_exit: None,
+            probe_normal_type: Type::Never,
         };
         let worklist = match cfg::transfer::run(&graph, &mut transfer, initial) {
             Ok(worklist) => worklist,
@@ -424,6 +434,65 @@ impl<'src> Analyzer<'src> {
                 return None;
             }
         };
+        let mut normal_type = transfer.normal_type.clone();
+        for region in &graph.rescue_regions {
+            let Some(entry_block) = graph.block(region.entry) else {
+                continue;
+            };
+            let Some(exception_parameter) = entry_block.parameters.first() else {
+                continue;
+            };
+            let mut probe_environment = fallback_environment.clone();
+            seed_cfg_global_state(transfer.analyzer, &graph, &mut probe_environment);
+            let mut probe = BlockState::with_values(
+                probe_environment,
+                Vec::new(),
+                Flow::abrupt(FlowKind::Raise),
+            );
+            probe.route_exception(Type::Any);
+            probe.set_value(exception_parameter.value, Type::Any);
+            let main_abrupt = transfer.abrupt.clone();
+            let main_terminal_flow = transfer.terminal_flow;
+            let main_final_environment = transfer.final_environment.clone();
+            let main_top_level_terminated = transfer.top_level_terminated;
+            transfer.probe_exit = Some(region.exit);
+            transfer.probe_normal_type = Type::Never;
+            let probe_result = cfg::transfer::run_from(&graph, &mut transfer, region.entry, probe);
+            transfer.probe_exit = None;
+            transfer.abrupt = main_abrupt;
+            transfer.terminal_flow = main_terminal_flow;
+            transfer.final_environment = main_final_environment;
+            transfer.top_level_terminated = main_top_level_terminated;
+            if let Err(error) = probe_result {
+                match error {
+                    cfg::transfer::WorklistError::InvalidBlock(_) => {
+                        transfer.analyzer.record_cfg_fallback_at(
+                            body_site,
+                            "rescue edge",
+                            super::CfgFallbackKind::UnsupportedEdge,
+                        );
+                    }
+                    cfg::transfer::WorklistError::Transfer(reason) => {
+                        transfer.analyzer.record_cfg_fallback_detail_at(
+                            body_site,
+                            "rescue handler",
+                            super::CfgFallbackKind::UnsupportedOperation,
+                            Some(&reason),
+                        );
+                    }
+                }
+                return None;
+            }
+            transfer.normal_type = normal_type.clone();
+            if !transfer.probe_normal_type.is_never() {
+                normal_type = if normal_type.is_never() {
+                    transfer.probe_normal_type.clone()
+                } else {
+                    normal_type.join(&transfer.probe_normal_type)
+                };
+            }
+        }
+        transfer.normal_type = normal_type;
         let normal_type = if transfer.top_level_terminated {
             Type::Never
         } else {
@@ -480,6 +549,18 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
         state: &Self::State,
     ) -> Result<Vec<cfg::transfer::TransferEdge<Self::State>>, Self::Error> {
         debug_assert_eq!(graph.body, self.context.body);
+        if self.probe_exit == Some(block.id) {
+            if let Some(parameter) = block.parameters.first() {
+                if let Some(type_) = state.value(parameter.value) {
+                    self.probe_normal_type = if self.probe_normal_type.is_never() {
+                        type_
+                    } else {
+                        self.probe_normal_type.join(&type_)
+                    };
+                }
+            }
+            return Ok(Vec::new());
+        }
         let _strictness = self.context.strictness;
         let mut next = state.clone();
         let mut exception_edges = Vec::new();
@@ -736,7 +817,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             if self.context.method.is_some() || block.unwind.is_some() {
                                 return Ok(OperationTransfer::Stop);
                             }
-                            if self.context.top_level {
+                            if self.context.top_level && self.probe_exit.is_none() {
                                 self.top_level_terminated = true;
                             }
                             // Top-level Ruby keeps checking later statements
