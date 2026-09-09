@@ -456,6 +456,27 @@ fn preserves_struct_alias_identity_in_cfg_constructor_calls() {
 }
 
 #[test]
+fn transfers_dynamic_struct_constant_identity_in_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_dynamic_struct_constructor.rb")
+        .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn narrows_loop_assignment_targets_in_cfg_predicates() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_while_assignment_narrowing.rb")
         .expect("fixture");

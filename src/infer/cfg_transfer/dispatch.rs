@@ -96,6 +96,26 @@ pub(super) fn transfer_receiver_call(
         });
     }
 
+    if name == "new" {
+        if let Some(owner) = Analyzer::named_type_name(receiver)
+            .filter(|owner| analyzer.declarations.struct_fields.contains_key(owner))
+        {
+            analyzer.infer_initializer_call_at(
+                input.site,
+                &owner,
+                arguments,
+                input.block.is_some(),
+                environment,
+            );
+            analyzer.observe_struct_constructor(&owner, arguments);
+            return Ok(ReceiverTransfer {
+                type_: Type::named(owner),
+                block_result: None,
+                untyped_origin: UntypedOrigin::InferredMethod,
+            });
+        }
+    }
+
     // `[]` is also ordinary Ruby method dispatch. Only proc-like receivers
     // use the callable shorthand; a nominal receiver must still resolve its
     // declared `[]` method here.

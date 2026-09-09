@@ -1,4 +1,5 @@
-use super::{Analyzer, CallArguments, Environment, MethodKey, SharedKey};
+use super::{Analyzer, CallArguments, Environment, MethodKey, SharedKey, SourceSite};
+use crate::prism;
 use crate::types::Type;
 use ruby_prism::Node;
 use std::collections::BTreeSet;
@@ -197,6 +198,23 @@ impl<'src> Analyzer<'src> {
         has_block: bool,
         environment: &Environment,
     ) {
+        self.infer_initializer_call_at(
+            SourceSite::from_prism_span(prism::span(node)),
+            owner,
+            arguments,
+            has_block,
+            environment,
+        );
+    }
+
+    pub(super) fn infer_initializer_call_at(
+        &mut self,
+        site: SourceSite,
+        owner: &str,
+        arguments: &CallArguments<'_>,
+        has_block: bool,
+        environment: &Environment,
+    ) {
         let key = MethodKey {
             owner: Some(owner.to_owned()),
             name: "initialize".to_owned(),
@@ -215,8 +233,8 @@ impl<'src> Analyzer<'src> {
             self.checking_initializer = true;
             self.initializer_has_block = has_block;
             self.initializer_requires_block = initializer_requires_block;
-            let _ = self.invoke_signature(
-                node,
+            let _ = self.invoke_signature_at(
+                site,
                 "initialize",
                 &signature,
                 arguments,
@@ -237,13 +255,24 @@ impl<'src> Analyzer<'src> {
         let Some(fields) = self.declarations.struct_fields.get(owner).cloned() else {
             return;
         };
-        for (field, actual) in fields.iter().zip(&arguments.positional_types) {
+        let mut observations = fields
+            .iter()
+            .zip(&arguments.positional_types)
+            .map(|(field, actual)| (field.clone(), actual.clone()))
+            .collect::<Vec<_>>();
+        observations.extend(arguments.keyword_arguments.iter().filter_map(|argument| {
+            fields
+                .iter()
+                .any(|field| field == &argument.name)
+                .then(|| (argument.name.clone(), argument.type_.clone()))
+        }));
+        for (field, actual) in observations {
             let key = (owner.to_owned(), field.clone());
             let next = self
                 .declarations
                 .struct_field_types
                 .get(&key)
-                .map_or_else(|| actual.clone(), |current| current.join(actual));
+                .map_or_else(|| actual.clone(), |current| current.join(&actual));
             if self.declarations.struct_field_types.get(&key) != Some(&next) {
                 self.declarations
                     .struct_field_types

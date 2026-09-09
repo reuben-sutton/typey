@@ -10,10 +10,19 @@ pub(super) fn transfer_write<'src>(
     analyzer: &mut Analyzer<'src>,
     site: SourceSite,
     place: &cfg::Place,
+    expression: Option<hir::ExprId>,
     actual: Type,
     logical: bool,
     environment: &mut Environment,
 ) -> Type {
+    let actual = match place {
+        cfg::Place::Constant(path) => expression
+            .and_then(|expression| {
+                dynamic_struct_constant_type(analyzer, expression, path, environment)
+            })
+            .unwrap_or(actual),
+        _ => actual,
+    };
     match place {
         cfg::Place::Local(local) => {
             let name = analyzer
@@ -81,10 +90,69 @@ pub(super) fn transfer_for_target<'src>(
         analyzer,
         site,
         &place,
+        None,
         element_type,
         false,
         environment,
     ))
+}
+
+/// `Struct.new` returns a class object at runtime, but assigning that class to
+/// a constant gives it a concrete nominal identity. The recursive evaluator
+/// has historically applied that identity while evaluating the assignment;
+/// keep the same rule in the owned CFG path using only HIR data.
+fn dynamic_struct_constant_type<'src>(
+    analyzer: &mut Analyzer<'src>,
+    expression: hir::ExprId,
+    path: &hir::ConstantPath,
+    environment: &Environment,
+) -> Option<Type> {
+    let assignment = analyzer.program.hir_program.expression(expression)?;
+    let hir::ExprKind::Assign { value, .. } = &assignment.kind else {
+        return None;
+    };
+    let value = analyzer.program.hir_program.expression(*value)?;
+    let hir::ExprKind::Call(call) = &value.kind else {
+        return None;
+    };
+    if call.name.as_str() != "new" {
+        return None;
+    }
+    let hir::Receiver::Explicit(receiver) = call.receiver else {
+        return None;
+    };
+    let receiver = analyzer.program.hir_program.expression(receiver)?;
+    let hir::ExprKind::Read(hir::Read::Constant(receiver)) = &receiver.kind else {
+        return None;
+    };
+    if receiver.as_str().trim_start_matches("::") != "Struct" {
+        return None;
+    }
+
+    let owner = analyzer.constant_key(environment, path.as_str());
+    let fields = call
+        .arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            hir::Argument::Positional(value) => analyzer
+                .program
+                .hir_program
+                .expression(*value)
+                .and_then(|expression| match &expression.kind {
+                    hir::ExprKind::Literal(hir::Literal::Symbol(name)) => Some(name.clone()),
+                    _ => None,
+                }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if !fields.is_empty() {
+        analyzer
+            .declarations
+            .struct_fields
+            .entry(owner.clone())
+            .or_insert(fields);
+    }
+    Some(Type::named(owner))
 }
 
 pub(super) fn transfer_multi_write<'src>(

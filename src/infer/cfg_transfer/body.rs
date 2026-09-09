@@ -368,6 +368,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             self.analyzer,
                             site,
                             place,
+                            operation.expression,
                             actual,
                             *logical,
                             &mut next.environment,
