@@ -2680,6 +2680,36 @@ value ||= "default".upcase #: as String
 }
 
 #[test]
+fn keeps_non_type_case_patterns_reachable_through_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_case_non_type_pattern.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    let sends = ["\"ruby\".upcase", "\"other\".upcase"];
+    for send in sends {
+        let start = source.find(send).expect("case branch send");
+        let end = start + send.len();
+        assert!(
+            cfg.types.iter().any(|inferred| {
+                inferred.start == start
+                    && inferred.end == end
+                    && inferred.is_send
+                    && inferred.type_ == Type::String
+            }),
+            "missing {send} in {:?}",
+            cfg.types
+        );
+    }
+}
+
+#[test]
 fn infers_generic_hash_types_from_nested_pair_arrays() {
     let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
         .expect("vendored RBIs load");

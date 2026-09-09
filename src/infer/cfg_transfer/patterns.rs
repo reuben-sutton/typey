@@ -191,6 +191,9 @@ pub(super) fn case_pattern_is_type_test(
                     | "TrueClass"
             )
         ),
+        // Other literals and constant values are ordinary `===` patterns,
+        // not class tests. Their runtime value may match only some instances
+        // of the source type, so their branch must remain reachable.
         _ => false,
     }
 }
@@ -250,10 +253,10 @@ pub(super) fn case_match_reachability(
             });
     }
     if !is_type_test {
-        return (
-            !analyzer.definitely_disjoint_class_types(source, expected),
-            true,
-        );
+        // An arbitrary case pattern can override `===` and a value such as a
+        // Regexp can match only part of a nominal source type. Without an
+        // owned proof of the pattern's runtime matcher, retain both paths.
+        return (true, true);
     }
     if analyzer.is_assignable(source, expected) {
         (true, false)
