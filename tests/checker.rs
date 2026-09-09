@@ -1227,6 +1227,34 @@ fn preserves_tuple_component_types_through_owned_cfg() {
 }
 
 #[test]
+fn does_not_treat_namespaced_class_constants_as_type_tests() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_namespaced_case_constant.rb").expect("fixture");
+    let baseline = check_fixture("tests/fixtures/cfg_namespaced_case_constant.rb");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    for text in ["\"class\".upcase", "\"other\".upcase"] {
+        let start = source.find(text).expect("case branch call");
+        let end = start + text.len();
+        assert!(
+            cfg.types.iter().any(|inferred| {
+                inferred.start == start && inferred.end == end && inferred.type_ == Type::String
+            }),
+            "CFG did not transfer {text}: {:?}",
+            cfg.types
+        );
+    }
+}
+
+#[test]
 fn transfers_rescue_handlers_and_unwind_edges_without_changing_results() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_exception_transfer.rb").expect("fixture");
