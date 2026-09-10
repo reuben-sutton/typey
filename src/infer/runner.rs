@@ -82,18 +82,18 @@ impl<'src> Analyzer<'src> {
                 self.declarations.type_aliases.len()
             );
             eprintln!(
-                "[typey] compiled {} HIR bodies into CFG ({} source, {} RBI)",
-                self.program
-                    .cfg_index
-                    .as_ref()
-                    .map_or(0, cfg::CfgIndex::body_count),
+                "[typey] compiled {} source HIR bodies into CFG ({} RBI bodies excluded, {} total)",
                 self.program.cfg_index.as_ref().map_or(0, |index| {
-                    index.body_count() - index.body_count_in_ranges(&self.rbi_ranges)
+                    index.body_count_excluding_ranges(&self.rbi_ranges)
                 }),
                 self.program
                     .cfg_index
                     .as_ref()
-                    .map_or(0, |index| index.body_count_in_ranges(&self.rbi_ranges))
+                    .map_or(0, |index| index.body_count_in_ranges(&self.rbi_ranges)),
+                self.program
+                    .cfg_index
+                    .as_ref()
+                    .map_or(0, cfg::CfgIndex::body_count)
             );
             eprintln!(
                 "[typey] CFG unsupported handoffs: {}",

@@ -22,7 +22,7 @@ fn counts_bodies_inside_rbi_ranges_separately() {
     let rbi_start = source.find("# rbi").expect("RBI marker");
     assert_eq!(index.body_count_in_ranges(&[(rbi_start, source.len())]), 1);
     assert_eq!(
-        index.body_count() - index.body_count_in_ranges(&[(rbi_start, source.len())]),
+        index.body_count_excluding_ranges(&[(rbi_start, source.len())]),
         2
     );
 }

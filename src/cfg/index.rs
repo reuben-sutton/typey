@@ -102,6 +102,18 @@ impl CfgIndex {
     }
 
     #[must_use]
+    pub fn body_count_excluding_ranges(&self, ranges: &[(usize, usize)]) -> usize {
+        self.body_spans
+            .iter()
+            .filter(|(start, end)| {
+                !ranges
+                    .iter()
+                    .any(|(range_start, range_end)| *start >= *range_start && *end <= *range_end)
+            })
+            .count()
+    }
+
+    #[must_use]
     pub fn unsupported_count(&self) -> usize {
         self.unsupported_count
     }
