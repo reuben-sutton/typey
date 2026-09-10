@@ -430,6 +430,21 @@ fn respects_respond_to_method_guards_in_owned_cfg() {
 }
 
 #[test]
+fn infers_set_constructor_element_types_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_set_constructor.rb").expect("fixture");
+    let baseline = check_fixture("tests/fixtures/cfg_set_constructor.rb");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn transfers_union_enumerable_predicates_through_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_union_enumerable_predicates.rb")
         .expect("fixture");

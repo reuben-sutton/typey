@@ -581,51 +581,57 @@ pub(super) fn transfer_receiver_call(
                     Analyzer::class_object_value_type(argument).unwrap_or_else(|| argument.clone())
                 })
                 .collect::<Vec<_>>();
-            let type_ = match &instance {
-                Type::Named(owner, _)
-                    if matches!(owner.as_str(), "Array" | "T::Array")
-                        && type_arguments.len() == 1 =>
-                {
-                    Type::Array(Box::new(type_arguments[0].clone()))
-                }
-                Type::Named(owner, _)
-                    if matches!(owner.as_str(), "Hash" | "T::Hash")
-                        && type_arguments.len() == 2 =>
-                {
-                    Type::Hash(
-                        Box::new(type_arguments[0].clone()),
-                        Box::new(type_arguments[1].clone()),
-                    )
-                }
-                Type::Named(owner, _)
-                    if matches!(owner.as_str(), "Hash" | "T::Hash")
-                        && type_arguments.len() == 1 =>
-                {
-                    let (key, value) = hash_constructor_pair_types(&type_arguments[0])
-                        .unwrap_or((Type::Any, Type::Any));
-                    Type::Hash(Box::new(key), Box::new(value))
-                }
-                Type::Named(owner, _) if name_matches(owner, "Dir") => {
-                    Type::Array(Box::new(Type::String))
-                }
-                Type::Named(owner, _) => Type::Named(owner.clone(), type_arguments),
-                _ => {
-                    return Err(format!(
-                        "receiver call `{name}` on `{receiver}` has no generic type contract"
-                    ))
-                }
-            };
-            let untyped_origin = if type_.contains_any() {
-                UntypedOrigin::FallbackCall
-            } else {
-                UntypedOrigin::Propagated
-            };
-            return Ok(ReceiverTransfer {
-                type_,
-                block_result: None,
-                untyped_origin,
-                missing_method: false,
-            });
+            if !is_runtime_set_constructor(analyzer, input, &instance) {
+                // Preserve generic type application for `T::Set[...]` and
+                // similar nominal expressions. A runtime `Set[...]` instead
+                // reaches ordinary singleton signature dispatch below, which
+                // joins `String, String, ...` into `Set[String]`.
+                let type_ = match &instance {
+                    Type::Named(owner, _)
+                        if matches!(owner.as_str(), "Array" | "T::Array")
+                            && type_arguments.len() == 1 =>
+                    {
+                        Type::Array(Box::new(type_arguments[0].clone()))
+                    }
+                    Type::Named(owner, _)
+                        if matches!(owner.as_str(), "Hash" | "T::Hash")
+                            && type_arguments.len() == 2 =>
+                    {
+                        Type::Hash(
+                            Box::new(type_arguments[0].clone()),
+                            Box::new(type_arguments[1].clone()),
+                        )
+                    }
+                    Type::Named(owner, _)
+                        if matches!(owner.as_str(), "Hash" | "T::Hash")
+                            && type_arguments.len() == 1 =>
+                    {
+                        let (key, value) = hash_constructor_pair_types(&type_arguments[0])
+                            .unwrap_or((Type::Any, Type::Any));
+                        Type::Hash(Box::new(key), Box::new(value))
+                    }
+                    Type::Named(owner, _) if name_matches(owner, "Dir") => {
+                        Type::Array(Box::new(Type::String))
+                    }
+                    Type::Named(owner, _) => Type::Named(owner.clone(), type_arguments),
+                    _ => {
+                        return Err(format!(
+                            "receiver call `{name}` on `{receiver}` has no generic type contract"
+                        ))
+                    }
+                };
+                let untyped_origin = if type_.contains_any() {
+                    UntypedOrigin::FallbackCall
+                } else {
+                    UntypedOrigin::Propagated
+                };
+                return Ok(ReceiverTransfer {
+                    type_,
+                    block_result: None,
+                    untyped_origin,
+                    missing_method: false,
+                });
+            }
         }
     }
 
@@ -878,6 +884,36 @@ fn cfg_respond_to_guard(
         return false;
     };
     environment.known_respond_to(&key, method)
+}
+
+fn is_runtime_set_constructor(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    instance: &Type,
+) -> bool {
+    if !matches!(instance, Type::Named(owner, _) if name_matches(owner, "Set")) {
+        return false;
+    }
+    input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+        .and_then(|expression| match &expression.kind {
+            crate::hir::ExprKind::Call(call) => match call.receiver {
+                crate::hir::Receiver::Explicit(receiver) => analyzer
+                    .program
+                    .hir_program
+                    .expression(receiver)
+                    .and_then(|receiver| match &receiver.kind {
+                        crate::hir::ExprKind::Read(crate::hir::Read::Constant(name)) => {
+                            Some(name.as_str().trim_start_matches("::") == "Set")
+                        }
+                        _ => None,
+                    }),
+                _ => Some(false),
+            },
+            _ => None,
+        })
+        .unwrap_or(false)
 }
 
 fn hash_constructor_pair_types(type_: &Type) -> Option<(Type, Type)> {
