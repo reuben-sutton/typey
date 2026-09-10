@@ -13,7 +13,7 @@ use crate::hir::{
     self, Argument, AssignOperator, AssignTarget, BeginExpr, BodyId, ExprId, ExprKind, LoopExpr,
     LoopKind, Program, Read, Span,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Build a CFG for one already-lowered HIR body.
 #[must_use]
@@ -750,6 +750,19 @@ impl<'program> Builder<'program> {
 
     fn lower_call(&mut self, expression: ExprId, block: BlockId, call: hir::Call) -> Flow {
         let mut block = block;
+        let preserve_generic_pair_shape = call.name.as_str() == "[]"
+            && matches!(
+                &call.receiver,
+                hir::Receiver::Explicit(receiver)
+                    if self
+                        .program
+                        .expression(*receiver)
+                        .is_some_and(|expression| matches!(
+                            &expression.kind,
+                            hir::ExprKind::Read(hir::Read::Constant(path))
+                                if matches!(path.as_str(), "Hash" | "T::Hash")
+                        ))
+            );
         let receiver = match call.receiver {
             hir::Receiver::Implicit => ReceiverOperand::Implicit,
             hir::Receiver::Super => ReceiverOperand::Super,
@@ -771,6 +784,11 @@ impl<'program> Builder<'program> {
                 None => return self.abrupt(expression, block),
             };
             block = next_block;
+            if preserve_generic_pair_shape {
+                if let ArgumentOperand::Positional(value) = &lowered {
+                    self.mark_array_value_fixed_shape_deep(*value);
+                }
+            }
             arguments.push(lowered);
         }
 
@@ -1356,6 +1374,36 @@ impl<'program> Builder<'program> {
                     *preserve_fixed_shape = true;
                 }
             }
+        }
+    }
+
+    fn mark_array_value_fixed_shape_deep(&mut self, value: ValueId) {
+        let mut pending = vec![value];
+        let mut seen = HashSet::new();
+        while let Some(value) = pending.pop() {
+            if !seen.insert(value) {
+                continue;
+            }
+            let mut nested = Vec::new();
+            for block in &mut self.cfg.blocks {
+                for operation in &mut block.operations {
+                    if operation.result != Some(value) {
+                        continue;
+                    }
+                    if let OperationKind::BuildArray {
+                        elements,
+                        preserve_fixed_shape,
+                    } = &mut operation.kind
+                    {
+                        *preserve_fixed_shape = true;
+                        nested.extend(elements.iter().filter_map(|element| match element {
+                            ArrayOperand::Value(value) => Some(*value),
+                            ArrayOperand::Splat { .. } => None,
+                        }));
+                    }
+                }
+            }
+            pending.extend(nested);
         }
     }
 

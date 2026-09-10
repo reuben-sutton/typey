@@ -2993,6 +2993,29 @@ fn infers_generic_hash_types_from_nested_pair_arrays() {
 }
 
 #[test]
+fn transfers_nested_generic_hash_constructor_types_through_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_generic_hash_constructor.rb").expect("fixture");
+    let result = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Hash[Integer, Integer]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn treats_setter_calls_as_the_assigned_value() {
     let result = check_fixture("tests/fixtures/setter_assignment.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

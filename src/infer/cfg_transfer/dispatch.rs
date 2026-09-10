@@ -597,6 +597,14 @@ pub(super) fn transfer_receiver_call(
                         Box::new(type_arguments[1].clone()),
                     )
                 }
+                Type::Named(owner, _)
+                    if matches!(owner.as_str(), "Hash" | "T::Hash")
+                        && type_arguments.len() == 1 =>
+                {
+                    let (key, value) = hash_constructor_pair_types(&type_arguments[0])
+                        .unwrap_or((Type::Any, Type::Any));
+                    Type::Hash(Box::new(key), Box::new(value))
+                }
                 Type::Named(owner, _) if name_matches(owner, "Dir") => {
                     Type::Array(Box::new(Type::String))
                 }
@@ -819,6 +827,24 @@ pub(super) fn transfer_receiver_call(
         untyped_origin: UntypedOrigin::FallbackCall,
         missing_method: true,
     })
+}
+
+fn hash_constructor_pair_types(type_: &Type) -> Option<(Type, Type)> {
+    if let Type::Tuple(elements) = type_ {
+        let pairs = elements
+            .iter()
+            .map(Analyzer::pair_types)
+            .collect::<Option<Vec<_>>>();
+        if let Some(mut pairs) = pairs.filter(|pairs| !pairs.is_empty()) {
+            let (mut key, mut value) = pairs.remove(0);
+            for (next_key, next_value) in pairs {
+                key = key.join(&next_key);
+                value = value.join(&next_value);
+            }
+            return Some((key, value));
+        }
+    }
+    Analyzer::pair_types(type_)
 }
 
 fn structural_collection_receiver(receiver: &Type) -> Option<Type> {
