@@ -87,6 +87,53 @@ pub(super) fn transfer_intrinsic_call(
         }
         "must" => (actual.without(&Type::Nil), UntypedOrigin::Propagated),
         "unsafe" => (Type::Any, UntypedOrigin::Unsafe),
+        "attached_class" => {
+            let owner = environment
+                .method_key
+                .as_ref()
+                .and_then(|key| key.owner.as_deref());
+            let is_singleton = environment
+                .method_key
+                .as_ref()
+                .is_some_and(|key| key.singleton);
+            let is_module = owner
+                .and_then(|owner| analyzer.declarations.classes.get(owner))
+                .is_some_and(|info| info.is_module);
+            let has_attached_class = owner
+                .and_then(|owner| analyzer.declarations.classes.get(owner))
+                .is_some_and(|info| info.attached_class_member.is_some());
+
+            let (type_, untyped_origin) = if is_singleton && is_module {
+                analyzer.error_at(
+                    input.site,
+                    "`T.attached_class` cannot be used in singleton methods on modules, because modules cannot be instantiated",
+                );
+                (Type::Any, UntypedOrigin::FallbackCall)
+            } else if !is_singleton && is_module && !has_attached_class {
+                analyzer.error_at(
+                    input.site,
+                    format!(
+                        "`{}` must declare `has_attached_class!` before module instance methods can use `T.attached_class`",
+                        owner.unwrap_or("the module")
+                    ),
+                );
+                (Type::Any, UntypedOrigin::FallbackCall)
+            } else if !is_singleton && !is_module {
+                analyzer.error_at(
+                    input.site,
+                    "`T.attached_class` may only be used in singleton methods on classes or instance methods on `has_attached_class!` modules",
+                );
+                (Type::Any, UntypedOrigin::FallbackCall)
+            } else {
+                (
+                    owner.map_or(Type::AttachedClass, |owner| {
+                        Type::AttachedClassOf(owner.to_owned())
+                    }),
+                    UntypedOrigin::Propagated,
+                )
+            };
+            (type_, untyped_origin)
+        }
         "noreturn" => (Type::Never, UntypedOrigin::Propagated),
         "untyped" => (Type::Any, UntypedOrigin::FallbackCall),
         "self_type" => (Type::Any, UntypedOrigin::Propagated),
