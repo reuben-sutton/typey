@@ -19,7 +19,7 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, and 463 checker
+The current local gates include 22 CFG tests, 12 HIR tests, and 464 checker
 tests. The local conformance suite currently contains 255 fixtures and the
 latest full run passed all 255 after the inheritance-name and expectation
 fixes. The suite reloads the bundled RBI set per fixture and is correspondingly
@@ -413,7 +413,7 @@ therefore about 7%, 21%, and 14% slower respectively in this snapshot; these
 are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-10, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 463/463 and the conformance gate
+not at the exit condition. The checker gate is 464/464 and the conformance gate
 is 255/255. The preceding upstream smoke run was green, but the differential
 gate is not yet green: the three repositories above still have classified
 legacy/CFG differences. The CFG transfer surface has zero measured fallbacks
