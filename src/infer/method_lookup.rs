@@ -56,9 +56,10 @@ impl<'src> Analyzer<'src> {
     /// recursive call otherwise substitutes the method's current return
     /// summary into itself, so `Array#map { attributes(element) }` grows an
     /// additional nested `Array[...]` on every worklist round. Recursive
-    /// containers use `Object` as a finite concrete upper bound; scalar and
-    /// nominal recursive edges use bottom so non-recursive branches retain
-    /// their precise result without manufacturing `T.untyped`.
+    /// containers use a finite concrete upper bound while retaining their
+    /// container shape; scalar and nominal recursive edges use bottom so
+    /// non-recursive branches retain their precise result without
+    /// manufacturing `T.untyped`.
     pub(super) fn widen_recursive_call_return(
         &self,
         key: &MethodKey,
@@ -94,9 +95,16 @@ impl<'src> Analyzer<'src> {
             Type::Never
         } else {
             // Recursive containers still need a finite concrete widening
-            // point so nested results do not grow forever
-            // (`[recursive_call]` becomes `Array[Object]`).
-            Type::Object
+            // point so nested results do not grow forever (`[recursive_call]`
+            // becomes `Array[Object]`). Preserve a hash's shape as well: a
+            // recursive `Hash#to_h` result must still support known hash
+            // operations such as `merge`.
+            match type_ {
+                Type::Array(_) => Type::Array(Box::new(Type::Object)),
+                Type::Hash(_, _) => Type::Hash(Box::new(Type::Any), Box::new(Type::Any)),
+                Type::Tuple(_) => Type::Object,
+                _ => unreachable!("recursive container was checked above"),
+            }
         }
     }
 
@@ -357,6 +365,27 @@ impl<'src> Analyzer<'src> {
         } else {
             MethodKey::top_level(name)
         }
+    }
+
+    pub(super) fn dynamic_missing_implicit_receiver(
+        &self,
+        name: &str,
+        environment: &Environment,
+    ) -> Option<Type> {
+        let current = environment.method_key.as_ref()?;
+        if current.singleton {
+            return None;
+        }
+        let owner = current.owner.as_deref()?;
+        let info = self.declarations.classes.get(owner)?;
+        if info.is_module {
+            return None;
+        }
+        let key = self.implicit_method_key(name, environment);
+        self.resolve_method_key(&key)
+            .is_none()
+            .then(|| self.descendant_instance_type(owner))
+            .flatten()
     }
 
     pub(super) fn receiver_method_key<'node>(

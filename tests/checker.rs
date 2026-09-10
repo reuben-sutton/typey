@@ -2141,6 +2141,11 @@ fn resolves_self_as_a_class_superclass() {
 }
 
 #[test]
+fn checks_class_method_bodies_against_the_declaring_class() {
+    check_fixture("tests/fixtures/class_method_static_self.rb");
+}
+
+#[test]
 fn applies_mixed_in_class_methods_to_including_classes() {
     check_fixture("tests/fixtures/mixes_in_class_methods.rb");
 }
@@ -3725,6 +3730,19 @@ fn preserves_concrete_accumulators_through_recursive_calls() {
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
+fn preserves_hash_shape_through_recursive_container_calls() {
+    let result = check_fixture("tests/fixtures/recursive_hash_container.rb");
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("T::Hash[T.untyped, T.untyped]")));
+    assert!(!result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("T.untyped`")));
 }
 
 #[test]

@@ -171,6 +171,29 @@ pub(super) fn transfer_implicit_call(
     }
 
     let key = analyzer.implicit_method_key(input.name.as_str(), environment);
+    if let Some(dynamic_receiver) =
+        analyzer.dynamic_missing_implicit_receiver(input.name.as_str(), environment)
+    {
+        // An ordinary class body keeps its declaring class as the static
+        // receiver. If an implicit call is absent there, Ruby may still
+        // dispatch it to a method supplied by a known subclass; preserve that
+        // narrow dynamic-self behavior without widening every call in the
+        // parent body to all descendants.
+        let result = super::dispatch::transfer_receiver_call(
+            analyzer,
+            input,
+            &dynamic_receiver,
+            arguments,
+            values,
+            environment,
+            None,
+        )?;
+        return Ok(ContextTransfer {
+            type_: result.type_,
+            block_result: result.block_result,
+            untyped_origin: result.untyped_origin,
+        });
+    }
     if matches!(
         &environment.self_type,
         Type::Union(_) | Type::Intersection(_)

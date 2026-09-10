@@ -341,19 +341,23 @@ impl<'src> Analyzer<'src> {
             );
             Type::Proc(parameters, Box::new(return_type))
         } else if receiver_node.is_none()
-            && matches!(
+            && (matches!(
                 &environment.self_type,
                 Type::Union(_) | Type::Intersection(_)
-            )
-            && self
+            ) && self
                 .resolve_method_key(&self.implicit_method_key(&name, environment))
                 .is_none()
+                || self
+                    .dynamic_missing_implicit_receiver(&name, environment)
+                    .is_some())
         {
             // A predicate can refine implicit `self` to a union.  Dispatch
             // calls made without an explicit receiver through each member,
             // just like `value.children` on a union, instead of trying to
             // synthesize one method key for the whole union.
-            let receiver_type = environment.self_type.clone();
+            let receiver_type = self
+                .dynamic_missing_implicit_receiver(&name, environment)
+                .unwrap_or_else(|| environment.self_type.clone());
             let global_type = self.eval_global_call(
                 node,
                 &name,

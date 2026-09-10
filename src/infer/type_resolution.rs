@@ -193,8 +193,32 @@ impl<'src> Analyzer<'src> {
                 Type::union(hosts)
             }
         } else {
-            let mut descendants = Vec::new();
-            for (candidate, info) in &self.declarations.classes {
+            // A class method body is checked against the class that declares
+            // it. Subclasses may override calls made through `self` at
+            // runtime, but treating every known descendant as the static
+            // receiver makes a parent body depend on application-wide class
+            // discovery. In particular, an inherited call can bounce between
+            // the parent and child summaries and prevent the fixpoint from
+            // converging. Module bodies are handled above because their
+            // runtime host really is supplied by each including class.
+            Type::named(owner)
+        };
+        self.instance_self_type_cache
+            .borrow_mut()
+            .insert(owner.to_owned(), type_.clone());
+        type_
+    }
+
+    /// Return known concrete descendants of a class for dynamic-self
+    /// fallback. This is deliberately separate from the static receiver used
+    /// while checking an ordinary class body: only a call that is missing on
+    /// the declaring class should use descendant discovery.
+    pub(super) fn descendant_instance_type(&self, owner: &str) -> Option<Type> {
+        let descendants = self
+            .declarations
+            .classes
+            .iter()
+            .filter_map(|(candidate, info)| {
                 let mut superclass = info.superclass.clone();
                 let mut visited = BTreeSet::new();
                 while let Some(current) = superclass {
@@ -202,8 +226,7 @@ impl<'src> Analyzer<'src> {
                         break;
                     }
                     if current == owner || self.nominal_names_match(&current, owner) {
-                        descendants.push(Type::named(candidate.clone()));
-                        break;
+                        return Some(Type::named(candidate.clone()));
                     }
                     superclass = self
                         .declarations
@@ -211,17 +234,10 @@ impl<'src> Analyzer<'src> {
                         .get(&current)
                         .and_then(|info| info.superclass.clone());
                 }
-            }
-            if descendants.is_empty() {
-                Type::named(owner)
-            } else {
-                Type::union(descendants)
-            }
-        };
-        self.instance_self_type_cache
-            .borrow_mut()
-            .insert(owner.to_owned(), type_.clone());
-        type_
+                None
+            })
+            .collect::<Vec<_>>();
+        (!descendants.is_empty()).then(|| Type::union(descendants))
     }
 
     pub(super) fn is_concern_class_methods_module(&self, owner: &str) -> bool {
