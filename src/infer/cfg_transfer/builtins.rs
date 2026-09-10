@@ -110,6 +110,14 @@ pub(super) fn transfer_builtin_call(
             return Some((Type::bool(), None));
         }
         if let Type::Named(class, _) = &instance {
+            if name_matches(class, "Dir") && matches!(name, "[]" | "glob") {
+                return Some((Type::Array(Box::new(Type::String)), None));
+            }
+            if name_matches(class, "Kernel")
+                && matches!(name, "abort" | "exit" | "exit!" | "fail" | "raise")
+            {
+                return Some((Type::Never, None));
+            }
             if name_matches(class, "ActiveSupport::Inflector") {
                 return Some((
                     match name {
@@ -145,13 +153,24 @@ pub(super) fn transfer_builtin_call(
             }
             "to_i" | "to_int" => Some(Type::Integer),
             "to_f" => Some(Type::Float),
+            "to_r" => Some(Type::named("Rational")),
+            "to_c" => Some(Type::named("Complex")),
             "to_sym" | "intern" => Some(Type::Symbol),
             "bytes" | "codepoints" => Some(Type::Array(Box::new(Type::Integer))),
             "chars" | "lines" | "split" => Some(Type::Array(Box::new(Type::String))),
             "[]" | "slice" | "byteslice" => Some(Type::union([Type::Nil, Type::String])),
             "match" => Some(Type::union([Type::Nil, Type::named("MatchData")])),
             "=~" | "index" | "rindex" => Some(Type::union([Type::Nil, Type::Integer])),
+            "<=>" => {
+                if arguments.argument_types.first() == Some(&Type::String) {
+                    Some(Type::Integer)
+                } else {
+                    Some(Type::union([Type::Nil, Type::Integer]))
+                }
+            }
             "chomp!" | "chop!" => Some(Type::union([Type::Nil, Type::String])),
+            "pluralize" | "singularize" | "underscore" | "classify" | "humanize" | "squish"
+            | "camelize" => Some(Type::String),
             "gsub" | "sub" => {
                 if input.block.is_some() {
                     let _ = callback(&[Type::String])?;
@@ -203,6 +222,10 @@ pub(super) fn transfer_builtin_call(
                 })
             }
             "to_f" => Some(Type::Float),
+            "to_r" => Some(Type::named("Rational")),
+            "to_c" => Some(Type::named("Complex")),
+            "real" => Some(receiver.clone()),
+            "imag" => Some(Type::Integer),
             "to_i" | "to_int" => Some(Type::Integer),
             "to_s" | "inspect" => Some(Type::String),
             "times" | "upto" | "downto" | "step" => {
@@ -293,6 +316,75 @@ pub(super) fn transfer_builtin_call(
             match name {
                 "dump" => Some(Type::String),
                 "load" | "load_file" => Some(Type::union([Type::Nil, Type::Object])),
+                _ => None,
+            }
+        }
+        Type::Named(class, _) if name_matches(class, "OptionParser") => match name {
+            "on" => {
+                if input.block.is_some() {
+                    let option_type = arguments
+                        .argument_types
+                        .iter()
+                        .skip(1)
+                        .find_map(option_parser_option_type)
+                        .unwrap_or(Type::Any);
+                    let _ = callback(std::slice::from_ref(&option_type))?;
+                }
+                Some(Type::named("OptionParser"))
+            }
+            "parse!" => Some(Type::Array(Box::new(Type::String))),
+            _ => None,
+        },
+        Type::Named(class, _)
+            if name_matches(class, "Parser::Source::Map")
+                || name_matches(class, "Parser::Source::Range") =>
+        {
+            match name {
+                "line" | "column" | "first_line" | "first_column" | "last_line" | "last_column" => {
+                    Some(Type::Integer)
+                }
+                _ => None,
+            }
+        }
+        Type::Named(class, _) if name_matches(class, "Parser::AST::Node") => match name {
+            "location" | "loc" => Some(Type::named("Parser::Source::Map")),
+            _ => None,
+        },
+        Type::Named(class, _) if name_matches(class, "Regexp") => match name {
+            "match" => Some(Type::union([Type::Nil, Type::named("MatchData")])),
+            "match?" | "===" => Some(Type::bool()),
+            "=~" | "~" => Some(Type::union([Type::Nil, Type::Integer])),
+            "source" | "to_s" => Some(Type::String),
+            "options" => Some(Type::Integer),
+            "encoding" => Some(Type::named("Encoding")),
+            _ => None,
+        },
+        Type::Named(class, type_arguments) if name_matches(class, "Range") => {
+            let begin = type_arguments.first().cloned().unwrap_or(Type::Any);
+            let end = type_arguments.get(1).cloned().unwrap_or(Type::Any);
+            let element = begin.join(&end).without(&Type::Nil);
+            let element = if element.is_never() {
+                Type::Any
+            } else {
+                element
+            };
+            match name {
+                "begin" => Some(begin),
+                "end" => Some(end),
+                "exclude_end?" => Some(Type::bool()),
+                "include?" | "cover?" | "member?" => Some(Type::bool()),
+                "to_a" => Some(Type::Array(Box::new(element))),
+                "each" | "step" => {
+                    if input.block.is_none() {
+                        Some(Type::named("Enumerator"))
+                    } else {
+                        let _ = callback(std::slice::from_ref(&element))?;
+                        Some(Type::Named(class.clone(), type_arguments.clone()))
+                    }
+                }
+                "first" => Some(begin),
+                "last" => Some(end),
+                "to_s" | "inspect" => Some(Type::String),
                 _ => None,
             }
         }
@@ -401,6 +493,22 @@ pub(super) fn transfer_builtin_call(
         _ => None,
     }?;
     Some((result, None))
+}
+
+fn option_parser_option_type(type_: &Type) -> Option<Type> {
+    let type_ = Analyzer::class_object_value_type(type_).unwrap_or_else(|| type_.clone());
+    match type_ {
+        Type::Named(name, _) if name_matches(&name, "Array") => {
+            Some(Type::Array(Box::new(Type::String)))
+        }
+        Type::String => Some(Type::String),
+        Type::Integer => Some(Type::Integer),
+        Type::Float => Some(Type::Float),
+        Type::True | Type::False => Some(Type::bool()),
+        Type::Named(name, _) if name_matches(&name, "TrueClass") => Some(Type::bool()),
+        Type::Named(name, _) if name_matches(&name, "FalseClass") => Some(Type::bool()),
+        _ => None,
+    }
 }
 
 fn owned_inline_record_key(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<String> {

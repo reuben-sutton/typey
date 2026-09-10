@@ -226,6 +226,40 @@ pub(super) fn transfer_receiver_call(
         });
     }
 
+    // Several standard-library classes have generic RBI entries whose
+    // unresolved type variables are less precise than their concrete runtime
+    // contracts. Prefer the owned structural model before common helper
+    // methods (such as `to_a`) or ordinary method lookup can publish that
+    // unresolved result.
+    let standard_builtin_receiver = matches!(
+        receiver,
+        Type::Named(class, _)
+            if name_matches(class, "Range")
+                || name_matches(class, "Regexp")
+                || name_matches(class, "OptionParser")
+                || name_matches(class, "Parser::Source::Map")
+                || name_matches(class, "Parser::Source::Range")
+                || name_matches(class, "Parser::AST::Node")
+    );
+    if standard_builtin_receiver {
+        if let Some((type_, block_result)) = super::builtins::transfer_builtin_call(
+            analyzer,
+            input,
+            receiver,
+            arguments,
+            values,
+            environment,
+            hash_shape,
+        ) {
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result,
+                untyped_origin: UntypedOrigin::FallbackCall,
+                missing_method: false,
+            });
+        }
+    }
+
     let helper_type = if analyzer.common_method_helper_shadowed(receiver, name, environment) {
         // An explicit singleton method shadows Kernel#method on a class
         // object. Let the declared method path below handle the collision.
@@ -486,6 +520,9 @@ pub(super) fn transfer_receiver_call(
                         Box::new(type_arguments[0].clone()),
                         Box::new(type_arguments[1].clone()),
                     )
+                }
+                Type::Named(owner, _) if name_matches(owner, "Dir") => {
+                    Type::Array(Box::new(Type::String))
                 }
                 Type::Named(owner, _) => Type::Named(owner.clone(), type_arguments),
                 _ => {

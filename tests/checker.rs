@@ -2589,6 +2589,61 @@ T.reveal_type(set - set)
 }
 
 #[test]
+fn transfers_standard_library_contracts_through_owned_cfg() {
+    let source = r#"
+T.reveal_type("a" <=> "b")
+T.reveal_type("1".to_r)
+T.reveal_type("1".to_c)
+
+pattern = /text/
+T.reveal_type(pattern.match("text"))
+T.reveal_type(pattern.match?("text"))
+T.reveal_type(pattern.source)
+T.reveal_type(pattern.options)
+T.reveal_type(pattern.encoding)
+
+range = (1..3)
+T.reveal_type(range.begin)
+T.reveal_type(range.to_a)
+T.reveal_type(range.each { |value| value.to_s })
+T.reveal_type(range.each)
+
+T.reveal_type(Dir["*.rb"])
+T.reveal_type(OptionParser.new.parse!(["--name", "value"]))
+"#;
+    let result = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    for expected in [
+        "Revealed type: `Integer`",
+        "Revealed type: `Rational`",
+        "Revealed type: `Complex`",
+        "Revealed type: `T.nilable(MatchData)`",
+        "Revealed type: `T::Boolean`",
+        "Revealed type: `String`",
+        "Revealed type: `Encoding`",
+        "Revealed type: `Range[Integer, Integer]`",
+        "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `Enumerator`",
+        "Revealed type: `T::Array[String]`",
+    ] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing {expected} in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn destructures_typed_tuple_elements_in_collection_blocks() {
     let result = check_fixture("tests/fixtures/tuple_block_destructuring.rb");
     let notes = result
