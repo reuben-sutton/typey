@@ -49,7 +49,7 @@ pub(super) fn finish_call(
         && (deferred_callback
             || block_result
                 .as_ref()
-                .is_none_or(|result| result.normal_type.is_some()));
+                .is_none_or(Eval::callback_has_normal_path));
     let callback_outcomes = if deferred_callback {
         OutcomeTypes::default()
     } else {

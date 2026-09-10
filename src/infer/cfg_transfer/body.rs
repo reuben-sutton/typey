@@ -1304,6 +1304,29 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         let source = next
                             .value(*value)
                             .ok_or_else(|| format!("missing pattern operand {:?}", value))?;
+                        let safe_navigation_test = operation.expression.and_then(|expression| {
+                            self.analyzer
+                                .program
+                                .hir_program
+                                .expression(expression)
+                                .and_then(|expression| match &expression.kind {
+                                    hir::ExprKind::Call(call) if call.safe_navigation => Some(()),
+                                    _ => None,
+                                })
+                        });
+                        if safe_navigation_test.is_some()
+                            && matches!(pattern, cfg::Pattern::Nil)
+                            && !source.is_any()
+                            && !source.contains_any()
+                            && !source.is_never()
+                            && !matches!(&source, Type::Anything)
+                            && source.without(&Type::Nil) == source
+                        {
+                            self.analyzer.error_at(
+                                site,
+                                format!("Used `&.` operator on `{source}`, which can never be nil"),
+                            );
+                        }
                         let (_, _, type_) = super::patterns::pattern_reachability(
                             self.analyzer,
                             pattern,

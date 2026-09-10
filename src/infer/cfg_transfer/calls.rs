@@ -196,16 +196,6 @@ pub(super) fn transfer_call(
         } else {
             receiver_type.clone()
         };
-        if input.safe_navigation
-            && !receiver_type.is_any()
-            && !receiver_type.is_never()
-            && receiver_type.without(&Type::Nil) == receiver_type
-        {
-            analyzer.error_at(
-                input.site,
-                format!("Used `&.` operator on `{receiver_type}`, which can never be nil"),
-            );
-        }
         let mut receiver = super::dispatch::transfer_receiver_call(
             analyzer,
             &input,
