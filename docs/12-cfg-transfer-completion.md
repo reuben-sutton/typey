@@ -20,11 +20,10 @@ transfer spec described. Typey now has:
   routing and owned join-value recording.
 
 The current local gates include 22 CFG tests, 12 HIR tests, and 453 checker
-tests. The local conformance suite contains 249 fixtures. Its last full run
-was 248 passing fixtures and one forwarded-block fixture that is now green in
-a focused rerun after the latest CFG fix; the suite reloads the bundled RBI
-set per fixture and is correspondingly expensive. A separate 37-fixture
-upstream smoke suite was green in the preceding run.
+tests. The local conformance suite contains 249 fixtures and its latest full
+run passed all 249 after the forwarded-block fix; the suite reloads the
+bundled RBI set per fixture and is correspondingly expensive. A separate
+37-fixture upstream smoke suite was green in the preceding run.
 The CFG path is still opt-in because the transfer host retains semantic
 bridges in the legacy recursive path: the recursive evaluator still uses Prism
 children for exact diagnostics and builtin hooks, while parser-backed callback
@@ -392,9 +391,8 @@ outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
 
 As of 2026-09-10, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 453/453; the last full local
-conformance run was 248/249, with its remaining forwarded-block fixture now
-passing in a focused rerun. The preceding upstream smoke run was green.
+not at the exit condition. The checker gate is 453/453 and the latest full
+local conformance run is 249/249. The preceding upstream smoke run was green.
 Spoom and Packwerk have matching visible diagnostics. The CFG transfer
 surface has zero measured fallbacks on all three repository checks. What
 remains is not broad CFG coverage: it is classifying
