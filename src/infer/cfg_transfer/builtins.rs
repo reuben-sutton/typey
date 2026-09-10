@@ -141,6 +141,7 @@ pub(super) fn transfer_builtin_call(
         },
         Type::Integer | Type::Float => match name {
             "+@" | "-@" | "abs" | "magnitude" | "succ" | "next" | "pred" => Some(receiver.clone()),
+            "|" | "&" | "^" | "<<" | ">>" if *receiver == Type::Integer => Some(Type::Integer),
             "+" | "-" | "*" | "%" => Some(
                 if *receiver == Type::Float || arguments.argument_types.contains(&Type::Float) {
                     Type::Float
