@@ -115,7 +115,7 @@ pub(super) fn transfer_builtin_call(
             "to_s" | "to_str" | "inspect" | "dump" | "upcase" | "downcase" | "strip" | "lstrip"
             | "rstrip" | "chomp" | "chop" | "reverse" | "succ" | "next" | "capitalize"
             | "swapcase" | "scrub" | "force_encoding" | "+" | "*" | "delete_prefix"
-            | "delete_suffix" => Some(Type::String),
+            | "delete_suffix" | "shellescape" | "+@" | "<<" => Some(Type::String),
             "length" | "size" | "bytesize" | "count" | "ord" => Some(Type::Integer),
             "hash" => Some(Type::Integer),
             "empty?" | "start_with?" | "end_with?" | "include?" | "match?" | "nil?" => {
@@ -129,6 +129,7 @@ pub(super) fn transfer_builtin_call(
             "[]" | "slice" | "byteslice" => Some(Type::union([Type::Nil, Type::String])),
             "match" => Some(Type::union([Type::Nil, Type::named("MatchData")])),
             "=~" | "index" | "rindex" => Some(Type::union([Type::Nil, Type::Integer])),
+            "chomp!" | "chop!" => Some(Type::union([Type::Nil, Type::String])),
             "gsub" | "sub" => {
                 if input.block.is_some() {
                     let _ = callback(&[Type::String])?;
@@ -225,6 +226,13 @@ pub(super) fn transfer_builtin_call(
             "[]" | "fetch" | "[]=" => Some(Type::union([Type::Nil, Type::String])),
             _ => None,
         },
+        Type::Named(class, arguments) if name_matches(class, "Set") => match name {
+            "empty?" | "include?" | "member?" | "intersect?" => Some(Type::bool()),
+            "to_a" => Some(Type::Array(Box::new(
+                arguments.first().cloned().unwrap_or(Type::Any),
+            ))),
+            _ => None,
+        },
         Type::Named(class, arguments)
             if name_matches(class, "Enumerator") || name_matches(class, "Enumerable") =>
         {
@@ -244,12 +252,13 @@ pub(super) fn transfer_builtin_call(
                 _ => None,
             }
         }
-        Type::Nil | Type::True | Type::False | Type::Symbol | Type::Object | Type::Named(_, _)
+        Type::Symbol if name == "name" => Some(Type::String),
+        Type::Nil | Type::True | Type::False | Type::Object | Type::Named(_, _)
             if matches!(name, "to_s" | "inspect") =>
         {
             Some(Type::String)
         }
-        Type::Nil | Type::True | Type::False | Type::Symbol | Type::Object | Type::Named(_, _)
+        Type::Nil | Type::True | Type::False | Type::Object | Type::Named(_, _)
             if matches!(
                 name,
                 "nil?"
@@ -266,7 +275,7 @@ pub(super) fn transfer_builtin_call(
         {
             Some(Type::bool())
         }
-        Type::Nil | Type::True | Type::False | Type::Symbol | Type::Object | Type::Named(_, _)
+        Type::Nil | Type::True | Type::False | Type::Object | Type::Named(_, _)
             if matches!(name, "object_id" | "id" | "hash") =>
         {
             Some(Type::Integer)
@@ -372,8 +381,9 @@ fn transfer_array_builtin(
                 .unwrap_or(Type::Any),
         ),
         "length" | "size" => Some(Type::Integer),
-        "empty?" | "include?" => Some(Type::bool()),
+        "empty?" | "include?" | "intersect?" => Some(Type::bool()),
         "to_a" | "dup" | "clone" => Some(Type::Array(Box::new(element.clone()))),
+        "to_set" => Some(Type::Named("Set".to_owned(), vec![element.clone()])),
         "to_h" => {
             let (key, value) = Analyzer::pair_types(element)?;
             Some(Type::Hash(Box::new(key), Box::new(value)))
