@@ -214,6 +214,11 @@ impl<'src> Analyzer<'src> {
     /// while checking an ordinary class body: only a call that is missing on
     /// the declaring class should use descendant discovery.
     pub(super) fn descendant_instance_type(&self, owner: &str) -> Option<Type> {
+        // Descendant discovery follows an actual inheritance edge. The
+        // general nominal matcher intentionally treats same-suffix names as
+        // compatible for method lookup, but using it here would confuse
+        // unrelated classes such as `Parent` and `REXML::Parent`.
+        let owner = self.resolve_global_name(owner.trim_start_matches("::"));
         let descendants = self
             .declarations
             .classes
@@ -222,10 +227,11 @@ impl<'src> Analyzer<'src> {
                 let mut superclass = info.superclass.clone();
                 let mut visited = BTreeSet::new();
                 while let Some(current) = superclass {
+                    let current = self.resolve_global_name(current.trim_start_matches("::"));
                     if !visited.insert(current.clone()) {
                         break;
                     }
-                    if current == owner || self.nominal_names_match(&current, owner) {
+                    if current == owner {
                         return Some(Type::named(candidate.clone()));
                     }
                     superclass = self
