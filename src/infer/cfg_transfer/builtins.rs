@@ -352,6 +352,10 @@ fn transfer_array_builtin(
             Some(Type::union([Type::Nil, element.clone()]))
         }
         "first" | "last" | "take" | "drop" => Some(Type::Array(Box::new(element.clone()))),
+        "min" | "max" if arguments.argument_types.is_empty() => {
+            Some(Type::union([Type::Nil, element.clone()]))
+        }
+        "min" | "max" => Some(Type::Array(Box::new(element.clone()))),
         "[]" => {
             if arguments.argument_types.first() == Some(&Type::Integer) {
                 Some(Type::union([Type::Nil, element.clone()]))

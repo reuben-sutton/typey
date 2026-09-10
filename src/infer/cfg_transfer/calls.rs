@@ -260,7 +260,57 @@ pub(super) fn transfer_call(
         untyped_origin,
         environment,
     );
-    Ok(result)
+    Ok(refine_nonempty_array_result(
+        analyzer,
+        &input,
+        result,
+        environment,
+    ))
+}
+
+fn refine_nonempty_array_result(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    mut result: Eval,
+    environment: &Environment,
+) -> Eval {
+    if !matches!(input.name.as_str(), "first" | "last" | "min" | "max") {
+        return result;
+    }
+    let Some(expression) = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+    else {
+        return result;
+    };
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return result;
+    };
+    let hir::Receiver::Explicit(receiver) = call.receiver else {
+        return result;
+    };
+    let Some(receiver) = analyzer.program.hir_program.expression(receiver) else {
+        return result;
+    };
+    let nonempty = match input.name.as_str() {
+        "min" | "max" => matches!(
+            &receiver.kind,
+            hir::ExprKind::Array(elements) if !elements.is_empty()
+        ),
+        "first" | "last" => match &receiver.kind {
+            hir::ExprKind::Read(hir::Read::Local(local)) => analyzer
+                .program
+                .hir_program
+                .local_name(*local)
+                .is_some_and(|name| environment.known_nonempty_array(name.as_str())),
+            _ => false,
+        },
+        _ => false,
+    };
+    if nonempty {
+        result.normal_type = result.normal_type.map(|type_| type_.without(&Type::Nil));
+    }
+    result
 }
 
 fn is_static_type_receiver(receiver: &Type) -> bool {
