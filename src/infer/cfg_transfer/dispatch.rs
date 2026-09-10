@@ -579,11 +579,12 @@ pub(super) fn transfer_receiver_call(
                     Analyzer::class_object_value_type(argument).unwrap_or_else(|| argument.clone())
                 })
                 .collect::<Vec<_>>();
-            if !is_runtime_set_constructor(analyzer, input, &instance) {
+            if is_generic_type_application(analyzer, input) {
                 // Preserve generic type application for `T::Set[...]` and
-                // similar nominal expressions. A runtime `Set[...]` instead
-                // reaches ordinary singleton signature dispatch below, which
-                // joins `String, String, ...` into `Set[String]`.
+                // similar nominal expressions. A runtime `Constant[...]`
+                // instead reaches ordinary singleton signature dispatch
+                // below, which is important for APIs such as
+                // `IsolatedExecutionState[:key]`.
                 let type_ = match &instance {
                     Type::Named(owner, _)
                         if matches!(owner.as_str(), "Array" | "T::Array")
@@ -884,14 +885,7 @@ fn cfg_respond_to_guard(
     environment.known_respond_to(&key, method)
 }
 
-fn is_runtime_set_constructor(
-    analyzer: &Analyzer<'_>,
-    input: &OwnedCallInput,
-    instance: &Type,
-) -> bool {
-    if !matches!(instance, Type::Named(owner, _) if name_matches(owner, "Set")) {
-        return false;
-    }
+fn is_generic_type_application(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> bool {
     input
         .expression
         .and_then(|expression| analyzer.program.hir_program.expression(expression))
@@ -903,7 +897,7 @@ fn is_runtime_set_constructor(
                     .expression(receiver)
                     .and_then(|receiver| match &receiver.kind {
                         crate::hir::ExprKind::Read(crate::hir::Read::Constant(name)) => {
-                            Some(name.as_str().trim_start_matches("::") == "Set")
+                            Some(name.as_str().trim_start_matches("::").starts_with("T::"))
                         }
                         _ => None,
                     }),
