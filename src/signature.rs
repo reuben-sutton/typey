@@ -655,7 +655,8 @@ fn proc_has_return_type(text: &str, mut index: usize) -> bool {
 
 #[must_use]
 pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
-    let type_parameters = extract_call(text, "type_parameters")
+    let text = strip_type_comments(text);
+    let type_parameters = extract_call(&text, "type_parameters")
         .map(|body| {
             split_top_level(&body, ',')
                 .into_iter()
@@ -664,7 +665,7 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
         })
         .unwrap_or_default();
     let mut param_names = Vec::new();
-    let params = extract_call(text, "params").map_or_else(Vec::new, |body| {
+    let params = extract_call(&text, "params").map_or_else(Vec::new, |body| {
         split_top_level(&body, ',')
             .into_iter()
             .filter_map(|part| {
@@ -676,12 +677,12 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
             .collect()
     });
 
-    let is_void = has_top_level_void(text);
+    let is_void = has_top_level_void(&text);
     let is_abstract = text.contains("abstract");
     let return_type = if is_void {
         Type::Nil
     } else {
-        extract_call(text, "returns").map_or(Type::Any, |body| parse_type(&body))
+        extract_call(&text, "returns").map_or(Type::Any, |body| parse_type(&body))
     };
 
     if text.contains("params")

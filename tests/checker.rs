@@ -4073,6 +4073,21 @@ fn parses_the_supported_advanced_sorbet_type_forms() {
             .expect("benchmark signature parses");
     assert_eq!(benchmark_signature.return_type, Type::Float);
     assert!(!benchmark_signature.is_void);
+    let tap_signature = typey::signature::parse_sorbet_signature(
+        "sig do\n\
+          params(\n\
+            # `x` should be `T.self_type`, but it's blocked by an upstream issue\n\
+            blk: T.proc.params(x: T.untyped).void\n\
+          )\n\
+          .returns(T.self_type)\n\
+        end",
+    )
+    .expect("tap signature with comments parses");
+    assert_eq!(
+        tap_signature.params,
+        vec![Type::Proc(vec![Type::Any], Box::new(Type::Nil))]
+    );
+    assert_eq!(tap_signature.return_type, Type::named("instance"));
     assert_eq!(
         typey::signature::parse_type("T::Map[String, Integer]"),
         Type::Named("T::Map".to_owned(), vec![Type::String, Type::Integer],)

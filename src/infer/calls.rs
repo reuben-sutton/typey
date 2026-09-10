@@ -825,6 +825,10 @@ impl<'src> Analyzer<'src> {
                     resolved_owner.as_deref(),
                 );
                 self.record_method_dependency(&key, environment);
+                let kernel_tap = name == "tap"
+                    && resolved_owner
+                        .as_deref()
+                        .is_some_and(|owner| name_matches(owner, "Kernel"));
                 if self
                     .resolve_method_key(&key)
                     .and_then(|resolved| self.declarations.methods.get(&resolved))
@@ -841,6 +845,26 @@ impl<'src> Analyzer<'src> {
                 }
                 if open_array_append {
                     self.eval_method_call(&dispatch_receiver_type, &name, &site, environment)
+                } else if kernel_tap {
+                    // Kernel#tap's RBI has to use an untyped block parameter
+                    // for compatibility with Sorbet's own core model. Ruby's
+                    // runtime contract is stronger: the block receives this
+                    // exact receiver, and tap returns it unchanged. Preserve
+                    // that concrete fact when the receiver is known.
+                    if let Some(block) = block.as_ref() {
+                        let block_result = self
+                            .eval_block_node_result_with_environment(
+                                block,
+                                std::slice::from_ref(&dispatch_receiver_type),
+                                environment,
+                            )
+                            .0;
+                        let callback_outcomes = block_result.callback_outcomes();
+                        abrupt = abrupt.join(&callback_outcomes);
+                        abrupt_flow = abrupt_flow.union(callback_outcomes.flow());
+                        all_normal &= block_result.callback_has_normal_path();
+                    }
+                    dispatch_receiver_type.clone()
                 } else if let Some(type_) = tsort_type {
                     type_
                 } else if matches!(&dispatch_receiver_type, Type::Tuple(_))
