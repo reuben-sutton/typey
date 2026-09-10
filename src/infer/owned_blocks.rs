@@ -125,13 +125,30 @@ impl<'src> Analyzer<'src> {
             return None;
         }
         match input.block.as_ref() {
-            Some(cfg::BlockOperand::Inline(closure)) => self.transfer_owned_closure_body(
-                *closure,
-                &[Type::Any],
-                None,
-                Some(receiver),
-                environment,
-            ),
+            Some(cfg::BlockOperand::Inline(closure)) => {
+                let result = self.transfer_owned_closure_body(
+                    *closure,
+                    &[Type::Any],
+                    None,
+                    Some(receiver),
+                    environment,
+                )?;
+                if let Some(closure) = self.program.hir_program.closure(*closure) {
+                    let body_span = self
+                        .program
+                        .hir_program
+                        .body(closure.body)
+                        .and_then(|body| self.program.hir_program.expression(body.root))
+                        .map_or(closure.span, |body| body.span);
+                    self.record_at(
+                        SourceSite::from_span(body_span, None),
+                        result.type_.clone(),
+                        false,
+                        None,
+                    );
+                }
+                Some(result)
+            }
             Some(cfg::BlockOperand::Passed(value)) => values
                 .get(value.0 as usize)
                 .and_then(Option::as_ref)

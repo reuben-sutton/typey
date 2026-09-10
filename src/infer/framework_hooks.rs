@@ -44,6 +44,18 @@ impl<'src> Analyzer<'src> {
                 self.method_resolution_cache.borrow_mut().clear();
                 self.instance_self_type_cache.borrow_mut().clear();
                 self.schedule_method_resolution_dependents(&base_type);
+                // Module-owned method bodies can use generated accessors whose
+                // ivars are supplied by the eventual includer. Revisit those
+                // bodies when this mixin becomes visible as well as revisiting
+                // the includer's callers.
+                self.schedule_method_resolution_dependents(&module_name);
+                self.fixpoint.changed_methods.extend(
+                    self.declarations
+                        .methods
+                        .keys()
+                        .filter(|key| key.owner.as_deref() == Some(module_name.as_str()))
+                        .cloned(),
+                );
             }
             let hook = MethodKey {
                 owner: Some(module_name.clone()),

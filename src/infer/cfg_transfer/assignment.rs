@@ -129,7 +129,22 @@ fn transfer_write_inner<'src>(
             } else {
                 type_
             };
-            analyzer.observe_ivar(environment, name.clone(), &type_, false);
+            let provisional = expression
+                .and_then(|expression| analyzer.program.hir_program.expression(expression))
+                .and_then(|expression| match &expression.kind {
+                    hir::ExprKind::Assign { value, .. } => {
+                        analyzer.program.hir_program.expression(*value)
+                    }
+                    _ => None,
+                })
+                .and_then(|expression| match &expression.kind {
+                    hir::ExprKind::Read(hir::Read::Local(local)) => {
+                        analyzer.program.hir_program.local_name(*local)
+                    }
+                    _ => None,
+                })
+                .is_some_and(|name| environment.is_provisional(name.as_str()));
+            analyzer.observe_ivar(environment, name.clone(), &type_, provisional);
             let refinement = ivar_refinement_key(&name);
             environment.bind(&refinement, type_.clone());
             environment.set_hash_shape(refinement, hash_shape);

@@ -104,6 +104,14 @@ pub(super) fn transfer_implicit_call(
     values: &[Option<Type>],
     environment: &mut Environment,
 ) -> Result<ContextTransfer, String> {
+    if let Some(result) = analyzer.cfg_dynamic_eval_call(input, receiver, values, environment) {
+        let type_ = result.type_.clone();
+        return Ok(ContextTransfer {
+            type_,
+            block_result: Some(result),
+            untyped_origin: UntypedOrigin::Propagated,
+        });
+    }
     if matches!(input.name.as_str(), "include" | "prepend" | "extend") {
         if let Some(module_name) = owned_mixin_module_name(analyzer, input, environment) {
             analyzer.observe_mixin_hook_owned(
@@ -189,6 +197,36 @@ pub(super) fn transfer_implicit_call(
         });
     }
     analyzer.record_method_dependency(&key, environment);
+    let inferred_accessor = analyzer
+        .resolve_method_key(&key)
+        .filter(|resolved| {
+            analyzer
+                .declarations
+                .methods
+                .get(resolved)
+                .is_some_and(|state| !state.explicit)
+        })
+        .and_then(|resolved| {
+            analyzer
+                .declarations
+                .accessors
+                .get(&resolved)
+                .copied()
+                .map(|accessor| (resolved, accessor))
+        });
+    if let Some((accessor_key, accessor)) = inferred_accessor {
+        let type_ = analyzer.eval_accessor_call(
+            &accessor_key,
+            accessor,
+            &arguments.argument_types,
+            environment,
+        );
+        return Ok(ContextTransfer {
+            type_,
+            block_result: None,
+            untyped_origin: UntypedOrigin::InferredMethod,
+        });
+    }
     if let Some(signature) = analyzer
         .observe_call(&key, arguments, input.block.is_some())
         .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))

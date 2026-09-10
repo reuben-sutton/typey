@@ -249,7 +249,11 @@ impl<'src> Analyzer<'src> {
                                 .unwrap_or(Type::Any),
                         );
                         if !state.explicit {
-                            environment.mark_inferred(name);
+                            if state.params.get(positional).is_some_and(Option::is_some) {
+                                environment.mark_inferred(name);
+                            } else {
+                                environment.mark_provisional(name);
+                            }
                         }
                     }
                     positional += 1;
@@ -263,7 +267,11 @@ impl<'src> Analyzer<'src> {
                             .unwrap_or(Type::Any);
                         environment.bind(name.clone(), Type::Array(Box::new(element)));
                         if !state.explicit {
-                            environment.mark_inferred(name);
+                            if state.params.get(positional).is_some_and(Option::is_some) {
+                                environment.mark_inferred(name);
+                            } else {
+                                environment.mark_provisional(name);
+                            }
                         }
                     }
                     positional += 1;
@@ -277,7 +285,11 @@ impl<'src> Analyzer<'src> {
                             .unwrap_or(Type::Any);
                         environment.bind(name.to_owned(), type_);
                         if !state.explicit {
-                            environment.mark_inferred(name.to_owned());
+                            if state.keywords.get(name).is_some_and(Option::is_some) {
+                                environment.mark_inferred(name.to_owned());
+                            } else {
+                                environment.mark_provisional(name.to_owned());
+                            }
                         }
                     }
                 }
@@ -288,7 +300,11 @@ impl<'src> Analyzer<'src> {
                             Type::Hash(Box::new(Type::Symbol), Box::new(Type::Any)),
                         );
                         if !state.explicit {
-                            environment.mark_inferred(name);
+                            if state.params.get(positional).is_some_and(Option::is_some) {
+                                environment.mark_inferred(name);
+                            } else {
+                                environment.mark_provisional(name);
+                            }
                         }
                     }
                 }
