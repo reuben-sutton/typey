@@ -579,12 +579,17 @@ pub(super) fn transfer_receiver_call(
                     Analyzer::class_object_value_type(argument).unwrap_or_else(|| argument.clone())
                 })
                 .collect::<Vec<_>>();
-            if is_generic_type_application(analyzer, input) {
+            let runtime_constructor = matches!(
+                &instance,
+                Type::Named(owner, _) if name_matches(owner, "Hash") || name_matches(owner, "Dir")
+            );
+            if is_generic_type_application(analyzer, input) || runtime_constructor {
                 // Preserve generic type application for `T::Set[...]` and
-                // similar nominal expressions. A runtime `Constant[...]`
-                // instead reaches ordinary singleton signature dispatch
-                // below, which is important for APIs such as
-                // `IsolatedExecutionState[:key]`.
+                // similar nominal expressions. Runtime collection
+                // constructors retain their structural contracts, while an
+                // unrelated `Constant[...]` reaches ordinary singleton
+                // signature dispatch (important for APIs such as
+                // `IsolatedExecutionState[:key]`).
                 let type_ = match &instance {
                     Type::Named(owner, _)
                         if matches!(owner.as_str(), "Array" | "T::Array")
@@ -886,26 +891,88 @@ fn cfg_respond_to_guard(
 }
 
 fn is_generic_type_application(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> bool {
-    input
+    let Some(expression) = input
         .expression
         .and_then(|expression| analyzer.program.hir_program.expression(expression))
-        .and_then(|expression| match &expression.kind {
-            crate::hir::ExprKind::Call(call) => match call.receiver {
-                crate::hir::Receiver::Explicit(receiver) => analyzer
-                    .program
-                    .hir_program
-                    .expression(receiver)
-                    .and_then(|receiver| match &receiver.kind {
-                        crate::hir::ExprKind::Read(crate::hir::Read::Constant(name)) => {
-                            Some(name.as_str().trim_start_matches("::").starts_with("T::"))
-                        }
-                        _ => None,
-                    }),
-                _ => Some(false),
-            },
+    else {
+        return false;
+    };
+    let crate::hir::ExprKind::Call(call) = &expression.kind else {
+        return false;
+    };
+    let crate::hir::Receiver::Explicit(receiver) = call.receiver else {
+        return false;
+    };
+    let Some(crate::hir::ExprKind::Read(crate::hir::Read::Constant(name))) = analyzer
+        .program
+        .hir_program
+        .expression(receiver)
+        .map(|receiver| &receiver.kind)
+    else {
+        return false;
+    };
+    let name = name.as_str().trim_start_matches("::");
+    if name.starts_with("T::") {
+        return true;
+    }
+
+    // Bare generic applications such as `Enumerator[Integer]` occur inside
+    // Sorbet type expressions (`T.any`, `T.let`, `T.cast`, ...). The same
+    // syntax is also a normal Ruby class-method call, so inspect the owned
+    // HIR spans of the enclosing T type argument instead of treating every
+    // `Constant[]` as a generic constructor.
+    analyzer
+        .program
+        .hir_program
+        .expressions
+        .iter()
+        .filter_map(|expression| match &expression.kind {
+            crate::hir::ExprKind::Call(call) => Some(call),
             _ => None,
         })
-        .unwrap_or(false)
+        .any(|parent| {
+            let crate::hir::Receiver::Explicit(parent_receiver) = parent.receiver else {
+                return false;
+            };
+            let is_type_intrinsic = analyzer
+                .program
+                .hir_program
+                .expression(parent_receiver)
+                .and_then(|receiver| match &receiver.kind {
+                    crate::hir::ExprKind::Read(crate::hir::Read::Constant(name)) => Some(
+                        name.as_str().trim_start_matches("::") == "T"
+                            && matches!(
+                                parent.name.as_str(),
+                                "any" | "all" | "nilable" | "let" | "cast" | "assert_type!"
+                            ),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or(false);
+            if !is_type_intrinsic {
+                return false;
+            }
+            let positional_arguments = parent
+                .arguments
+                .iter()
+                .filter_map(|argument| {
+                    let crate::hir::Argument::Positional(argument) = argument else {
+                        return None;
+                    };
+                    analyzer.program.hir_program.expression(*argument)
+                })
+                .collect::<Vec<_>>();
+            let type_arguments = if matches!(parent.name.as_str(), "let" | "cast" | "assert_type!")
+            {
+                positional_arguments.get(1..).unwrap_or_default()
+            } else {
+                positional_arguments.as_slice()
+            };
+            type_arguments.iter().any(|argument| {
+                expression.span.start >= argument.span.start
+                    && expression.span.end <= argument.span.end
+            })
+        })
 }
 
 fn hash_constructor_pair_types(type_: &Type) -> Option<(Type, Type)> {
