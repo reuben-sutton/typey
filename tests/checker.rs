@@ -411,6 +411,25 @@ fn transfers_owned_builtin_receiver_contracts() {
 }
 
 #[test]
+fn respects_respond_to_method_guards_in_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_respond_to_method_guard.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(
+        baseline.has_errors(),
+        "expected legacy missing-method diagnostic"
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_union_enumerable_predicates_through_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_union_enumerable_predicates.rb")
         .expect("fixture");

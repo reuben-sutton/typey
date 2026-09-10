@@ -531,6 +531,23 @@ impl<'src> Analyzer<'src> {
         else {
             return;
         };
+        if name.as_str() == "respond_to?" && truthy {
+            if let Some(method) = argument.and_then(|argument| {
+                self.program
+                    .hir_program
+                    .expression(argument)
+                    .and_then(|expression| match &expression.kind {
+                        hir::ExprKind::Literal(hir::Literal::Symbol(method))
+                        | hir::ExprKind::Literal(hir::Literal::String(method)) => {
+                            Some(method.clone())
+                        }
+                        _ => None,
+                    })
+            }) {
+                environment.set_known_respond_to(format!("\u{1}local:{local_name}"), method, true);
+            }
+            return;
+        }
         if environment.is_inferred(&local_name) {
             return;
         }
@@ -591,6 +608,23 @@ impl<'src> Analyzer<'src> {
         truthy: bool,
     ) {
         let current = self.ivar_type(environment, name);
+        if method.as_str() == "respond_to?" && truthy {
+            if let Some(method_name) = argument.and_then(|argument| {
+                self.program
+                    .hir_program
+                    .expression(argument)
+                    .and_then(|expression| match &expression.kind {
+                        hir::ExprKind::Literal(hir::Literal::Symbol(method))
+                        | hir::ExprKind::Literal(hir::Literal::String(method)) => {
+                            Some(method.clone())
+                        }
+                        _ => None,
+                    })
+            }) {
+                environment.set_known_respond_to(format!("\u{1}ivar:{name}"), method_name, true);
+            }
+            return;
+        }
         let argument_type = argument
             .map(|argument| self.cfg_predicate_argument_type(argument, environment))
             .unwrap_or(Type::Any);

@@ -799,6 +799,20 @@ pub(super) fn transfer_receiver_call(
         });
     }
 
+    // `respond_to?` is a runtime capability guard. If the guarded method is
+    // absent from the static declaration graph, the call is still valid on
+    // that path (for example through `method_missing` or a parser source-map
+    // subclass). Keep the result gradual because the guard proves presence,
+    // not the method's return contract.
+    if cfg_respond_to_guard(analyzer, input, environment, name) {
+        return Ok(ReceiverTransfer {
+            type_: Type::Any,
+            block_result: None,
+            untyped_origin: UntypedOrigin::FallbackCall,
+            missing_method: false,
+        });
+    }
+
     // The remaining T.* contracts still have parser-backed metatype and
     // annotation semantics. Keep those calls on the transactional migration
     // boundary until their owned representation is complete; treating an
@@ -827,6 +841,43 @@ pub(super) fn transfer_receiver_call(
         untyped_origin: UntypedOrigin::FallbackCall,
         missing_method: true,
     })
+}
+
+fn cfg_respond_to_guard(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    environment: &Environment,
+    method: &str,
+) -> bool {
+    let Some(expression) = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+    else {
+        return false;
+    };
+    let crate::hir::ExprKind::Call(call) = &expression.kind else {
+        return false;
+    };
+    let crate::hir::Receiver::Explicit(receiver) = call.receiver else {
+        return false;
+    };
+    let Some(receiver) = analyzer.program.hir_program.expression(receiver) else {
+        return false;
+    };
+    let Some(key) = (match &receiver.kind {
+        crate::hir::ExprKind::Read(crate::hir::Read::Local(local)) => analyzer
+            .program
+            .hir_program
+            .local_name(*local)
+            .map(|name| format!("\u{1}local:{name}")),
+        crate::hir::ExprKind::Read(crate::hir::Read::InstanceVariable(name)) => {
+            Some(format!("\u{1}ivar:{name}"))
+        }
+        _ => None,
+    }) else {
+        return false;
+    };
+    environment.known_respond_to(&key, method)
 }
 
 fn hash_constructor_pair_types(type_: &Type) -> Option<(Type, Type)> {

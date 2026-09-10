@@ -34,6 +34,10 @@ pub struct Environment {
     pub(super) known_nonempty_arrays: BTreeSet<String>,
     pub(super) predicate_aliases: BTreeMap<String, PredicateAlias>,
     pub(super) known_truthiness: BTreeMap<String, bool>,
+    /// Methods proven available by a path-sensitive `respond_to?` guard.
+    /// The receiver key is prefixed with its storage kind so a local and an
+    /// instance variable with the same source name cannot share a fact.
+    pub(super) known_respond_to: BTreeSet<(String, String)>,
     /// Flow-local refinements for hashes whose literal keys are known. The
     /// ordinary local/ivar type remains an aggregate `Type::Hash`.
     pub(super) hash_shapes: BTreeMap<String, HashShape>,
@@ -52,6 +56,7 @@ impl Default for Environment {
             known_nonempty_arrays: BTreeSet::new(),
             predicate_aliases: BTreeMap::new(),
             known_truthiness: BTreeMap::new(),
+            known_respond_to: BTreeSet::new(),
             hash_shapes: BTreeMap::new(),
             self_type: Type::Object,
             method_key: None,
@@ -80,6 +85,7 @@ impl Environment {
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.remove(&name);
         self.known_truthiness.remove(&name);
+        self.clear_known_respond_to(&format!("\u{1}local:{name}"));
         self.hash_shapes.remove(&name);
         self.hash_shapes.remove(&format!("\u{1}local:{name}"));
     }
@@ -93,6 +99,7 @@ impl Environment {
         self.known_nonempty_arrays.remove(name);
         self.predicate_aliases.remove(name);
         self.known_truthiness.remove(name);
+        self.clear_known_respond_to(&format!("\u{1}local:{name}"));
         self.hash_shapes.remove(name);
         self.hash_shapes.remove(&format!("\u{1}local:{name}"));
     }
@@ -145,6 +152,7 @@ impl Environment {
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.insert(name.clone(), alias);
         self.known_truthiness.remove(&name);
+        self.clear_known_respond_to(&format!("\u{1}local:{name}"));
         self.hash_shapes.remove(&name);
         self.hash_shapes.remove(&format!("\u{1}local:{name}"));
     }
@@ -159,6 +167,30 @@ impl Environment {
 
     pub(super) fn known_truthiness(&self, name: &str) -> Option<bool> {
         self.known_truthiness.get(name).copied()
+    }
+
+    pub(super) fn set_known_respond_to(
+        &mut self,
+        receiver: impl Into<String>,
+        method: impl Into<String>,
+        known: bool,
+    ) {
+        let key = (receiver.into(), method.into());
+        if known {
+            self.known_respond_to.insert(key);
+        } else {
+            self.known_respond_to.remove(&key);
+        }
+    }
+
+    pub(super) fn known_respond_to(&self, receiver: &str, method: &str) -> bool {
+        self.known_respond_to
+            .contains(&(receiver.to_owned(), method.to_owned()))
+    }
+
+    fn clear_known_respond_to(&mut self, receiver: &str) {
+        self.known_respond_to
+            .retain(|(known_receiver, _)| known_receiver != receiver);
     }
 
     pub(super) fn hash_shape(&self, name: &str) -> Option<&HashShape> {
@@ -288,6 +320,11 @@ impl Environment {
                     (other.known_truthiness.get(name) == Some(truthy))
                         .then(|| (name.clone(), *truthy))
                 })
+                .collect(),
+            known_respond_to: self
+                .known_respond_to
+                .intersection(&other.known_respond_to)
+                .cloned()
                 .collect(),
             hash_shapes: BTreeMap::new(),
             // `self` is flow-sensitive too: a predicate may narrow it on one
