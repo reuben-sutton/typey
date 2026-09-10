@@ -145,7 +145,7 @@ pub(super) fn transfer_builtin_call(
             "to_s" | "to_str" | "inspect" | "dump" | "upcase" | "downcase" | "strip" | "lstrip"
             | "rstrip" | "chomp" | "chop" | "reverse" | "succ" | "next" | "capitalize"
             | "swapcase" | "scrub" | "force_encoding" | "+" | "*" | "delete_prefix"
-            | "delete_suffix" | "shellescape" | "+@" | "<<" => Some(Type::String),
+            | "delete_suffix" | "shellescape" | "+@" | "<<" | "encode" => Some(Type::String),
             "length" | "size" | "bytesize" | "count" | "ord" => Some(Type::Integer),
             "hash" => Some(Type::Integer),
             "empty?" | "start_with?" | "end_with?" | "include?" | "match?" | "nil?" => {
@@ -221,6 +221,7 @@ pub(super) fn transfer_builtin_call(
                     Type::Float
                 })
             }
+            "clamp" => Some(receiver.clone()),
             "to_f" => Some(Type::Float),
             "to_r" => Some(Type::named("Rational")),
             "to_c" => Some(Type::named("Complex")),
@@ -229,8 +230,12 @@ pub(super) fn transfer_builtin_call(
             "to_i" | "to_int" => Some(Type::Integer),
             "to_s" | "inspect" => Some(Type::String),
             "times" | "upto" | "downto" | "step" => {
-                let _ = callback(std::slice::from_ref(receiver))?;
-                Some(receiver.clone())
+                if input.block.is_none() {
+                    Some(Type::named("Enumerator"))
+                } else {
+                    let _ = callback(std::slice::from_ref(receiver))?;
+                    Some(receiver.clone())
+                }
             }
             "==" | "!=" => Some(Type::bool()),
             _ => None,
@@ -575,6 +580,21 @@ fn transfer_array_builtin(
     environment: &mut Environment,
 ) -> Option<Type> {
     let name = input.name.as_str();
+    let flattened_element = analyzer.flattened_array_element_type(element);
+    let argument_elements = arguments
+        .argument_types
+        .iter()
+        .map(|argument| analyzer.array_element_type(argument))
+        .collect::<Vec<_>>();
+    let mut callback = |parameters: &[Type]| {
+        analyzer.cfg_owned_block_return_type(
+            input,
+            parameters,
+            &Type::Anything,
+            values,
+            environment,
+        )
+    };
     match name {
         "new" => Some(Type::Array(Box::new(element.clone()))),
         "first" | "last" if arguments.argument_types.is_empty() => {
@@ -618,6 +638,8 @@ fn transfer_array_builtin(
         "inspect" | "to_s" => Some(Type::String),
         "compact" => Some(Type::Array(Box::new(element.without(&Type::Nil)))),
         "to_a" | "dup" | "clone" => Some(Type::Array(Box::new(element.clone()))),
+        "flatten" => Some(Type::Array(Box::new(flattened_element))),
+        "uniq" => Some(Type::Array(Box::new(element.clone()))),
         "to_set" => Some(Type::Named("Set".to_owned(), vec![element.clone()])),
         "to_h" => {
             let (key, value) = Analyzer::pair_types(element)?;
@@ -679,6 +701,62 @@ fn transfer_array_builtin(
         }
         "sample" => Some(Type::Array(Box::new(element.clone()))),
         "count" => Some(Type::Integer),
+        "select!" | "filter!" | "reject!" => {
+            if input.block.is_none() {
+                Some(Type::named("Enumerator"))
+            } else {
+                let _ = callback(std::slice::from_ref(element))?;
+                Some(Type::union([
+                    Type::Nil,
+                    Type::Array(Box::new(element.clone())),
+                ]))
+            }
+        }
+        "min_by" | "max_by" => {
+            if input.block.is_none() {
+                Some(Type::named("Enumerator"))
+            } else {
+                let _ = callback(std::slice::from_ref(element))?;
+                Some(Type::union([Type::Nil, element.clone()]))
+            }
+        }
+        "combination" | "repeated_combination" | "permutation" | "repeated_permutation" => {
+            if input.block.is_none() {
+                Some(Type::named("Enumerator"))
+            } else {
+                let expected = Type::Array(Box::new(element.clone()));
+                let _ = callback(std::slice::from_ref(&expected))?;
+                Some(Type::Array(Box::new(element.clone())))
+            }
+        }
+        "product" => {
+            let mut tuple = vec![element.clone()];
+            tuple.extend(argument_elements.clone());
+            if input.block.is_none() {
+                Some(Type::Array(Box::new(Type::Tuple(tuple))))
+            } else {
+                let expected = Type::Array(Box::new(Type::Tuple(tuple)));
+                let _ = callback(std::slice::from_ref(&expected))?;
+                Some(Type::Array(Box::new(element.clone())))
+            }
+        }
+        "zip" => {
+            let mut tuple = vec![element.clone()];
+            tuple.extend(argument_elements);
+            Some(Type::Array(Box::new(Type::Tuple(tuple))))
+        }
+        "sum" => {
+            let element = if input.block.is_some() {
+                let callback = callback(std::slice::from_ref(element))?;
+                Analyzer::block_value_type(&callback)
+            } else {
+                element.clone()
+            };
+            Some(Analyzer::numeric_sum_type(
+                &element,
+                arguments.argument_types.first(),
+            ))
+        }
         "==" | "!=" => Some(Type::bool()),
         _ => None,
     }

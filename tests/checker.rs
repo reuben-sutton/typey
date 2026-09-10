@@ -9641,6 +9641,37 @@ T.reveal_type(files)
 }
 
 #[test]
+fn transfers_standard_collection_contracts_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_standard_collection_contracts.rb")
+        .expect("fixture");
+    let result = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    for expected in [
+        "Revealed type: `T::Array[[Integer, String]]`",
+        "Revealed type: `T::Array[String]`",
+        "Revealed type: `Integer`",
+        "Revealed type: `T.nilable(T::Array[Integer])`",
+        "Revealed type: `String`",
+        "Revealed type: `Enumerator`",
+    ] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing {expected} in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn models_active_support_inflections() {
     let result = check(
         r#"
