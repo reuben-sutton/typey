@@ -134,7 +134,7 @@ impl<'src> Analyzer<'src> {
                     } else {
                         block_type
                     };
-                    method_environment.bind(name.clone(), block_type);
+                    method_environment.bind_block_parameter(name.clone(), block_type);
                     if !state.explicit {
                         if state
                             .block_return_type
@@ -421,7 +421,7 @@ impl<'src> Analyzer<'src> {
                 } else {
                     type_
                 };
-                environment.bind(prism::constant_name(name), type_);
+                environment.bind_block_parameter(prism::constant_name(name), type_);
             }
         }
         if inferred_context {

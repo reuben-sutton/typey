@@ -25,6 +25,11 @@ pub struct Environment {
     /// sample argument as exhaustive.
     pub(super) inferred_locals: BTreeSet<String>,
     pub(super) provisional_locals: BTreeSet<String>,
+    /// Locals introduced by a Ruby `&block` parameter.  A forwarded block
+    /// needs a little more information than its ordinary `Proc` shape: the
+    /// receiving method may pass it to another callback, where the expected
+    /// parameters provide the missing signature.
+    pub(super) block_parameters: BTreeSet<String>,
     pub(super) open_array_locals: BTreeSet<String>,
     pub(super) known_nonempty_arrays: BTreeSet<String>,
     pub(super) predicate_aliases: BTreeMap<String, PredicateAlias>,
@@ -42,6 +47,7 @@ impl Default for Environment {
             locals: BTreeMap::new(),
             inferred_locals: BTreeSet::new(),
             provisional_locals: BTreeSet::new(),
+            block_parameters: BTreeSet::new(),
             open_array_locals: BTreeSet::new(),
             known_nonempty_arrays: BTreeSet::new(),
             predicate_aliases: BTreeMap::new(),
@@ -70,6 +76,7 @@ impl Environment {
         self.known_nonempty_arrays.remove(&name);
         self.inferred_locals.remove(&name);
         self.provisional_locals.remove(&name);
+        self.block_parameters.remove(&name);
         self.locals.insert(name.clone(), type_);
         self.predicate_aliases.remove(&name);
         self.known_truthiness.remove(&name);
@@ -81,6 +88,7 @@ impl Environment {
         self.locals.remove(name);
         self.inferred_locals.remove(name);
         self.provisional_locals.remove(name);
+        self.block_parameters.remove(name);
         self.open_array_locals.remove(name);
         self.known_nonempty_arrays.remove(name);
         self.predicate_aliases.remove(name);
@@ -103,6 +111,16 @@ impl Environment {
             self.inferred_locals.remove(&name);
             self.provisional_locals.insert(name);
         }
+    }
+
+    pub(super) fn bind_block_parameter(&mut self, name: impl Into<String>, type_: Type) {
+        let name = name.into();
+        self.bind(name.clone(), type_);
+        self.block_parameters.insert(name);
+    }
+
+    pub(super) fn is_block_parameter(&self, name: &str) -> bool {
+        self.block_parameters.contains(name)
     }
 
     pub(super) fn is_inferred(&self, name: &str) -> bool {
@@ -210,6 +228,11 @@ impl Environment {
             provisional_locals: self
                 .provisional_locals
                 .union(&other.provisional_locals)
+                .cloned()
+                .collect(),
+            block_parameters: self
+                .block_parameters
+                .intersection(&other.block_parameters)
                 .cloned()
                 .collect(),
             open_array_locals: self

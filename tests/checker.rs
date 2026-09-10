@@ -6681,6 +6681,12 @@ fn publishes_forwarded_symbol_block_returns_through_owned_cfg() {
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
     assert_eq!(cfg.types, baseline.types);
     assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    assert!(baseline.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Note
+            && diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+    }));
 }
 
 #[test]

@@ -206,7 +206,12 @@ impl<'src> Analyzer<'src> {
                 hir::ParameterKind::Anonymous => Type::Any,
             };
             if let Some(name) = &parameter.name {
-                closure_environment.bind(name.as_str().to_owned(), type_.clone());
+                if parameter.kind == hir::ParameterKind::Block {
+                    closure_environment
+                        .bind_block_parameter(name.as_str().to_owned(), type_.clone());
+                } else {
+                    closure_environment.bind(name.as_str().to_owned(), type_.clone());
+                }
             }
             if positional_index == 1 && parameter.name.is_none() {
                 closure_environment.bind("it", type_);
@@ -583,7 +588,11 @@ fn bind_owned_parameters(
             hir::ParameterKind::Anonymous => Type::Any,
         };
         if let Some(name) = &parameter.name {
-            environment.bind(name.as_str().to_owned(), type_.clone());
+            if parameter.kind == hir::ParameterKind::Block {
+                environment.bind_block_parameter(name.as_str().to_owned(), type_.clone());
+            } else {
+                environment.bind(name.as_str().to_owned(), type_.clone());
+            }
         }
         if positional_index == 1 && parameter.name.is_none() {
             environment.bind("it", type_);

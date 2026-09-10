@@ -321,7 +321,7 @@ impl<'src> Analyzer<'src> {
                         } else {
                             Type::union([Type::Nil, block])
                         };
-                        environment.bind(name.clone(), block);
+                        environment.bind_block_parameter(name.clone(), block);
                         if !state.explicit {
                             if state
                                 .block_return_type

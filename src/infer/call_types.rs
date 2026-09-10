@@ -519,12 +519,22 @@ impl<'src> Analyzer<'src> {
                     )));
                 }
                 let Some(signature) = Self::passed_block_signature(&actual) else {
-                    // An unannotated `&block` parameter is represented as an
-                    // unknown-arity Proc with an `Any` result. The recursive
-                    // evaluator keeps the callback call gradual in this case;
-                    // treating the missing signature as an unsupported CFG
-                    // shape would incorrectly report the collection method as
-                    // missing and lose the ordinary `T.untyped` result.
+                    if let Some(local_name) = self.cfg_passed_block_local_name(input) {
+                        if let Some(signature) = self.forwarded_block_signature(
+                            &local_name,
+                            &actual,
+                            expected_parameters,
+                            environment,
+                        ) {
+                            let result = proc_parts(&signature)
+                                .map_or(Type::Any, |(_, result)| result.clone());
+                            return Some(Eval::value(result));
+                        }
+                    }
+                    // An ordinary unannotated Proc still has no callback
+                    // contract. Preserve the gradual result in that case;
+                    // only a marked `&block` parameter is eligible for the
+                    // forwarding rule above.
                     return Some(Eval::value(Type::Any));
                 };
                 if !Self::passed_block_is_assignable(self, &signature, &expected) {
@@ -576,6 +586,26 @@ impl<'src> Analyzer<'src> {
             hir::ExprKind::Literal(hir::Literal::Symbol(name)) => Some(name.clone()),
             _ => None,
         }
+    }
+
+    fn cfg_passed_block_local_name(&self, input: &OwnedCallInput) -> Option<String> {
+        let expression = input
+            .expression
+            .and_then(|expression| self.program.hir_program.expression(expression))?;
+        let hir::ExprKind::Call(call) = &expression.kind else {
+            return None;
+        };
+        let hir::BlockArgument::Passed(block) = call.block.as_ref()? else {
+            return None;
+        };
+        let expression = self.program.hir_program.expression(*block)?;
+        let hir::ExprKind::Read(hir::Read::Local(local)) = &expression.kind else {
+            return None;
+        };
+        self.program
+            .hir_program
+            .local_name(*local)
+            .map(|name| name.as_str().to_owned())
     }
 
     pub(super) fn cfg_dynamic_instance_variable_name(

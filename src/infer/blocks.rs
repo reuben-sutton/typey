@@ -9,6 +9,52 @@ use crate::types::Type;
 use ruby_prism::{Node, ParametersNode};
 
 impl<'src> Analyzer<'src> {
+    /// Recover the contract of an unannotated block parameter when it is
+    /// forwarded into a callback with a known input shape.  Ruby exposes an
+    /// unannotated `&block` as an unknown-arity proc, but the forwarding site
+    /// supplies the missing parameter types.  Keep the return as a private
+    /// method-local type variable so a caller's concrete block result can be
+    /// substituted into the enclosing method's return type later.
+    pub(super) fn forwarded_block_signature(
+        &mut self,
+        local_name: &str,
+        actual: &Type,
+        expected_parameters: &[Type],
+        environment: &mut Environment,
+    ) -> Option<Type> {
+        if !environment.is_block_parameter(local_name) {
+            return None;
+        }
+        let actual_proc = optional_proc_type(actual)?;
+        if Self::passed_block_signature(&actual_proc).is_some() {
+            return None;
+        }
+        let key = environment.method_key.clone()?;
+        let state = self.declarations.methods.get_mut(&key)?;
+        if state.explicit {
+            return None;
+        }
+        let variable = Type::TypeVar(format!(
+            "$block_return:{}:{}:{}",
+            key.owner.as_deref().unwrap_or("<top>"),
+            key.name,
+            key.singleton
+        ));
+        let signature = Type::Proc(expected_parameters.to_vec(), Box::new(variable.clone()));
+        let local_type = if actual.is_nil() {
+            Type::Nil
+        } else {
+            Type::union([Type::Nil, signature.clone()])
+        };
+        environment.bind_block_parameter(local_name.to_owned(), local_type);
+        let mut changed = state.observe_yield_arguments(expected_parameters);
+        changed |= state.observe_block_return(&variable);
+        if changed {
+            self.fixpoint.changed_methods.insert(key);
+        }
+        Some(signature)
+    }
+
     /// `define_method` binds its block to instances of the receiver's class.
     /// Preserve that runtime fact when an inferred helper such as a test DSL
     /// forwards `&block`; otherwise a class-level declaration block is checked
@@ -140,6 +186,7 @@ impl<'src> Analyzer<'src> {
     pub(super) fn passed_block_is_provisional(
         &self,
         node: &Node<'_>,
+        key: &MethodKey,
         environment: &Environment,
     ) -> bool {
         let Some(block) = node.as_block_argument_node() else {
@@ -148,6 +195,18 @@ impl<'src> Analyzer<'src> {
         let Some(expression) = block.expression() else {
             return false;
         };
+        if expression.as_symbol_node().is_some() {
+            return self
+                .resolve_method_key(key)
+                .and_then(|key| self.declarations.methods.get(&key))
+                .is_some_and(|state| {
+                    state.block_parameters().is_empty()
+                        && state
+                            .block_return_type
+                            .as_ref()
+                            .is_none_or(Type::contains_any)
+                });
+        }
         let Some(local) = expression.as_local_variable_read_node() else {
             return false;
         };
@@ -329,6 +388,21 @@ impl<'src> Analyzer<'src> {
                     return Type::Any;
                 };
                 let Some(signature) = Self::passed_block_signature(&expression_type) else {
+                    let local_name = block
+                        .expression()
+                        .and_then(|expression| expression.as_local_variable_read_node())
+                        .map(|local| prism::constant_name(local.name()));
+                    if let Some(signature) = local_name.and_then(|local_name| {
+                        self.forwarded_block_signature(
+                            &local_name,
+                            &expression_type,
+                            std::slice::from_ref(element),
+                            outer,
+                        )
+                    }) {
+                        return proc_parts(&signature)
+                            .map_or(Type::Any, |(_, result)| result.clone());
+                    }
                     if strictness_rank(self.strictness_at(prism::span(node).0))
                         >= strictness_rank(Strictness::Strict)
                     {
@@ -722,6 +796,30 @@ impl<'src> Analyzer<'src> {
                         let return_type =
                             proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
                         (Eval::value(return_type), Some(signature))
+                    } else if let Some(forwarded_signature) = block
+                        .as_block_argument_node()
+                        .and_then(|block| block.expression())
+                        .and_then(|expression| expression.as_local_variable_read_node())
+                        .map(|local| prism::constant_name(local.name()))
+                        .and_then(|local_name| {
+                            let expected = block_signature
+                                .as_ref()
+                                .and_then(optional_proc_type)
+                                .and_then(|signature| {
+                                    proc_parts(&signature)
+                                        .map(|(parameters, _)| parameters.to_vec())
+                                })?;
+                            self.forwarded_block_signature(
+                                &local_name,
+                                &expression_type,
+                                &expected,
+                                environment,
+                            )
+                        })
+                    {
+                        let return_type = proc_parts(&forwarded_signature)
+                            .map_or(Type::Any, |(_, result)| result.clone());
+                        (Eval::value(return_type), Some(forwarded_signature))
                     } else {
                         (Eval::value(Type::Any), None)
                     }
@@ -828,7 +926,7 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
-        let provisional = self.passed_block_is_provisional(block, environment);
+        let provisional = self.passed_block_is_provisional(block, &key, environment);
         if self
             .declarations
             .methods
@@ -839,6 +937,15 @@ impl<'src> Analyzer<'src> {
                 .methods
                 .get_mut(&key)
                 .is_some_and(|state| {
+                    if state.block_return_type.as_ref().is_some_and(|type_| {
+                        matches!(type_, Type::TypeVar(name) if name.starts_with("$block_return:"))
+                    }) {
+                        // A forwarded block's result is a relation between
+                        // the caller's block and this method's return. Do
+                        // not join one concrete call-site result into the
+                        // shared symbolic summary.
+                        return false;
+                    }
                     if provisional {
                         state.observe_provisional_block_return(&block_type)
                     } else {

@@ -1,4 +1,6 @@
-use super::{name_matches, Analyzer, CallArguments, MethodKey, SourceSite};
+use super::{
+    name_matches, optional_proc_type, proc_parts, Analyzer, CallArguments, MethodKey, SourceSite,
+};
 use crate::prism;
 use crate::signature::MethodSig;
 use crate::types::Type;
@@ -562,6 +564,21 @@ impl<'src> Analyzer<'src> {
                 &type_parameter_bindings,
                 &signature.type_parameters,
             );
+            let block_return_variable = signature
+                .block
+                .as_ref()
+                .and_then(optional_proc_type)
+                .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()))
+                .and_then(|result| match result {
+                    Type::TypeVar(name) if name.starts_with("$block_return:") => Some(name),
+                    _ => None,
+                });
+            let return_type = if let Some(name) = block_return_variable {
+                let replacement = block_return_type.cloned().unwrap_or(Type::Any);
+                Self::substitute_block_return_variable(&return_type, &name, &replacement)
+            } else {
+                return_type
+            };
             if name == "flat_map" {
                 if let Some(block_return_type) = block_return_type {
                     return Type::Array(Box::new(self.flat_map_element_type(block_return_type)));
@@ -608,6 +625,92 @@ impl<'src> Analyzer<'src> {
                 }
             }
             return_type
+        }
+    }
+
+    fn substitute_block_return_variable(type_: &Type, name: &str, replacement: &Type) -> Type {
+        match type_ {
+            Type::TypeVar(variable) if variable == name => replacement.clone(),
+            Type::Named(type_name, arguments) => Type::Named(
+                type_name.clone(),
+                arguments
+                    .iter()
+                    .map(|argument| {
+                        Self::substitute_block_return_variable(argument, name, replacement)
+                    })
+                    .collect(),
+            ),
+            Type::Array(element) => Type::Array(Box::new(Self::substitute_block_return_variable(
+                element,
+                name,
+                replacement,
+            ))),
+            Type::Hash(key, value) => Type::Hash(
+                Box::new(Self::substitute_block_return_variable(
+                    key,
+                    name,
+                    replacement,
+                )),
+                Box::new(Self::substitute_block_return_variable(
+                    value,
+                    name,
+                    replacement,
+                )),
+            ),
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| {
+                        Self::substitute_block_return_variable(element, name, replacement)
+                    })
+                    .collect(),
+            ),
+            Type::Proc(parameters, result) => Type::Proc(
+                parameters
+                    .iter()
+                    .map(|parameter| {
+                        Self::substitute_block_return_variable(parameter, name, replacement)
+                    })
+                    .collect(),
+                Box::new(Self::substitute_block_return_variable(
+                    result,
+                    name,
+                    replacement,
+                )),
+            ),
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => Type::BoundProc {
+                receiver: Box::new(Self::substitute_block_return_variable(
+                    receiver,
+                    name,
+                    replacement,
+                )),
+                parameters: parameters
+                    .iter()
+                    .map(|parameter| {
+                        Self::substitute_block_return_variable(parameter, name, replacement)
+                    })
+                    .collect(),
+                result: Box::new(Self::substitute_block_return_variable(
+                    result,
+                    name,
+                    replacement,
+                )),
+            },
+            Type::Union(members) => {
+                Type::union(members.iter().map(|member| {
+                    Self::substitute_block_return_variable(member, name, replacement)
+                }))
+            }
+            Type::Intersection(members) => {
+                Type::intersection(members.iter().map(|member| {
+                    Self::substitute_block_return_variable(member, name, replacement)
+                }))
+            }
+            other => other.clone(),
         }
     }
 }
