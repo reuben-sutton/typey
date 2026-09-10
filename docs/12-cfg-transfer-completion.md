@@ -282,6 +282,10 @@ The first modularization steps are now in place:
   before the recursive Prism statement walker; definitions and unsupported
   top-level syntax still fall back as a whole through the transactional
   preflight boundary.
+* top-level loop and `begin`/`rescue` accounting now stays on the owned CFG
+  path: loop exit values and explicit `break`/`next` outcomes are published
+  at their owned source spans, and rescue probing does not duplicate a normal
+  result when the handler is already reachable.
 * the compatibility assignment adapter no longer evaluates an unsupported RHS
   through `eval_node`; it declines the owned assignment path before publishing
   state, leaving the complete assignment to the recursive evaluator.
@@ -318,10 +322,9 @@ The first modularization steps are now in place:
   expressions, singleton receivers, and Struct constructor field metadata no
   longer require a declaration-shaped parser fallback.
 * top-level terminating calls preserve the legacy `T.noreturn` aggregate while
-  still transferring later reveal sites, and the loop/begin parity fixtures
-  now agree with the recursive evaluator. The remaining top-level fallback is
-  isolated to a source-file body whose legacy statement accounting still
-  needs to be represented directly in CFG.
+  still transferring later reveal sites. The loop/begin parity fixtures now
+  agree with the recursive evaluator; remaining top-level fallbacks are
+  limited to unsupported or legacy-only source-file syntax.
 
 * source-file pseudo-expressions including `__FILE__` and `__LINE__`, rescue
   modifiers, backreference reads, Kernel loading calls, lambda-local outcomes,
