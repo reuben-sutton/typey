@@ -19,7 +19,7 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, 441 checker tests,
+The current local gates include 22 CFG tests, 12 HIR tests, 442 checker tests,
 and 246 local conformance tests. A separate 37-fixture upstream smoke suite
 was green in the preceding run, but a fresh rerun on this snapshot did not
 finish within roughly fourteen minutes and was interrupted without reporting
@@ -28,9 +28,11 @@ are correspondingly expensive.
 The CFG path is still opt-in because the transfer host retains semantic
 bridges in the legacy recursive path: the recursive evaluator still uses Prism
 children for exact diagnostics and builtin hooks, while parser-backed callback
-contracts and some passed/forwarded-block contexts still need migration.
-Ordinary inline callbacks now use an owned HIR contract; a body containing an
-unsupported operation or an unmigrated callback shape falls back as a whole.
+contracts and some symbol/passed/forwarded-block contexts still need migration.
+Ordinary inline callbacks now use an owned HIR contract; optional callable
+blocks and nested `&block` forwarding publish concrete return summaries. A
+body containing an unsupported operation or an unmigrated callback shape falls
+back as a whole.
 
 ## Current status (2026-09-10)
 
@@ -52,8 +54,8 @@ that the application has no gradual types: application-level `T.untyped` can
 still come from an RBI, an explicit unsafe operation, or a genuinely unresolved
 call. The remaining implementation work is to make the successful-body result
 transaction fully state-safe on an unexpected runtime transfer failure, finish
-passed/forwarded-block binding semantics, and remove the parser-facing legacy
-adapters before making CFG the default.
+the remaining symbol/passed/forwarded-block binding cases, and remove the
+parser-facing legacy adapters before making CFG the default.
 
 The next step is therefore not another scheduler abstraction. It is to make
 CFG transfer an owned-HIR abstract interpreter, complete the remaining control
@@ -219,7 +221,9 @@ The first modularization steps are now in place:
 * ordinary inline callback blocks now transfer from owned closure parameters,
   bodies, captured locals, bound receivers, and generic return contracts;
   inline `define_method` and `define_singleton_method` bodies now use the same
-  owned closure path; forwarded or passed blocks still require future-method
+  owned closure path; optional callable unions ignore their raising `nil` arm,
+  and passed `&block` calls publish concrete returns through the CFG fixpoint.
+  Symbol blocks and some forwarded block identities still require future
   binding semantics.
 * recursive fallback no longer routes ordinary `if`, `while`/`until`, or `for`
   nodes through a synthetic CFG adapter; owned CFG bodies own branch and loop
@@ -343,18 +347,18 @@ The first modularization steps are now in place:
 The latest release Spoom CFG run compiled 66,178 HIR bodies and transferred
 9,215 bodies and 34,784 calls with zero unsupported-operation fallbacks, zero
 unsupported edges, and zero legacy bridges. It reports the same 3 diagnostics
-as the recursive path. The CFG run takes 2.74 seconds including repository
-checking versus 2.44 seconds recursively, or about 12.1% slower; both converge
+as the recursive path. The CFG run takes 2.79 seconds including repository
+checking versus 2.43 seconds recursively, or about 14.7% slower; both converge
 in four rounds. The application send accounting is close but not identical:
-862/5,979 CFG sends contain `T.untyped`, compared with 845/5,979 on the
+860/5,979 CFG sends contain `T.untyped`, compared with 845/5,979 on the
 recursive path, and neither path has an unrecorded application send.
 
 The latest release Packwerk CFG run compiled 83,314 HIR bodies and transferred
 9,386 bodies and 39,018 calls with zero unsupported-operation, edge, or
 legacy-bridge fallbacks. Its 22 visible diagnostics match the recursive path;
 the legacy raw diagnostic counter is 23 because one diagnostic is filtered
-from the directory result by the typed-file policy. CFG took 2.52 seconds
-including repository checking versus 2.45 seconds recursively, or about 2.6%
+from the directory result by the typed-file policy. CFG took 2.54 seconds
+including repository checking versus 2.47 seconds recursively, or about 2.9%
 slower. Application send accounting remains a known publication difference:
 258/1,578 CFG sends contain `T.untyped`, versus 214/1,578 recursively, with
 zero unrecorded sends on either path. The `YAML = Psych` standard-library alias
@@ -375,15 +379,15 @@ outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
 
 As of 2026-09-10, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 441/441, the local conformance
+not at the exit condition. The checker gate is 442/442, the local conformance
 suite has 246 passing fixtures, and the preceding upstream smoke run was
 green. Spoom and Packwerk have matching visible diagnostics. The CFG transfer
 surface has zero measured fallbacks on all three repository checks. What
 remains is not broad CFG coverage: it is classifying
 ActiveSupport's non-shared diagnostics, closing the owned type-publication
-differences, completing the transactional failure boundary and
-passed/forwarded-block semantics, and rerunning the full differential gates
-before retiring the recursive path.
+differences, completing the transactional failure boundary and the remaining
+block-binding cases, and rerunning the full differential gates before retiring
+the recursive path.
 
 ## Design
 
