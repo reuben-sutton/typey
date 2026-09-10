@@ -1,8 +1,8 @@
 # typed: true
 
 def optional_block_closure
-  lambda do |&block|
+  lambda do |target, value, &block|
     raise ArgumentError unless block
-    block.call
+    target.instance_exec(target, block)
   end
 end
