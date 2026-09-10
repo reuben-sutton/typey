@@ -62,7 +62,7 @@ pub(super) fn attribute_writer_signature(signature: &MethodSig) -> MethodSig {
 /// generated accessors, aliases, constants, and nominal-name indexes are one
 /// evolving graph. The evaluator may query this graph, but it should not need
 /// to know which maps implement it.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct DeclarationState {
     pub(super) methods: BTreeMap<MethodKey, MethodState>,
     pub(super) definitions: BTreeMap<usize, MethodKey>,

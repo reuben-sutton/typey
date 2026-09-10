@@ -554,6 +554,99 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
 }
 
 impl<'src> Analyzer<'src> {
+    fn body_has_known_cfg_failure(
+        &self,
+        body_id: hir::BodyId,
+        visiting: &mut HashSet<hir::BodyId>,
+    ) -> bool {
+        if !visiting.insert(body_id) {
+            return false;
+        }
+        let Some(body) = self.program.hir_program.body(body_id) else {
+            visiting.remove(&body_id);
+            return false;
+        };
+        let Some(graph) = self
+            .program
+            .cfg_graphs
+            .as_ref()
+            .and_then(|graphs| graphs.get(body_id.0 as usize))
+        else {
+            visiting.remove(&body_id);
+            return false;
+        };
+        let body_has_context = matches!(&body.owner, hir::BodyOwner::Method { .. });
+        let failure = graph
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .any(|operation| match &operation.kind {
+                cfg::OperationKind::Call { receiver, .. }
+                    if matches!(
+                        receiver,
+                        cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield
+                    ) =>
+                {
+                    !body_has_context
+                }
+                cfg::OperationKind::Definition { declaration, .. } => self
+                    .program
+                    .hir_program
+                    .declaration(*declaration)
+                    .is_some_and(|declaration| match &declaration.kind {
+                        hir::DeclarationKind::Method { body, .. }
+                        | hir::DeclarationKind::Class {
+                            body: Some(body), ..
+                        }
+                        | hir::DeclarationKind::Module {
+                            body: Some(body), ..
+                        }
+                        | hir::DeclarationKind::SingletonClass {
+                            body: Some(body), ..
+                        } => self.body_has_known_cfg_failure(*body, visiting),
+                        hir::DeclarationKind::Class { body: None, .. }
+                        | hir::DeclarationKind::Module { body: None, .. }
+                        | hir::DeclarationKind::SingletonClass { body: None, .. } => false,
+                    }),
+                cfg::OperationKind::MakeClosure { closure } => self
+                    .program
+                    .hir_program
+                    .closure(*closure)
+                    .is_some_and(|closure| self.body_has_known_cfg_failure(closure.body, visiting)),
+                _ => false,
+            });
+        visiting.remove(&body_id);
+        failure
+    }
+
+    fn cfg_body_needs_transaction(
+        &self,
+        graph: &cfg::Cfg,
+        body_id: hir::BodyId,
+        environment: &Environment,
+    ) -> bool {
+        let direct_failure = graph.blocks.iter().flat_map(|block| &block.operations).any(
+            |operation| match &operation.kind {
+                // These operations can enter a context-sensitive contract
+                // which may fail after earlier operations have published
+                // state. Ordinary method bodies have registered method keys,
+                // so they do not need a deep snapshot for their normal
+                // `yield`/`super` calls.
+                cfg::OperationKind::Call { receiver, .. } => {
+                    matches!(
+                        receiver,
+                        cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield
+                    ) && environment
+                        .method_key
+                        .as_ref()
+                        .is_none_or(|key| !self.declarations.methods.contains_key(key))
+                }
+                _ => false,
+            },
+        );
+        direct_failure || self.body_has_known_cfg_failure(body_id, &mut HashSet::new())
+    }
+
     pub(in crate::infer) fn eval_cfg_body_owned(
         &mut self,
         body_site: SourceSite,
@@ -724,6 +817,9 @@ impl<'src> Analyzer<'src> {
             }
         }
         let fallback_environment = initial_environment.clone();
+        let snapshot = self
+            .cfg_body_needs_transaction(&graph, body_id, &initial_environment)
+            .then(|| self.cfg_transfer_snapshot());
         let initial = BlockState::with_values(initial_environment, Vec::new(), Flow::normal());
         let mut transfer = BodyTransfer {
             analyzer: self,
@@ -749,7 +845,11 @@ impl<'src> Analyzer<'src> {
         let worklist = match cfg::transfer::run(&graph, &mut transfer, initial) {
             Ok(worklist) => worklist,
             Err(cfg::transfer::WorklistError::InvalidBlock(_)) => {
-                transfer.analyzer.record_cfg_fallback_at(
+                drop(transfer);
+                if let Some(snapshot) = snapshot {
+                    self.restore_cfg_transfer_snapshot(snapshot);
+                }
+                self.record_cfg_fallback_at(
                     body_site,
                     "edge",
                     super::CfgFallbackKind::UnsupportedEdge,
@@ -757,7 +857,11 @@ impl<'src> Analyzer<'src> {
                 return None;
             }
             Err(cfg::transfer::WorklistError::Transfer(reason)) => {
-                transfer.analyzer.record_cfg_fallback_detail_at(
+                drop(transfer);
+                if let Some(snapshot) = snapshot {
+                    self.restore_cfg_transfer_snapshot(snapshot);
+                }
+                self.record_cfg_fallback_detail_at(
                     body_site,
                     "operation",
                     super::CfgFallbackKind::UnsupportedOperation,
@@ -768,7 +872,12 @@ impl<'src> Analyzer<'src> {
         };
         transfer.report_stable_unreachable_branches(&graph);
         if let Err(reason) = transfer.transfer_unreachable_probes(&graph) {
-            transfer.analyzer.record_cfg_fallback_detail_at(
+            drop(worklist);
+            drop(transfer);
+            if let Some(snapshot) = snapshot {
+                self.restore_cfg_transfer_snapshot(snapshot);
+            }
+            self.record_cfg_fallback_detail_at(
                 body_site,
                 "unreachable branch",
                 super::CfgFallbackKind::UnsupportedOperation,
@@ -817,16 +926,21 @@ impl<'src> Analyzer<'src> {
                 transfer.report_stable_unreachable_branches(&graph);
             }
             if let Err(error) = probe_result {
+                drop(worklist);
+                drop(transfer);
+                if let Some(snapshot) = snapshot {
+                    self.restore_cfg_transfer_snapshot(snapshot);
+                }
                 match error {
                     cfg::transfer::WorklistError::InvalidBlock(_) => {
-                        transfer.analyzer.record_cfg_fallback_at(
+                        self.record_cfg_fallback_at(
                             body_site,
                             "rescue edge",
                             super::CfgFallbackKind::UnsupportedEdge,
                         );
                     }
                     cfg::transfer::WorklistError::Transfer(reason) => {
-                        transfer.analyzer.record_cfg_fallback_detail_at(
+                        self.record_cfg_fallback_detail_at(
                             body_site,
                             "rescue handler",
                             super::CfgFallbackKind::UnsupportedOperation,

@@ -3186,6 +3186,22 @@ fn preserves_safe_navigation_diagnostics_through_owned_cfg_transfer() {
 }
 
 #[test]
+fn rolls_back_owned_cfg_state_before_legacy_fallback() {
+    let path = "tests/fixtures/cfg_transactional_fallback.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn narrows_unions_for_equality_predicates() {
     let result = check_fixture("tests/fixtures/equality_predicate_narrowing.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);

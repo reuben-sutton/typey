@@ -333,3 +333,103 @@ struct Analyzer<'src> {
     cfg_transfer_values: usize,
     cfg_transfer_fallbacks: CfgFallbackCounters,
 }
+
+/// Mutable analyzer state that an owned CFG body is allowed to touch while it
+/// is being interpreted. A transfer can fail after evaluating several
+/// operations, so a failed body must restore all semantic products before the
+/// legacy evaluator takes over. Telemetry is included here as well: failed
+/// attempts are not successful owned transfers and are counted separately by
+/// the caller after rollback.
+pub(super) struct CfgTransferSnapshot {
+    declarations: DeclarationState,
+    method_resolution_cache: BTreeMap<MethodKey, Option<MethodKey>>,
+    global_name_cache: HashMap<String, String>,
+    instance_self_type_cache: HashMap<String, Type>,
+    ivars: BTreeMap<IvarKey, Type>,
+    provisional_ivars: BTreeSet<IvarKey>,
+    class_vars: BTreeMap<ClassVarKey, Type>,
+    globals: BTreeMap<String, Type>,
+    seed_calls: bool,
+    filter_method_bodies: bool,
+    fixpoint: FixpointState,
+    defer_inline_assertions: bool,
+    preserve_literal_tuples: bool,
+    preserve_nested_literal_tuples: bool,
+    literal_tuple_depth: usize,
+    expected_return_type: Option<Type>,
+    substitution_context: Option<MethodKey>,
+    checking_initializer: bool,
+    initializer_has_block: bool,
+    initializer_requires_block: bool,
+    reporting: ReportingState,
+    cfg_transfer_bodies: usize,
+    cfg_transferred_bodies: BTreeSet<hir::BodyId>,
+    cfg_transfer_calls: usize,
+    cfg_transfer_assignments: usize,
+    cfg_transfer_values: usize,
+    cfg_transfer_fallbacks: CfgFallbackCounters,
+}
+
+impl<'src> Analyzer<'src> {
+    pub(super) fn cfg_transfer_snapshot(&self) -> CfgTransferSnapshot {
+        CfgTransferSnapshot {
+            declarations: self.declarations.clone(),
+            method_resolution_cache: self.method_resolution_cache.borrow().clone(),
+            global_name_cache: self.global_name_cache.borrow().clone(),
+            instance_self_type_cache: self.instance_self_type_cache.borrow().clone(),
+            ivars: self.ivars.clone(),
+            provisional_ivars: self.provisional_ivars.clone(),
+            class_vars: self.class_vars.clone(),
+            globals: self.globals.clone(),
+            seed_calls: self.seed_calls,
+            filter_method_bodies: self.filter_method_bodies,
+            fixpoint: self.fixpoint.clone(),
+            defer_inline_assertions: self.defer_inline_assertions,
+            preserve_literal_tuples: self.preserve_literal_tuples,
+            preserve_nested_literal_tuples: self.preserve_nested_literal_tuples,
+            literal_tuple_depth: self.literal_tuple_depth,
+            expected_return_type: self.expected_return_type.clone(),
+            substitution_context: self.substitution_context.clone(),
+            checking_initializer: self.checking_initializer,
+            initializer_has_block: self.initializer_has_block,
+            initializer_requires_block: self.initializer_requires_block,
+            reporting: self.reporting.clone(),
+            cfg_transfer_bodies: self.cfg_transfer_bodies,
+            cfg_transferred_bodies: self.cfg_transferred_bodies.clone(),
+            cfg_transfer_calls: self.cfg_transfer_calls,
+            cfg_transfer_assignments: self.cfg_transfer_assignments,
+            cfg_transfer_values: self.cfg_transfer_values,
+            cfg_transfer_fallbacks: self.cfg_transfer_fallbacks.clone(),
+        }
+    }
+
+    pub(super) fn restore_cfg_transfer_snapshot(&mut self, snapshot: CfgTransferSnapshot) {
+        self.declarations = snapshot.declarations;
+        *self.method_resolution_cache.borrow_mut() = snapshot.method_resolution_cache;
+        *self.global_name_cache.borrow_mut() = snapshot.global_name_cache;
+        *self.instance_self_type_cache.borrow_mut() = snapshot.instance_self_type_cache;
+        self.ivars = snapshot.ivars;
+        self.provisional_ivars = snapshot.provisional_ivars;
+        self.class_vars = snapshot.class_vars;
+        self.globals = snapshot.globals;
+        self.seed_calls = snapshot.seed_calls;
+        self.filter_method_bodies = snapshot.filter_method_bodies;
+        self.fixpoint = snapshot.fixpoint;
+        self.defer_inline_assertions = snapshot.defer_inline_assertions;
+        self.preserve_literal_tuples = snapshot.preserve_literal_tuples;
+        self.preserve_nested_literal_tuples = snapshot.preserve_nested_literal_tuples;
+        self.literal_tuple_depth = snapshot.literal_tuple_depth;
+        self.expected_return_type = snapshot.expected_return_type;
+        self.substitution_context = snapshot.substitution_context;
+        self.checking_initializer = snapshot.checking_initializer;
+        self.initializer_has_block = snapshot.initializer_has_block;
+        self.initializer_requires_block = snapshot.initializer_requires_block;
+        self.reporting = snapshot.reporting;
+        self.cfg_transfer_bodies = snapshot.cfg_transfer_bodies;
+        self.cfg_transferred_bodies = snapshot.cfg_transferred_bodies;
+        self.cfg_transfer_calls = snapshot.cfg_transfer_calls;
+        self.cfg_transfer_assignments = snapshot.cfg_transfer_assignments;
+        self.cfg_transfer_values = snapshot.cfg_transfer_values;
+        self.cfg_transfer_fallbacks = snapshot.cfg_transfer_fallbacks;
+    }
+}

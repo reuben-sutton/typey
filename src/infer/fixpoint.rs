@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// rounds until summaries stabilize, then run the final reporting pass. Keeping
 /// them together prevents the evaluator from having to understand how a
 /// changed summary is scheduled.
+#[derive(Clone)]
 pub(super) struct FixpointState {
     pub(super) active_methods: BTreeSet<MethodKey>,
     pub(super) changed_methods: BTreeSet<MethodKey>,

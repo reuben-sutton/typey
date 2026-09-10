@@ -21,7 +21,7 @@ pub(super) struct SourceSite {
 /// of unrelated fields on `Analyzer`. Recursive evaluation and owned CFG
 /// transfer can both record through the same sink while the runner swaps
 /// reporting mode between seed, fixpoint, and final passes.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct ReportingState {
     pub(super) report: bool,
     pub(super) suppress_diagnostics: bool,
