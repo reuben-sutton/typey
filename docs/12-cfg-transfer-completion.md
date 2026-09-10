@@ -44,7 +44,7 @@ coverage denominator includes source bodies only.
 | Check | Compiled HIR bodies | Source bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Spoom | 66,178 (2,896 source / 63,282 RBI) | 2,896 | 2,895 | 99.97% | 1 | 9,216 | 34,789 | 6 |
-| Packwerk | 83,314 (1,226 source / 82,088 RBI) | 1,226 | 1,219 | 99.43% | 1 | 9,538 | 39,752 | 24 visible |
+| Packwerk | 83,314 (1,226 source / 82,088 RBI) | 1,226 | 1,219 | 99.43% | 1 | 9,540 | 39,796 | 23 visible |
 | Rails ActiveSupport | 30,265 (4,532 source / 25,733 RBI) | 4,532 | 4,529 | 99.93% | 1 | 17,200 | 51,032 | 716 |
 
 The current release differential snapshot is not yet exact parity:
@@ -52,14 +52,14 @@ The current release differential snapshot is not yet exact parity:
 | Check | Legacy diagnostics | CFG diagnostics | Difference observed |
 | --- | ---: | ---: | --- |
 | Spoom | 3 | 6 | 3 CFG-only safe-navigation diagnostics where owned source inference is concrete and legacy lookup remains gradual |
-| Packwerk | 23 | 24 | 2 distinct CFG-only findings; the count delta is +1 |
+| Packwerk | 23 | 23 | 1 distinct CFG-only finding; the count is otherwise exact |
 | Rails ActiveSupport | 651 | 716 | 65 more CFG diagnostics; 201 exact location/message additions and 136 legacy-only location/message entries, primarily receiver/model precision differences |
 
 These are differential findings, not silently accepted parity. Spoom's three
 additional findings are the same safe-navigation contract applied to concrete
-source returns that the legacy path leaves untyped. Packwerk's remaining two
-findings are the `T.anything` formatter contract and anonymous `Class.new`
-modeling; the earlier parser-source-map and `Set[...]` findings were fixed in
+source returns that the legacy path leaves untyped. Packwerk's sole remaining
+CFG-only finding is the `T.anything` formatter contract; the earlier
+parser-source-map, `Set[...]`, and anonymous `Class.new` findings were fixed in
 the owned dispatch path. ActiveSupport still needs category-by-category review
 of its generic receiver, framework-hook, and control-flow differences.
 
@@ -385,12 +385,12 @@ repository wrapper).
 
 The latest release Packwerk CFG run compiled 83,314 HIR bodies, of which 1,226
 are source bodies, and transferred 1,219 distinct source bodies plus one RBI
-body. It made 9,538 body visits and 39,752 calls with zero unsupported-operation,
-edge, or legacy-bridge fallbacks. It reports 24 visible diagnostics in the
+body. It made 9,540 body visits and 39,796 calls with zero unsupported-operation,
+edge, or legacy-bridge fallbacks. It reports 23 visible diagnostics in the
 current checkout. The `YAML = Psych` standard-library alias remains modeled
-through the owned declaration path, and runtime `Set[...]` now uses its
-singleton RBI contract instead of the generic type-application shortcut. The
-CFG analysis completes in about 4.03 seconds internally (5.05 seconds
+through the owned declaration path; runtime `Set[...]` now uses its singleton
+RBI contract, and anonymous `Class.new` blocks retain their included methods.
+The CFG analysis completes in about 4.06 seconds internally (5.14 seconds
 including the CLI repository wrapper).
 
 ActiveSupport is the current large-component boundary. The current CFG run
