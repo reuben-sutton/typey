@@ -247,6 +247,15 @@ pub(super) fn transfer_builtin_call(
             "[]" | "fetch" | "[]=" => Some(Type::union([Type::Nil, Type::String])),
             _ => None,
         },
+        Type::Named(class, _arguments)
+            if name_matches(class, "YAML") || name_matches(class, "Psych") =>
+        {
+            match name {
+                "dump" => Some(Type::String),
+                "load" | "load_file" => Some(Type::union([Type::Nil, Type::Object])),
+                _ => None,
+            }
+        }
         Type::Named(class, arguments) if name_matches(class, "Set") => match name {
             "empty?" | "include?" | "member?" | "intersect?" => Some(Type::bool()),
             "to_a" => Some(Type::Array(Box::new(
