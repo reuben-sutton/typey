@@ -307,7 +307,15 @@ impl<'src> Analyzer<'src> {
                         };
                         environment.bind(name.clone(), block);
                         if !state.explicit {
-                            environment.mark_inferred(name);
+                            if state
+                                .block_return_type
+                                .as_ref()
+                                .is_some_and(|type_| !type_.contains_any())
+                            {
+                                environment.mark_inferred(name);
+                            } else {
+                                environment.mark_provisional(name);
+                            }
                         }
                     }
                 }

@@ -402,13 +402,79 @@ impl<'src> Analyzer<'src> {
                         environment,
                     )));
                 }
-                values
+                let result = values
                     .get(value.0 as usize)
                     .and_then(Option::as_ref)
                     .and_then(optional_proc_type)
                     .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()))
-                    .map(Eval::value)
+                    .map(Eval::value);
+                if let Some(block_result) = result.as_ref().map(Self::block_value_type) {
+                    let provisional = self.cfg_passed_block_is_provisional(input, environment);
+                    self.observe_cfg_block_return(&key, &block_result, provisional);
+                }
+                result
             }
+        }
+    }
+
+    fn cfg_passed_block_is_provisional(
+        &self,
+        input: &OwnedCallInput,
+        environment: &super::Environment,
+    ) -> bool {
+        let Some(expression) = input
+            .expression
+            .and_then(|expression| self.program.hir_program.expression(expression))
+        else {
+            return false;
+        };
+        let hir::ExprKind::Call(call) = &expression.kind else {
+            return false;
+        };
+        let Some(hir::BlockArgument::Passed(block)) = call.block.as_ref() else {
+            return false;
+        };
+        let Some(hir::ExprKind::Read(hir::Read::Local(local))) = self
+            .program
+            .hir_program
+            .expression(*block)
+            .map(|expression| &expression.kind)
+        else {
+            return false;
+        };
+        let Some(name) = self.program.hir_program.local_name(*local) else {
+            return false;
+        };
+        environment.is_provisional(name.as_str())
+    }
+
+    fn observe_cfg_block_return(
+        &mut self,
+        key: &MethodKey,
+        block_result: &Type,
+        provisional: bool,
+    ) {
+        let Some(key) = self.resolve_method_key(key) else {
+            return;
+        };
+        if self
+            .declarations
+            .methods
+            .get(&key)
+            .is_some_and(|state| !state.explicit)
+            && self
+                .declarations
+                .methods
+                .get_mut(&key)
+                .is_some_and(|state| {
+                    if provisional {
+                        state.observe_provisional_block_return(block_result)
+                    } else {
+                        state.observe_block_return(block_result)
+                    }
+                })
+        {
+            self.fixpoint.changed_methods.insert(key);
         }
     }
 

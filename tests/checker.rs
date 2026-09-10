@@ -6494,6 +6494,27 @@ T.reveal_type(apply { |value| value.to_s })
 }
 
 #[test]
+fn publishes_passed_block_returns_to_owned_callees() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_forwarded_block_return.rb").unwrap();
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+    assert!(
+        cfg.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic.message.contains("Revealed type: `String`")
+        }),
+        "{:?}",
+        cfg.diagnostics
+    );
+}
+
+#[test]
 fn joins_all_arguments_into_rest_parameters() {
     let result = check(
         r#"

@@ -36,6 +36,7 @@ pub(super) struct MethodState {
     pub(super) keywords: BTreeMap<String, Option<Type>>,
     pub(super) yield_params: Vec<Option<Type>>,
     pub(super) block_return_type: Option<Type>,
+    pub(super) block_return_provisional: bool,
     pub(super) block: Option<Type>,
     pub(super) block_receiver_binding: Option<BlockReceiverBinding>,
     pub(super) required_keywords: BTreeSet<String>,
@@ -95,6 +96,7 @@ impl MethodState {
                 .collect(),
             yield_params,
             block_return_type,
+            block_return_provisional: false,
             block: signature.block.clone(),
             block_receiver_binding: None,
             required_keywords: signature
@@ -158,6 +160,7 @@ impl MethodState {
                 keywords,
                 yield_params: Vec::new(),
                 block_return_type: None,
+                block_return_provisional: false,
                 block: None,
                 block_receiver_binding: None,
                 required_keywords,
@@ -184,6 +187,7 @@ impl MethodState {
             keywords,
             yield_params: Vec::new(),
             block_return_type: None,
+            block_return_provisional: false,
             block: None,
             block_receiver_binding: None,
             required_keywords,
@@ -453,15 +457,28 @@ impl MethodState {
     }
 
     pub(super) fn observe_block_return(&mut self, actual: &Type) -> bool {
-        let next = self
-            .block_return_type
-            .as_ref()
-            .map_or_else(|| actual.clone(), |current| current.join(actual));
-        if self.block_return_type.as_ref() == Some(&next) {
-            false
-        } else {
-            self.block_return_type = Some(next);
-            true
-        }
+        self.observe_block_return_with_provenance(actual, false)
+    }
+
+    pub(super) fn observe_provisional_block_return(&mut self, actual: &Type) -> bool {
+        self.observe_block_return_with_provenance(actual, true)
+    }
+
+    fn observe_block_return_with_provenance(&mut self, actual: &Type, provisional: bool) -> bool {
+        let (next, next_provisional) = match &self.block_return_type {
+            None => (actual.clone(), provisional),
+            Some(_) if self.block_return_provisional && !actual.contains_any() => {
+                (actual.clone(), false)
+            }
+            Some(current) => (
+                current.join(actual),
+                self.block_return_provisional && provisional,
+            ),
+        };
+        let changed = self.block_return_type.as_ref() != Some(&next)
+            || self.block_return_provisional != next_provisional;
+        self.block_return_type = Some(next);
+        self.block_return_provisional = next_provisional;
+        changed
     }
 }
