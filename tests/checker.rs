@@ -6468,6 +6468,29 @@ T.reveal_type(apply { |value| value.to_s })
         "{:?}",
         result.diagnostics
     );
+
+    let cfg = check(
+        r#"
+def apply(&block)
+  block.call(1)
+end
+
+T.reveal_type(apply { |value| value.to_s })
+"#,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+    assert!(
+        cfg.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic.message.contains("Revealed type: `String`")
+        }),
+        "{:?}",
+        cfg.diagnostics
+    );
 }
 
 #[test]

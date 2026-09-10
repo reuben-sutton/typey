@@ -74,6 +74,13 @@ pub(super) fn transfer_receiver_call(
         }
     }
     if let Type::Union(members) = receiver {
+        let optional_callable = matches!(name, "call" | "[]")
+            && members
+                .iter()
+                .any(|member| matches!(member, Type::Proc(_, _) | Type::BoundProc { .. }))
+            && members.iter().all(|member| {
+                member.is_nil() || matches!(member, Type::Proc(_, _) | Type::BoundProc { .. })
+            });
         // A union receiver has no single method key. Dispatch each concrete
         // member through the same contract order instead of collapsing the
         // whole receiver to a parser-era fallback. Each member is a separate
@@ -88,6 +95,12 @@ pub(super) fn transfer_receiver_call(
         let mut missing_method = false;
         let mut all_members_missing = true;
         for member in members {
+            // Calling an optional block is a normal-path operation on the
+            // callable member. The nil member raises at runtime and must not
+            // turn the valid callable path into an untyped method lookup.
+            if optional_callable && member.is_nil() {
+                continue;
+            }
             let mut member_environment = initial_environment.clone();
             let result = transfer_receiver_call(
                 analyzer,
