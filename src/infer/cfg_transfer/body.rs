@@ -32,12 +32,22 @@ pub(super) struct BodyTransfer<'analyzer, 'src> {
     probe_normal_type: Type,
     unreachable_probes: Vec<UnreachableProbe>,
     seen_unreachable_probes: HashSet<(cfg::BlockId, cfg::BlockId)>,
+    branch_results: HashMap<cfg::BlockId, BranchResult>,
 }
 
 #[derive(Clone)]
 struct UnreachableProbe {
     start: cfg::BlockId,
     stop: cfg::BlockId,
+    state: BlockState,
+}
+
+#[derive(Clone)]
+struct BranchResult {
+    truthy: cfg::BlockId,
+    falsy: cfg::BlockId,
+    truthy_reachable: bool,
+    falsy_reachable: bool,
     state: BlockState,
 }
 
@@ -200,6 +210,105 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             SourceSite::from_span(expression.span, Some(first)),
             "This code is unreachable",
         );
+    }
+
+    fn branch_operands<'graph>(
+        &self,
+        block: &'graph cfg::BasicBlock,
+        condition: cfg::ValueId,
+    ) -> (Option<cfg::ValueId>, Option<&'graph cfg::Pattern>) {
+        block
+            .operations
+            .iter()
+            .find_map(|operation| match operation.result {
+                Some(result) if result == condition => {
+                    if let cfg::OperationKind::PatternTest { value, pattern } = &operation.kind {
+                        Some((Some(*value), Some(pattern)))
+                    } else {
+                        Some((None, None))
+                    }
+                }
+                _ => None,
+            })
+            .unwrap_or((None, None))
+    }
+
+    fn branch_reachability(
+        &self,
+        graph: &cfg::Cfg,
+        block: &cfg::BasicBlock,
+        state: &BlockState,
+        condition: cfg::ValueId,
+        truthy: cfg::BlockId,
+        falsy: cfg::BlockId,
+    ) -> Result<(bool, bool), String> {
+        let (source_id, pattern) = self.branch_operands(block, condition);
+        let source_place = source_id.and_then(|source_id| pattern_source_place(graph, source_id));
+        let source = state
+            .value(source_id.unwrap_or(condition))
+            .ok_or_else(|| format!("missing branch operand {:?}", condition))?;
+        if let Some(pattern) = pattern {
+            let (truthy_reachable, falsy_reachable, _) =
+                super::patterns::pattern_reachability(self.analyzer, pattern, &source, state)
+                    .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
+            if matches!(pattern, cfg::Pattern::LogicalOr)
+                && matches!(
+                    source_place,
+                    Some(
+                        cfg::Place::Local(_)
+                            | cfg::Place::InstanceVariable(_)
+                            | cfg::Place::ClassVariable(_)
+                            | cfg::Place::Global(_)
+                    )
+                )
+            {
+                // `||=` transfers always analyze their RHS in the
+                // legacy/Sorbet assignment protocol, including when the
+                // current value is already truthy.
+                Ok((true, true))
+            } else {
+                Ok((truthy_reachable, falsy_reachable))
+            }
+        } else {
+            Ok(super::flow::conditional_reachability(
+                self.analyzer,
+                graph,
+                truthy,
+                falsy,
+                &source,
+                state,
+            ))
+        }
+    }
+
+    fn report_stable_unreachable_branches(&mut self, graph: &cfg::Cfg) {
+        let mut branches = self
+            .branch_results
+            .drain()
+            .map(|(block, result)| (block, result))
+            .collect::<Vec<_>>();
+        branches.sort_by_key(|(block, _)| *block);
+        for (_, branch) in branches {
+            if branch.truthy_reachable != branch.falsy_reachable {
+                let body = graph
+                    .conditionals
+                    .iter()
+                    .find(|conditional| {
+                        conditional.truthy == branch.truthy && conditional.falsy == branch.falsy
+                    })
+                    .and_then(|conditional| {
+                        if !branch.truthy_reachable {
+                            Some(conditional.then_body)
+                        } else {
+                            conditional.else_body
+                        }
+                    });
+                if let Some(body) = body {
+                    self.report_unreachable_body(graph, body);
+                }
+            }
+            self.report_unreachable_branch(graph, branch.truthy, branch.falsy, &branch.state);
+        }
     }
 
     fn suppress_internal_assignment_record(&self, operation: &cfg::Operation) -> bool {
@@ -370,6 +479,7 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             self.probe_exit = Some(probe.stop);
             self.probe_protected_entry = previous_probe_protected_entry;
             self.probe_normal_type = Type::Never;
+            self.branch_results.clear();
             let result = cfg::transfer::run_from(graph, self, probe.start, probe.state);
 
             self.normal_type = normal_type;
@@ -382,7 +492,9 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             self.probe_normal_type = previous_probe_normal_type;
 
             match result {
-                Ok(_) => {}
+                Ok(_) => {
+                    self.report_stable_unreachable_branches(graph);
+                }
                 Err(cfg::transfer::WorklistError::InvalidBlock(block)) => {
                     return Err(format!("unreachable probe reached invalid block {block:?}"));
                 }
@@ -582,6 +694,7 @@ impl<'src> Analyzer<'src> {
             probe_normal_type: Type::Never,
             unreachable_probes: Vec::new(),
             seen_unreachable_probes: HashSet::new(),
+            branch_results: HashMap::new(),
         };
         let worklist = match cfg::transfer::run(&graph, &mut transfer, initial) {
             Ok(worklist) => worklist,
@@ -603,6 +716,7 @@ impl<'src> Analyzer<'src> {
                 return None;
             }
         };
+        transfer.report_stable_unreachable_branches(&graph);
         if let Err(reason) = transfer.transfer_unreachable_probes(&graph) {
             transfer.analyzer.record_cfg_fallback_detail_at(
                 body_site,
@@ -641,6 +755,7 @@ impl<'src> Analyzer<'src> {
             transfer.probe_exit = Some(region.exit);
             transfer.probe_protected_entry = Some(region.protected_entry);
             transfer.probe_normal_type = Type::Never;
+            transfer.branch_results.clear();
             let probe_result = cfg::transfer::run_from(&graph, &mut transfer, region.entry, probe);
             transfer.probe_exit = None;
             transfer.probe_protected_entry = None;
@@ -648,6 +763,9 @@ impl<'src> Analyzer<'src> {
             transfer.terminal_flow = main_terminal_flow;
             transfer.final_environment = main_final_environment;
             transfer.top_level_terminated = main_top_level_terminated;
+            if probe_result.is_ok() {
+                transfer.report_stable_unreachable_branches(&graph);
+            }
             if let Err(error) = probe_result {
                 match error {
                     cfg::transfer::WorklistError::InvalidBlock(_) => {
@@ -1313,67 +1431,24 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 truthy,
                 falsy,
             } => {
-                let pattern =
-                    block
-                        .operations
-                        .iter()
-                        .find_map(|operation| match operation.result {
-                            Some(result) if result == *condition => {
-                                if let cfg::OperationKind::PatternTest { value, pattern } =
-                                    &operation.kind
-                                {
-                                    Some((Some(*value), Some(pattern)))
-                                } else {
-                                    Some((None, None))
-                                }
-                            }
-                            _ => None,
-                        });
-                let (source_id, pattern) = pattern.unwrap_or((None, None));
+                let (source_id, pattern) = self.branch_operands(block, *condition);
                 let source_place =
                     source_id.and_then(|source_id| pattern_source_place(graph, source_id));
                 let source_predicate = source_id
                     .and_then(|source_id| pattern_source(graph, source_id))
                     .or_else(|| super::patterns::branch_pattern_source(graph, *condition));
-                let source = next
-                    .value(source_id.unwrap_or(*condition))
-                    .ok_or_else(|| format!("missing branch operand {:?}", condition))?;
-                let (truthy_reachable, falsy_reachable) = if let Some(pattern) = pattern {
-                    let (truthy, falsy, _) = super::patterns::pattern_reachability(
-                        self.analyzer,
-                        pattern,
-                        &source,
-                        &next,
-                    )
-                    .ok_or_else(|| "unsupported pattern reachability".to_owned())?;
-                    if matches!(pattern, cfg::Pattern::LogicalOr)
-                        && matches!(
-                            source_place,
-                            Some(
-                                cfg::Place::Local(_)
-                                    | cfg::Place::InstanceVariable(_)
-                                    | cfg::Place::ClassVariable(_)
-                                    | cfg::Place::Global(_)
-                            )
-                        )
-                    {
-                        // `||=` transfers always analyze their RHS in the
-                        // legacy/Sorbet assignment protocol, including when
-                        // the current value is already truthy.
-                        (true, true)
-                    } else {
-                        (truthy, falsy)
-                    }
-                } else {
-                    super::flow::conditional_reachability(
-                        self.analyzer,
-                        graph,
-                        *truthy,
-                        *falsy,
-                        &source,
-                        &next,
-                    )
-                };
+                let (truthy_reachable, falsy_reachable) =
+                    self.branch_reachability(graph, block, &next, *condition, *truthy, *falsy)?;
+                self.branch_results.insert(
+                    block.id,
+                    BranchResult {
+                        truthy: *truthy,
+                        falsy: *falsy,
+                        truthy_reachable,
+                        falsy_reachable,
+                        state: next.clone(),
+                    },
+                );
                 let conditional_join = graph
                     .conditionals
                     .iter()
@@ -1381,29 +1456,6 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         conditional.truthy == *truthy && conditional.falsy == *falsy
                     })
                     .map(|conditional| conditional.join);
-                if truthy_reachable != falsy_reachable {
-                    let body = if !truthy_reachable {
-                        graph
-                            .conditionals
-                            .iter()
-                            .find(|conditional| {
-                                conditional.truthy == *truthy && conditional.falsy == *falsy
-                            })
-                            .map(|conditional| conditional.then_body)
-                    } else {
-                        graph
-                            .conditionals
-                            .iter()
-                            .find(|conditional| {
-                                conditional.truthy == *truthy && conditional.falsy == *falsy
-                            })
-                            .and_then(|conditional| conditional.else_body)
-                    };
-                    if let Some(body) = body {
-                        self.report_unreachable_body(graph, body);
-                    }
-                }
-                self.report_unreachable_branch(graph, *truthy, *falsy, &next);
                 let mut edges = Vec::with_capacity(2);
                 let truthy_state = self.branch_state(
                     graph,

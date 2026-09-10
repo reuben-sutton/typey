@@ -5640,6 +5640,29 @@ fn transfers_common_object_methods_through_owned_cfg() {
 }
 
 #[test]
+fn does_not_report_unreachable_from_an_intermediate_cfg_state() {
+    let source = r#"# typed: true
+
+#: (Integer?, Integer?, Integer?, Integer?) -> bool
+def compare_locations(start_line, other_start_line, start_column, other_start_column)
+  return false if (start_line || -1) > (other_start_line || -1)
+  return false if start_line == other_start_line &&
+    (start_column || -1) > (other_start_column || -1)
+  true
+end
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+}
+
+#[test]
 fn transfers_tap_blocks_through_owned_cfg() {
     let path = "tests/fixtures/cfg_tap_block.rb";
     let source = std::fs::read_to_string(path).expect("fixture");
