@@ -6496,12 +6496,22 @@ T.reveal_type(apply { |value| value.to_s })
 #[test]
 fn publishes_passed_block_returns_to_owned_callees() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_forwarded_block_return.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
     let cfg = check(
         &source,
         CheckerConfig {
             enable_cfg: true,
             ..CheckerConfig::default()
         },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(
+        baseline.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Note
+                && diagnostic.message.contains("Revealed type: `String`")
+        }),
+        "{:?}",
+        baseline.diagnostics
     );
     assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
     assert!(

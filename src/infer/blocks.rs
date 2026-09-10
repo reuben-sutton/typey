@@ -137,6 +137,23 @@ impl<'src> Analyzer<'src> {
         (!type_.is_nil()).then_some(type_)
     }
 
+    pub(super) fn passed_block_is_provisional(
+        &self,
+        node: &Node<'_>,
+        environment: &Environment,
+    ) -> bool {
+        let Some(block) = node.as_block_argument_node() else {
+            return false;
+        };
+        let Some(expression) = block.expression() else {
+            return false;
+        };
+        let Some(local) = expression.as_local_variable_read_node() else {
+            return false;
+        };
+        environment.is_provisional(&prism::constant_name(local.name()))
+    }
+
     pub(super) fn passed_block_signature(type_: &Type) -> Option<Type> {
         match type_ {
             // `bind_parameters` uses an empty `Proc` with an untyped result
@@ -811,6 +828,7 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
+        let provisional = self.passed_block_is_provisional(block, environment);
         if self
             .declarations
             .methods
@@ -820,7 +838,13 @@ impl<'src> Analyzer<'src> {
                 .declarations
                 .methods
                 .get_mut(&key)
-                .is_some_and(|state| state.observe_block_return(&block_type))
+                .is_some_and(|state| {
+                    if provisional {
+                        state.observe_provisional_block_return(&block_type)
+                    } else {
+                        state.observe_block_return(&block_type)
+                    }
+                })
         {
             self.fixpoint.changed_methods.insert(key);
         }

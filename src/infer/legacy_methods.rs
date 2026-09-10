@@ -120,6 +120,7 @@ impl<'src> Analyzer<'src> {
         if let Some(parameters) = definition.parameters() {
             if let Some(block) = parameters.block() {
                 if let Some(name) = block.name() {
+                    let name = prism::constant_name(name);
                     let block_type = body_signature.block.clone().unwrap_or_else(|| {
                         Type::Proc(
                             state.block_parameters(),
@@ -133,7 +134,18 @@ impl<'src> Analyzer<'src> {
                     } else {
                         block_type
                     };
-                    method_environment.bind(prism::constant_name(name), block_type);
+                    method_environment.bind(name.clone(), block_type);
+                    if !state.explicit {
+                        if state
+                            .block_return_type
+                            .as_ref()
+                            .is_some_and(|type_| !type_.contains_any())
+                        {
+                            method_environment.mark_inferred(name);
+                        } else {
+                            method_environment.mark_provisional(name);
+                        }
+                    }
                 }
             }
         }
