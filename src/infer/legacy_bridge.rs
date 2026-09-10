@@ -7,25 +7,6 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
-    /// Parser-facing entry point for the owned CFG transfer. The transfer
-    /// itself consumes only `SourceSite`, HIR, and CFG values; this adapter is
-    /// kept with the recursive evaluator's Prism compatibility boundary.
-    pub(in crate::infer) fn eval_cfg_body_from_prism<'node>(
-        &mut self,
-        body_node: &Node<'node>,
-        body_id: hir::BodyId,
-        environment: &mut Environment,
-        record_result: bool,
-    ) -> Option<Eval> {
-        let (start, end) = prism::span(body_node);
-        self.eval_cfg_body_owned(
-            SourceSite::new(start, end),
-            body_id,
-            environment,
-            record_result,
-        )
-    }
-
     /// Prism-facing adapter for value trees whose owned HIR transfer is
     /// already available. Recursive evaluation owns the parser lookup; the
     /// actual value semantics remain in `cfg_transfer/value.rs`.
@@ -381,5 +362,26 @@ impl<'src> Analyzer<'src> {
             kind,
             fallback,
         );
+    }
+
+    /// Source-site construction for an owned body. Keeping this beside the
+    /// parser adapters lets legacy entry points select a HIR body without
+    /// passing its Prism node into CFG transfer.
+    pub(super) fn owned_body_site(&self, body: hir::BodyId) -> SourceSite {
+        let span = self
+            .program
+            .hir_program
+            .body(body)
+            .and_then(|body| self.program.hir_program.expression(body.root))
+            .map_or_else(
+                || {
+                    self.program
+                        .hir_program
+                        .body(body)
+                        .map_or(hir::Span::new(hir::FileId(0), 0, 0), |body| body.span)
+                },
+                |expression| expression.span,
+            );
+        SourceSite::from_span(span, None)
     }
 }

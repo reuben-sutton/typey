@@ -386,22 +386,4 @@ impl<'src> Analyzer<'src> {
             .then_some(())
             .ok_or_else(|| "singleton body requires a legacy transfer".to_owned())
     }
-
-    fn owned_body_site(&self, body: hir::BodyId) -> SourceSite {
-        let span = self
-            .program
-            .hir_program
-            .body(body)
-            .and_then(|body| self.program.hir_program.expression(body.root))
-            .map_or_else(
-                || {
-                    self.program
-                        .hir_program
-                        .body(body)
-                        .map_or(hir::Span::new(hir::FileId(0), 0, 0), |body| body.span)
-                },
-                |expression| expression.span,
-            );
-        SourceSite::from_span(span, None)
-    }
 }

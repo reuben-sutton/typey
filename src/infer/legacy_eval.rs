@@ -337,9 +337,12 @@ impl<'src> Analyzer<'src> {
         if let Some(program) = node.as_program_node() {
             if self.config.enable_cfg {
                 if let Some(body_id) = self.program.hir_body_ids.get(&prism::span(node)).copied() {
-                    if let Some(result) =
-                        self.eval_cfg_body_from_prism(node, body_id, environment, true)
-                    {
+                    if let Some(result) = self.eval_cfg_body_owned(
+                        self.owned_body_site(body_id),
+                        body_id,
+                        environment,
+                        true,
+                    ) {
                         return result;
                     }
                 }

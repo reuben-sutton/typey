@@ -155,7 +155,12 @@ impl<'src> Analyzer<'src> {
                     .get(&prism::span(node))
                     .copied()
                     .and_then(|body_id| {
-                        self.eval_cfg_body_from_prism(&body, body_id, &mut method_environment, true)
+                        self.eval_cfg_body_owned(
+                            self.owned_body_site(body_id),
+                            body_id,
+                            &mut method_environment,
+                            true,
+                        )
                     })
                     .unwrap_or_else(|| self.eval_node(&body, &mut method_environment))
             } else {
