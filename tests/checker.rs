@@ -6525,6 +6525,40 @@ fn publishes_passed_block_returns_to_owned_callees() {
 }
 
 #[test]
+fn publishes_nested_forwarded_block_returns_through_owned_cfg() {
+    let path = "tests/fixtures/cfg_nested_forwarded_block_return.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
+fn publishes_forwarded_symbol_block_returns_through_owned_cfg() {
+    let path = "tests/fixtures/cfg_forwarded_symbol_block.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn joins_all_arguments_into_rest_parameters() {
     let result = check(
         r#"

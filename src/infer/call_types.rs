@@ -518,7 +518,15 @@ impl<'src> Analyzer<'src> {
                         environment,
                     )));
                 }
-                let signature = Self::passed_block_signature(&actual)?;
+                let Some(signature) = Self::passed_block_signature(&actual) else {
+                    // An unannotated `&block` parameter is represented as an
+                    // unknown-arity Proc with an `Any` result. The recursive
+                    // evaluator keeps the callback call gradual in this case;
+                    // treating the missing signature as an unsupported CFG
+                    // shape would incorrectly report the collection method as
+                    // missing and lose the ordinary `T.untyped` result.
+                    return Some(Eval::value(Type::Any));
+                };
                 if !Self::passed_block_is_assignable(self, &signature, &expected) {
                     self.error_at(
                         block_site,

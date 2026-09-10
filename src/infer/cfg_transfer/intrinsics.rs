@@ -36,7 +36,7 @@ pub(super) fn transfer_intrinsic_call(
             let site = intrinsic_argument_site(analyzer, input, 0).unwrap_or(input.site);
             let description = actual.to_string();
             analyzer.note_at(site, format!("Revealed type: `{description}`"));
-            let untyped_origin = if actual.is_any() {
+            let untyped_origin = if actual.contains_any() {
                 intrinsic_expression_source(analyzer, input)
                     .filter(|source| source.contains("T.untyped"))
                     .map_or(UntypedOrigin::FallbackCall, |_| {
