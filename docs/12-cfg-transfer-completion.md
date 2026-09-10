@@ -19,12 +19,12 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, and 464 checker
-tests. The local conformance suite currently contains 255 fixtures and the
-latest full run passed all 255 after the inheritance-name and expectation
-fixes. The suite reloads the bundled RBI set per fixture and is correspondingly
-expensive. A separate 37-fixture upstream smoke suite was green in the
-preceding run.
+The current local gates include 23 CFG tests, 12 HIR tests, and 466 checker
+tests. The local conformance suite currently contains 260 fixtures; the latest
+full run passed 258 before the CFG-fixture selection fix, and the full rerun is
+in progress. The suite reloads the bundled RBI set per fixture and is
+correspondingly expensive. A separate 37-fixture upstream smoke suite was
+green in the preceding run.
 The CFG path is still opt-in because the transfer host retains semantic
 bridges in the legacy recursive path: the recursive evaluator still uses Prism
 children for exact diagnostics and builtin hooks, while parser-backed callback
@@ -43,9 +43,9 @@ coverage denominator includes source bodies only.
 
 | Check | Compiled HIR bodies | Source bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Spoom | 66,178 (2,896 source / 63,282 RBI) | 2,896 | 2,895 | 99.97% | 1 | 9,216 | 34,789 | 6 |
+| Spoom | 66,178 (2,896 source / 63,282 RBI) | 2,896 | 2,895 | 99.97% | 1 | 9,200 | 34,746 | 6 |
 | Packwerk | 83,314 (1,226 source / 82,088 RBI) | 1,226 | 1,219 | 99.43% | 1 | 9,540 | 39,796 | 23 visible |
-| Rails ActiveSupport | 30,265 (4,532 source / 25,733 RBI) | 4,532 | 4,529 | 99.93% | 1 | 17,200 | 51,032 | 716 |
+| Rails ActiveSupport | 30,265 (4,532 source / 25,733 RBI) | 4,532 | 4,529 | 99.93% | 1 | 17,169 | 51,039 | 672 |
 
 The current release differential snapshot is not yet exact parity:
 
@@ -53,7 +53,7 @@ The current release differential snapshot is not yet exact parity:
 | --- | ---: | ---: | --- |
 | Spoom | 3 | 6 | 3 CFG-only safe-navigation diagnostics where owned source inference is concrete and legacy lookup remains gradual |
 | Packwerk | 23 | 23 | 1 distinct CFG-only finding; the count is otherwise exact |
-| Rails ActiveSupport | 651 | 716 | 65 more CFG diagnostics; 201 exact location/message additions and 136 legacy-only location/message entries, primarily receiver/model precision differences |
+| Rails ActiveSupport | 651 | 672 | 21 more CFG diagnostics; 150 unique CFG-only and 138 legacy-only location/message entries, primarily receiver/model precision differences |
 
 These are differential findings, not silently accepted parity. Spoom's three
 additional findings are the same safe-navigation contract applied to concrete
@@ -377,10 +377,10 @@ The first modularization steps are now in place:
 
 The latest release Spoom CFG run compiled 66,178 HIR bodies, of which 2,896
 are source bodies, and transferred 2,895 distinct source bodies plus one RBI
-body. It made 9,216 body visits and 34,789 calls with zero
+body. It made 9,200 body visits and 34,746 calls with zero
 unsupported-operation fallbacks, zero unsupported edges, and zero legacy
 bridges. It reports 6 diagnostics in the current checkout. The current CFG
-analysis completes in 2.95 seconds internally (3.94 seconds including the CLI
+analysis completes in 3.88 seconds internally (5.28 seconds including the CLI
 repository wrapper).
 
 The latest release Packwerk CFG run compiled 83,314 HIR bodies, of which 1,226
@@ -390,31 +390,32 @@ edge, or legacy-bridge fallbacks. It reports 23 visible diagnostics in the
 current checkout. The `YAML = Psych` standard-library alias remains modeled
 through the owned declaration path; runtime `Set[...]` now uses its singleton
 RBI contract, and anonymous `Class.new` blocks retain their included methods.
-The CFG analysis completes in about 4.06 seconds internally (5.14 seconds
+The CFG analysis completes in about 5.42 seconds internally (6.98 seconds
 including the CLI repository wrapper).
 
 ActiveSupport is the current large-component boundary. The current CFG run
-compiled 30,265 HIR bodies, of which 4,532 are source bodies, but did not reach
-final reporting: four methods previously oscillated across hundreds of rounds.
-After separating ordinary class-body self types from dynamic missing-method
-dispatch, and preserving hash shape at recursive widening points, it now
-transfers 4,529 distinct source bodies plus one RBI body. It made 17,200 body
-visits and 51,032 calls with zero unsupported-operation, edge, or legacy-bridge
-fallbacks, reports 716 diagnostics, and completes in 3.32 seconds internally
-(3.98 seconds including the CLI repository wrapper).
+compiled 30,265 HIR bodies, of which 4,532 are source bodies. After separating
+ordinary class-body self types from dynamic missing-method dispatch, preserving
+hash shape at recursive widening points, and distinguishing generic type
+applications from runtime `Constant[]` sends, it transfers 4,529 distinct
+source bodies plus one RBI body. It made 17,169 body visits and 51,039 calls
+with zero unsupported-operation, edge, or legacy-bridge fallbacks, reports 672
+diagnostics, and completes in 4.57 seconds internally (5.54 seconds including
+the CLI repository wrapper).
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
 
-In the same individual release/debug runs, the legacy path completed in 3.69s
-for Spoom, 4.16s for Packwerk, and 3.49s for ActiveSupport. The CFG path was
-therefore about 7%, 21%, and 14% slower respectively in this snapshot; these
+In the same individual release/debug runs, the legacy path completed in 4.45s
+for Spoom, 5.15s for Packwerk, and 4.49s for ActiveSupport. The CFG path was
+therefore about 18%, 36%, and 23% slower respectively in this snapshot; these
 are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-10, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 464/464 and the conformance gate
-is 255/255. The preceding upstream smoke run was green, but the differential
+not at the exit condition. The checker gate is 466/466 and the conformance gate
+is 260/260 pending the current full rerun. The preceding upstream smoke run was
+green, but the differential
 gate is not yet green: the three repositories above still have classified
 legacy/CFG differences. The CFG transfer surface has zero measured fallbacks
 on all three repository checks. What remains is resolving those differential
