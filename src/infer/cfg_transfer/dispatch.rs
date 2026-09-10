@@ -32,6 +32,14 @@ pub(super) fn transfer_receiver_call(
     hash_shape: Option<&HashShape>,
 ) -> Result<ReceiverTransfer, String> {
     let name = input.name.as_str();
+    if let Some(type_) = analyzer.owned_framework_call_type(receiver, name) {
+        return Ok(ReceiverTransfer {
+            type_,
+            block_result: None,
+            untyped_origin: UntypedOrigin::InferredMethod,
+            missing_method: false,
+        });
+    }
     if name == "singleton_class" {
         return Ok(ReceiverTransfer {
             type_: Type::Named("Class".to_owned(), vec![Type::Anything]),
@@ -437,6 +445,21 @@ pub(super) fn transfer_receiver_call(
                 });
             }
             if let Some(owner) = Analyzer::named_type_name(&instance) {
+                let block_result = if name_matches(&owner, "OptionParser") {
+                    match input.block.as_ref() {
+                        Some(cfg::BlockOperand::Inline(closure)) => analyzer
+                            .transfer_owned_closure_body(
+                                *closure,
+                                std::slice::from_ref(&instance),
+                                None,
+                                None,
+                                environment,
+                            ),
+                        Some(cfg::BlockOperand::Passed(_)) | None => None,
+                    }
+                } else {
+                    None
+                };
                 let explicit_new = analyzer
                     .resolve_method_key(&MethodKey {
                         owner: Some(owner.clone()),
@@ -455,7 +478,7 @@ pub(super) fn transfer_receiver_call(
                     analyzer.observe_struct_constructor(&owner, arguments);
                     return Ok(ReceiverTransfer {
                         type_: analyzer.instantiate_generic_class(instance),
-                        block_result: None,
+                        block_result,
                         untyped_origin: UntypedOrigin::InferredMethod,
                         missing_method: false,
                     });

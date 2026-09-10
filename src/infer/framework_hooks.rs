@@ -153,6 +153,31 @@ impl<'src> Analyzer<'src> {
             .then(|| Type::named("Rails::Application"))
     }
 
+    /// Owned contracts for Rails' two factory calls which are deliberately
+    /// left open by generated RBIs. These results feed the normal receiver
+    /// dispatch path, so subsequent `configure` and `draw` blocks still use
+    /// their ordinary callback-binding rules.
+    pub(super) fn owned_framework_call_type(
+        &self,
+        receiver_type: &Type,
+        name: &str,
+    ) -> Option<Type> {
+        let receiver_name = Self::class_object_instance_type(receiver_type)
+            .and_then(|instance| Self::named_type_name(&instance))
+            .or_else(|| Self::named_type_name(receiver_type));
+        if name == "application"
+            && receiver_name
+                .as_deref()
+                .is_some_and(|name| name.trim_start_matches("::") == "Rails")
+        {
+            return self.rails_application_instance_type();
+        }
+        if name == "routes" && self.is_rails_application_instance(receiver_type) {
+            return Some(Type::named("ActionDispatch::Routing::RouteSet"));
+        }
+        None
+    }
+
     pub(super) fn rails_route_draw_block_receiver(
         &self,
         key: &MethodKey,
