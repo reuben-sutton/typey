@@ -270,6 +270,15 @@ pub(super) fn transfer_builtin_call(
             if name_matches(class, "Enumerator") || name_matches(class, "Enumerable") =>
         {
             match name {
+                "each" => {
+                    if input.block.is_none() {
+                        Some(Type::named("Enumerator"))
+                    } else {
+                        let element = arguments.first().cloned().unwrap_or(Type::Any);
+                        let _ = callback(std::slice::from_ref(&element))?;
+                        Some(Type::Named(class.clone(), arguments.clone()))
+                    }
+                }
                 "map" | "collect" => {
                     if input.block.is_none() {
                         Some(Type::Named(class.clone(), arguments.clone()))
