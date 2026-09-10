@@ -3360,6 +3360,22 @@ fn preserves_enumerable_assignability_through_owned_cfg_transfer() {
 }
 
 #[test]
+fn preserves_setter_assignment_types_through_owned_cfg_transfer() {
+    let path = "tests/fixtures/setter_assignment.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn preserves_nonempty_array_extrema_through_owned_cfg_transfer() {
     let path = "tests/fixtures/nonempty_array_extrema.rb";
     let source = std::fs::read_to_string(path).expect("fixture source");

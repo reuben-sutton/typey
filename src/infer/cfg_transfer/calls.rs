@@ -243,6 +243,18 @@ pub(super) fn transfer_call(
         block_result = receiver.block_result;
         (receiver.type_, receiver.untyped_origin)
     };
+    let type_ = if input.name.as_str().ends_with('=')
+        && !matches!(input.name.as_str(), "==" | "!=" | "<=" | ">=" | "===")
+        && (call_arguments.argument_types.len() == 1 || input.name.as_str() == "[]=")
+    {
+        call_arguments
+            .argument_types
+            .last()
+            .cloned()
+            .unwrap_or(type_)
+    } else {
+        type_
+    };
     update_hash_shape_after_call(
         analyzer,
         &input,
