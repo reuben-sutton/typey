@@ -88,8 +88,26 @@ impl<'src> Analyzer<'src> {
                 }
             })
         } else {
-            registered_key
+            registered_key.clone()
         };
+        if key != registered_key {
+            let state = self
+                .declarations
+                .methods
+                .get(&registered_key)
+                .cloned()
+                .unwrap_or_else(|| {
+                    self.program
+                        .hir_program
+                        .body(body)
+                        .map(|body| MethodState::inferred_hir(&body.parameters))
+                        .unwrap_or_else(|| MethodState::inferred(None))
+                });
+            self.declarations
+                .methods
+                .entry(key.clone())
+                .or_insert(state);
+        }
         if self.filter_method_bodies && !self.fixpoint.active_methods.contains(&key) {
             return Ok(());
         }

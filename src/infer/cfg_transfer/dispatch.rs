@@ -412,24 +412,22 @@ pub(super) fn transfer_receiver_call(
             // and lose the inherited singleton methods visible in the block.
             if Analyzer::named_type_name(&instance).is_some_and(|name| name_matches(&name, "Class"))
             {
-                if let Some(superclass) = arguments
-                    .argument_types
-                    .first()
-                    .filter(|argument| Analyzer::class_object_instance_type(argument).is_some())
-                {
+                if let Some(cfg::BlockOperand::Inline(_)) = input.block.as_ref() {
+                    let superclass = arguments.argument_types.first();
+                    let class_object = analyzer.anonymous_class_object_type(input.site, superclass);
                     let block_result = match input.block.as_ref() {
                         Some(cfg::BlockOperand::Inline(closure)) => analyzer
                             .transfer_owned_closure_body(
                                 *closure,
                                 &[],
                                 None,
-                                Some(superclass),
+                                Some(&class_object),
                                 environment,
                             ),
                         Some(cfg::BlockOperand::Passed(_)) | None => None,
                     };
                     return Ok(ReceiverTransfer {
-                        type_: superclass.clone(),
+                        type_: class_object,
                         block_result,
                         untyped_origin: UntypedOrigin::InferredMethod,
                         missing_method: false,

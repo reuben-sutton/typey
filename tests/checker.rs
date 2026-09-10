@@ -445,6 +445,67 @@ fn infers_set_constructor_element_types_through_owned_cfg() {
 }
 
 #[test]
+fn preserves_anonymous_class_include_dispatch_through_owned_cfg() {
+    let path = "tests/fixtures/cfg_anonymous_class_include.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let files = vec![
+        WorkspaceFile::new(
+            "anonymous_class.rbi",
+            r#"class Module
+end
+
+class Class < Module
+  #: (*T.untyped) -> T::Class[T.untyped]
+  def self.new(*args); end
+end
+"#,
+        ),
+        WorkspaceFile::new(path, source),
+    ];
+    let baseline = check_workspace(&files, CheckerConfig::default());
+    let cfg = check_workspace(
+        &files,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    let baseline_diagnostics = baseline
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.path == Path::new(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    let cfg_diagnostics = cfg
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.path == Path::new(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(baseline_diagnostics
+        .iter()
+        .all(|diagnostic| { diagnostic.diagnostic.severity != Severity::Error }));
+    assert!(cfg_diagnostics
+        .iter()
+        .all(|diagnostic| { diagnostic.diagnostic.severity != Severity::Error }));
+    assert!(cfg_diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .diagnostic
+            .message
+            .contains("Revealed type: `String`")
+    }));
+    let cfg_types = cfg
+        .types
+        .iter()
+        .filter(|inferred| inferred.path == Path::new(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(cfg_types
+        .iter()
+        .any(|inferred| inferred.type_ == Type::String));
+}
+
+#[test]
 fn transfers_union_enumerable_predicates_through_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_union_enumerable_predicates.rb")
         .expect("fixture");

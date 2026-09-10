@@ -1,4 +1,6 @@
-use super::{name_matches, optional_proc_type, proc_parts, Analyzer, CallArguments, MethodKey};
+use super::{
+    name_matches, optional_proc_type, proc_parts, Analyzer, CallArguments, MethodKey, SourceSite,
+};
 use crate::signature::{self, MethodSig};
 use crate::types::Type;
 use std::collections::{BTreeMap, BTreeSet};
@@ -6,6 +8,33 @@ use std::collections::{BTreeMap, BTreeSet};
 impl<'src> Analyzer<'src> {
     pub(super) fn class_object_type(name: &str) -> Type {
         Type::Named("Class".to_owned(), vec![Type::named(name)])
+    }
+
+    /// Create the internal nominal identity for a class produced by
+    /// `Class.new { ... }`. The block executes with the new class as `self`,
+    /// so includes and method definitions must attach to that class rather
+    /// than to `Object` or the optional superclass. The name is derived from
+    /// the owned call site and is never exposed unless a caller explicitly
+    /// reveals the anonymous class object itself.
+    pub(super) fn anonymous_class_object_type(
+        &mut self,
+        site: SourceSite,
+        superclass: Option<&Type>,
+    ) -> Type {
+        let identity = site
+            .expression
+            .map_or(site.start as u32, |expression| expression.0);
+        let name = format!("Typey::AnonymousClass::{identity}");
+        let superclass = superclass
+            .and_then(Self::class_object_instance_type)
+            .and_then(|instance| Self::named_type_name(&instance))
+            .or_else(|| Some("Object".to_owned()));
+        let info = self.declarations.classes.entry(name.clone()).or_default();
+        if info.superclass.is_none() {
+            info.superclass = superclass;
+        }
+        self.method_resolution_cache.borrow_mut().clear();
+        Self::class_object_type(&name)
     }
 
     pub(super) fn class_object_instance_type(type_: &Type) -> Option<Type> {
