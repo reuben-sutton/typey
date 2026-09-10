@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Clone, Debug, Default)]
 pub struct CfgIndex {
     body_count: usize,
+    body_spans: Vec<(usize, usize)>,
     unsupported_count: usize,
     call_spans: HashSet<(usize, usize)>,
     write_spans: HashSet<(usize, usize)>,
@@ -23,6 +24,11 @@ impl CfgIndex {
     pub fn from_program(program: &Program) -> Self {
         let mut index = Self {
             body_count: program.bodies.len(),
+            body_spans: program
+                .bodies
+                .iter()
+                .map(|body| (body.span.start as usize, body.span.end as usize))
+                .collect(),
             ..Self::default()
         };
         for (body, _) in program.bodies.iter().enumerate() {
@@ -36,6 +42,14 @@ impl CfgIndex {
     pub fn from_graphs(program: &Program, graphs: &[Cfg]) -> Self {
         let mut index = Self {
             body_count: graphs.len(),
+            body_spans: graphs
+                .iter()
+                .filter_map(|graph| {
+                    program
+                        .body(graph.body)
+                        .map(|body| (body.span.start as usize, body.span.end as usize))
+                })
+                .collect(),
             ..Self::default()
         };
         for graph in graphs {
@@ -73,6 +87,18 @@ impl CfgIndex {
     #[must_use]
     pub fn body_count(&self) -> usize {
         self.body_count
+    }
+
+    #[must_use]
+    pub fn body_count_in_ranges(&self, ranges: &[(usize, usize)]) -> usize {
+        self.body_spans
+            .iter()
+            .filter(|(start, end)| {
+                ranges
+                    .iter()
+                    .any(|(range_start, range_end)| *start >= *range_start && *end <= *range_end)
+            })
+            .count()
     }
 
     #[must_use]

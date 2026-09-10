@@ -82,11 +82,18 @@ impl<'src> Analyzer<'src> {
                 self.declarations.type_aliases.len()
             );
             eprintln!(
-                "[typey] compiled {} HIR bodies into CFG",
+                "[typey] compiled {} HIR bodies into CFG ({} source, {} RBI)",
                 self.program
                     .cfg_index
                     .as_ref()
-                    .map_or(0, cfg::CfgIndex::body_count)
+                    .map_or(0, cfg::CfgIndex::body_count),
+                self.program.cfg_index.as_ref().map_or(0, |index| {
+                    index.body_count() - index.body_count_in_ranges(&self.rbi_ranges)
+                }),
+                self.program
+                    .cfg_index
+                    .as_ref()
+                    .map_or(0, |index| index.body_count_in_ranges(&self.rbi_ranges))
             );
             eprintln!(
                 "[typey] CFG unsupported handoffs: {}",
@@ -246,8 +253,10 @@ impl<'src> Analyzer<'src> {
         });
         if self.config.debug {
             eprintln!(
-                "[typey] CFG transfers: {} bodies, {} calls, {} assignments, {} values, {} fallbacks (unsupported operations {}, unsupported edges {}, legacy bridges {})",
+                "[typey] CFG transfers: {} bodies ({} source, {} RBI), {} calls, {} assignments, {} values, {} fallbacks (unsupported operations {}, unsupported edges {}, legacy bridges {})",
                 self.cfg_transfer_bodies,
+                self.cfg_transfer_bodies - self.cfg_transfer_rbi_bodies,
+                self.cfg_transfer_rbi_bodies,
                 self.cfg_transfer_calls,
                 self.cfg_transfer_assignments,
                 self.cfg_transfer_values,

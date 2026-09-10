@@ -14,6 +14,19 @@ fn all_cfgs(source: &str) -> Vec<typey::cfg::Cfg> {
         .collect()
 }
 
+#[test]
+fn counts_bodies_inside_rbi_ranges_separately() {
+    let source = "def source_method\n  1\nend\n\n# rbi\ndef rbi_method\n  2\nend\n";
+    let program = lower(FileId(3), source.as_bytes());
+    let index = CfgIndex::from_program(&program);
+    let rbi_start = source.find("# rbi").expect("RBI marker");
+    assert_eq!(index.body_count_in_ranges(&[(rbi_start, source.len())]), 1);
+    assert_eq!(
+        index.body_count() - index.body_count_in_ranges(&[(rbi_start, source.len())]),
+        2
+    );
+}
+
 fn operations(graph: &typey::cfg::Cfg) -> Vec<&typey::cfg::Operation> {
     graph
         .blocks
