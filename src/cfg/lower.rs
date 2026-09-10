@@ -864,7 +864,11 @@ impl<'program> Builder<'program> {
                 name: call.name,
                 arguments,
                 block: block_operand,
-                safe_navigation: false,
+                // Keep the source-level flag on the real branch call. The
+                // explicit nil branch owns runtime control flow, but the
+                // transfer still needs the flag for diagnostics such as
+                // safe navigation on a definitely non-nil receiver.
+                safe_navigation: true,
             },
             true,
         );

@@ -2865,6 +2865,22 @@ fn rejects_safe_navigation_on_definitely_non_nil_receivers() {
 }
 
 #[test]
+fn preserves_safe_navigation_diagnostics_through_owned_cfg_transfer() {
+    let path = "tests/fixtures/safe_navigation_non_nil.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+}
+
+#[test]
 fn narrows_unions_for_equality_predicates() {
     let result = check_fixture("tests/fixtures/equality_predicate_narrowing.rb");
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
