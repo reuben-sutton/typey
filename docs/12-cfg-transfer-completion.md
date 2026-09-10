@@ -40,21 +40,23 @@ The release runs below are the current coverage and parity snapshot; the body
 denominator includes all compiled HIR bodies, including RBI bodies that are not
 necessarily selected for application inference.
 
-| Check | Compiled HIR bodies | Owned bodies transferred | Owned calls | Transfer fallbacks | Diagnostics |
-| --- | ---: | ---: | ---: | --- | ---: |
-| Spoom | 66,178 | 9,215 (13.9%) | 34,784 | 0 / 0 / 0 | 3 |
-| Packwerk | 83,314 | 9,386 (11.3%) | 39,018 | 0 / 0 / 0 | 22 visible |
-| Rails ActiveSupport | 30,265 | 17,334 (57.3%) | 51,301 | 0 / 0 / 0 | 640 |
+| Check | Compiled HIR bodies | Source bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Spoom | 66,178 (2,896 source / 63,282 RBI) | 2,896 | 2,895 | 99.97% | 1 | 9,216 | 34,789 | 6 |
+| Packwerk | 83,314 (1,226 source / 82,088 RBI) | 1,226 | 1,219 | 99.43% | 1 | 9,538 | 39,752 | 26 visible |
+| Rails ActiveSupport | 30,265 (4,532 source / 25,733 RBI) | 4,532 | pending | pending: current CFG run does not converge | pending | pending | pending | pending |
 
-Transfer coverage is a body-level ownership metric: `owned bodies transferred /
-compiled HIR bodies`. For example, Spoom's 13.9% means that 9,215 of its
-66,178 compiled bodies completed through the owned CFG transfer path. It does
-not mean that 13.9% of lines, sends, types, or diagnostics are covered, and a
-single transferred body can contain many calls. The denominator includes all
-compiled bodies, including RBI bodies that are not selected for application
-inference. Bodies outside the attempted owned-transfer set are not counted as
-fallbacks; the fallback counters only describe owned bodies that were entered
-and then had to return to the legacy evaluator.
+Transfer coverage is a body-level ownership metric over distinct bodies:
+`unique source bodies transferred / compiled source bodies`. A body counts once
+even if fixpoint inference visits it repeatedly. For example, Spoom's 99.97%
+means that 2,895 of its 2,896 source bodies completed through the owned CFG
+transfer path. It does not mean that 99.97% of lines, sends, types, or
+diagnostics are covered, and a single transferred body can contain many calls.
+RBI bodies are excluded from the application coverage denominator and are
+reported separately. Transfer visits are retained as performance/convergence
+telemetry, not as coverage. Bodies outside the attempted owned-transfer set
+are not counted as fallbacks; the fallback counters only describe owned bodies
+that were entered and then had to return to the legacy evaluator.
 
 The fallback columns are `unsupported_operation / unsupported_edge /
 legacy_bridge`; all three repository runs report `0 / 0 / 0`, and all report
@@ -356,35 +358,28 @@ The first modularization steps are now in place:
   and the combined fixture workload converges in four rounds without a round
   limit.
 
-The latest release Spoom CFG run compiled 66,178 HIR bodies and transferred
-9,215 bodies and 34,784 calls with zero unsupported-operation fallbacks, zero
-unsupported edges, and zero legacy bridges. It reports the same 3 diagnostics
-as the recursive path. The CFG run takes 2.79 seconds including repository
-checking versus 2.43 seconds recursively, or about 14.7% slower; both converge
-in four rounds. The application send accounting is close but not identical:
-860/5,979 CFG sends contain `T.untyped`, compared with 845/5,979 on the
-recursive path, and neither path has an unrecorded application send.
+The latest release Spoom CFG run compiled 66,178 HIR bodies, of which 2,896
+are source bodies, and transferred 2,895 distinct source bodies plus one RBI
+body. It made 9,216 body visits and 34,789 calls with zero
+unsupported-operation fallbacks, zero unsupported edges, and zero legacy
+bridges. It reports 6 diagnostics in the current checkout. The current CFG
+analysis completes in 2.38 seconds internally (2.98 seconds including the CLI
+repository wrapper); this is not a paired benchmark and should be refreshed
+after the current convergence issue is resolved.
 
-The latest release Packwerk CFG run compiled 83,314 HIR bodies and transferred
-9,386 bodies and 39,018 calls with zero unsupported-operation, edge, or
-legacy-bridge fallbacks. Its 22 visible diagnostics match the recursive path;
-the legacy raw diagnostic counter is 23 because one diagnostic is filtered
-from the directory result by the typed-file policy. CFG took 2.54 seconds
-including repository checking versus 2.47 seconds recursively, or about 2.9%
-slower. Application send accounting remains a known publication difference:
-258/1,578 CFG sends contain `T.untyped`, versus 214/1,578 recursively, with
-zero unrecorded sends on either path. The `YAML = Psych` standard-library alias
-remains modeled through the owned declaration path.
+The latest release Packwerk CFG run compiled 83,314 HIR bodies, of which 1,226
+are source bodies, and transferred 1,219 distinct source bodies plus one RBI
+body. It made 9,538 body visits and 39,752 calls with zero unsupported-operation,
+edge, or legacy-bridge fallbacks. It reports 26 visible diagnostics in the
+current checkout; parity with the recursive path still needs a fresh paired
+run. The `YAML = Psych` standard-library alias remains modeled through the
+owned declaration path.
 
-ActiveSupport is the current large-component boundary. The latest CFG run
-compiled 30,265 HIR bodies and transferred 17,334 bodies and 51,301 calls
-across five rounds, with zero unsupported-operation, edge, or legacy-bridge
-fallbacks and zero unsupported HIR handoffs. It reports 640 diagnostics and
-42,890 recorded types. The paired uncontended runs take 167.36 seconds for
-CFG versus 166.51 seconds recursively, so CFG is about 0.5% slower on this
-component. The diagnostic differential is 640 CFG versus 650 legacy, with
-543 shared, 97 CFG-only, and 107 legacy-only findings. These differences still
-need classification before CFG can replace the recursive path.
+ActiveSupport is the current large-component boundary. The current CFG run
+compiled 30,265 HIR bodies, of which 4,532 are source bodies, but did not reach
+final reporting: four methods continued changing across hundreds of rounds.
+Its coverage and diagnostics are therefore pending convergence and must not be
+compared with the older five-round snapshot until that cycle is fixed.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
