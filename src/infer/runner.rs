@@ -253,10 +253,27 @@ impl<'src> Analyzer<'src> {
         });
         if self.config.debug {
             eprintln!(
-                "[typey] CFG transfers: {} bodies ({} source, {} RBI), {} calls, {} assignments, {} values, {} fallbacks (unsupported operations {}, unsupported edges {}, legacy bridges {})",
+                "[typey] CFG transfers: {} body visits, {} unique bodies ({} source, {} RBI), {} calls, {} assignments, {} values, {} fallbacks (unsupported operations {}, unsupported edges {}, legacy bridges {})",
                 self.cfg_transfer_bodies,
-                self.cfg_transfer_bodies - self.cfg_transfer_rbi_bodies,
-                self.cfg_transfer_rbi_bodies,
+                self.cfg_transferred_bodies.len(),
+                self.cfg_transferred_bodies
+                    .iter()
+                    .filter(|body_id| {
+                        self.program
+                            .hir_program
+                            .body(**body_id)
+                            .is_some_and(|body| !self.is_rbi_offset(body.span.start as usize))
+                    })
+                    .count(),
+                self.cfg_transferred_bodies
+                    .iter()
+                    .filter(|body_id| {
+                        self.program
+                            .hir_program
+                            .body(**body_id)
+                            .is_some_and(|body| self.is_rbi_offset(body.span.start as usize))
+                    })
+                    .count(),
                 self.cfg_transfer_calls,
                 self.cfg_transfer_assignments,
                 self.cfg_transfer_values,
