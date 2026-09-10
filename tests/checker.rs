@@ -3730,6 +3730,22 @@ fn preserves_optional_rbs_block_parameters() {
 }
 
 #[test]
+fn preserves_optional_blocks_inside_owned_closures() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_optional_closure_block.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn treats_unannotated_block_parameters_as_optional() {
     let result = check_fixture("tests/fixtures/untyped_optional_block.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| {

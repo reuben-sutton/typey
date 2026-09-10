@@ -202,7 +202,9 @@ impl<'src> Analyzer<'src> {
                 hir::ParameterKind::KeywordRest => {
                     Type::Hash(Box::new(Type::Symbol), Box::new(Type::Any))
                 }
-                hir::ParameterKind::Block => Type::Proc(Vec::new(), Box::new(Type::Any)),
+                hir::ParameterKind::Block => {
+                    Type::union([Type::Nil, Type::Proc(Vec::new(), Box::new(Type::Any))])
+                }
                 hir::ParameterKind::Anonymous => Type::Any,
             };
             if let Some(name) = &parameter.name {
@@ -602,7 +604,9 @@ fn bind_owned_parameters(
             hir::ParameterKind::KeywordRest => {
                 Type::Hash(Box::new(Type::Symbol), Box::new(Type::Any))
             }
-            hir::ParameterKind::Block => Type::Proc(Vec::new(), Box::new(Type::Any)),
+            hir::ParameterKind::Block => {
+                Type::union([Type::Nil, Type::Proc(Vec::new(), Box::new(Type::Any))])
+            }
             hir::ParameterKind::Anonymous => Type::Any,
         };
         if let Some(name) = &parameter.name {
