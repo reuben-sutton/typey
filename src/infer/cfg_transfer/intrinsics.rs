@@ -88,7 +88,8 @@ pub(super) fn transfer_intrinsic_call(
         "must" => (actual.without(&Type::Nil), UntypedOrigin::Propagated),
         "unsafe" => (Type::Any, UntypedOrigin::Unsafe),
         "noreturn" => (Type::Never, UntypedOrigin::Propagated),
-        "untyped" | "self_type" => (Type::Any, UntypedOrigin::Propagated),
+        "untyped" => (Type::Any, UntypedOrigin::FallbackCall),
+        "self_type" => (Type::Any, UntypedOrigin::Propagated),
         "class_of" => {
             match arguments.argument_types.len() {
                 0 => analyzer.error_at(input.site, "Not enough arguments"),

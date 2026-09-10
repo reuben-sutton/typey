@@ -64,6 +64,25 @@ pub(super) fn transfer_builtin_call(
             ));
         }
     }
+    if matches!(receiver, Type::Anything)
+        && !matches!(
+            name,
+            "to_s"
+                | "to_str"
+                | "inspect"
+                | "nil?"
+                | "!"
+                | "=="
+                | "!="
+                | "equal?"
+                | "eql?"
+                | "object_id"
+                | "id"
+                | "hash"
+        )
+    {
+        return None;
+    }
     if receiver.is_any() || matches!(receiver, Type::Anything) {
         let type_ = match name {
             "to_s" | "to_str" | "inspect" => Type::String,
@@ -196,6 +215,7 @@ pub(super) fn transfer_builtin_call(
             transfer_array_builtin(analyzer, input, &element, arguments)
         }
         Type::Hash(key, value) => match name {
+            "new" => Some(Type::Hash(key.clone(), value.clone())),
             "[]" => {
                 let literal_key = owned_hash_key(analyzer, input);
                 Some(match (literal_key, hash_shape) {
@@ -349,6 +369,7 @@ fn transfer_array_builtin(
 ) -> Option<Type> {
     let name = input.name.as_str();
     match name {
+        "new" => Some(Type::Array(Box::new(element.clone()))),
         "first" | "last" if arguments.argument_types.is_empty() => {
             Some(Type::union([Type::Nil, element.clone()]))
         }

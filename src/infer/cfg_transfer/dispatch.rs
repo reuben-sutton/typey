@@ -347,6 +347,14 @@ pub(super) fn transfer_receiver_call(
 
     if name == "new" {
         if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
+            if instance.is_any() || matches!(instance, Type::Anything) {
+                return Ok(ReceiverTransfer {
+                    type_: instance,
+                    block_result: None,
+                    untyped_origin: UntypedOrigin::Propagated,
+                    missing_method: false,
+                });
+            }
             if let Some(owner) = Analyzer::named_type_name(&instance) {
                 let explicit_new = analyzer
                     .resolve_method_key(&MethodKey {
@@ -439,42 +447,47 @@ pub(super) fn transfer_receiver_call(
     // declared `[]` method here.
     if name == "[]" {
         if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
-            if let Some(type_arguments) = arguments
+            let type_arguments = arguments
                 .argument_types
                 .iter()
-                .map(Analyzer::class_object_value_type)
-                .collect::<Option<Vec<_>>>()
-            {
-                let type_ = match &instance {
-                    Type::Named(owner, _)
-                        if matches!(owner.as_str(), "Array" | "T::Array")
-                            && type_arguments.len() == 1 =>
-                    {
-                        Type::Array(Box::new(type_arguments[0].clone()))
-                    }
-                    Type::Named(owner, _)
-                        if matches!(owner.as_str(), "Hash" | "T::Hash")
-                            && type_arguments.len() == 2 =>
-                    {
-                        Type::Hash(
-                            Box::new(type_arguments[0].clone()),
-                            Box::new(type_arguments[1].clone()),
-                        )
-                    }
-                    Type::Named(owner, _) => Type::Named(owner.clone(), type_arguments),
-                    _ => {
-                        return Err(format!(
-                            "receiver call `{name}` on `{receiver}` has no generic type contract"
-                        ))
-                    }
-                };
-                return Ok(ReceiverTransfer {
-                    type_,
-                    block_result: None,
-                    untyped_origin: UntypedOrigin::Propagated,
-                    missing_method: false,
-                });
-            }
+                .map(|argument| {
+                    Analyzer::class_object_value_type(argument).unwrap_or_else(|| argument.clone())
+                })
+                .collect::<Vec<_>>();
+            let type_ = match &instance {
+                Type::Named(owner, _)
+                    if matches!(owner.as_str(), "Array" | "T::Array")
+                        && type_arguments.len() == 1 =>
+                {
+                    Type::Array(Box::new(type_arguments[0].clone()))
+                }
+                Type::Named(owner, _)
+                    if matches!(owner.as_str(), "Hash" | "T::Hash")
+                        && type_arguments.len() == 2 =>
+                {
+                    Type::Hash(
+                        Box::new(type_arguments[0].clone()),
+                        Box::new(type_arguments[1].clone()),
+                    )
+                }
+                Type::Named(owner, _) => Type::Named(owner.clone(), type_arguments),
+                _ => {
+                    return Err(format!(
+                        "receiver call `{name}` on `{receiver}` has no generic type contract"
+                    ))
+                }
+            };
+            let untyped_origin = if type_.contains_any() {
+                UntypedOrigin::FallbackCall
+            } else {
+                UntypedOrigin::Propagated
+            };
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result: None,
+                untyped_origin,
+                missing_method: false,
+            });
         }
     }
 
@@ -639,7 +652,7 @@ pub(super) fn transfer_receiver_call(
         return Ok(ReceiverTransfer {
             type_,
             block_result,
-            untyped_origin: if receiver.is_any() {
+            untyped_origin: if input.name.as_str() == "new" || receiver.is_any() {
                 UntypedOrigin::Propagated
             } else {
                 UntypedOrigin::FallbackCall

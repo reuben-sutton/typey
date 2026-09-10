@@ -112,7 +112,6 @@ impl<'src> Analyzer<'src> {
             || receiver.is_any()
             || receiver.contains_any()
             || receiver.is_never()
-            || matches!(receiver, Type::Anything)
         {
             return;
         }

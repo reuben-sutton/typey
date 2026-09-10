@@ -3286,6 +3286,8 @@ fn preserves_builtin_models_through_owned_cfg_transfer() {
     for path in [
         "tests/fixtures/array_intersect_predicate.rb",
         "tests/fixtures/array_to_set.rb",
+        "tests/fixtures/bare_class_generic.rb",
+        "tests/fixtures/splat_comparison.rb",
         "tests/fixtures/integer_bitwise.rb",
         "tests/fixtures/set_predicate.rb",
         "tests/fixtures/string_bang_methods.rb",
