@@ -88,11 +88,12 @@ fn build_with_index_and_values(
     Builder::new(program, body, expressions_by_span, retain_expression_values).finish()
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Flow {
     block: BlockId,
     value: Option<ValueId>,
     reachable: bool,
+    abrupt_values: Vec<(BlockId, ValueId)>,
 }
 
 #[derive(Clone, Debug)]
@@ -310,6 +311,16 @@ impl<'program> Builder<'program> {
     }
 
     fn normal(&mut self, expression: ExprId, block: BlockId, value: Option<ValueId>) -> Flow {
+        self.normal_with_abrupt(expression, block, value, Vec::new())
+    }
+
+    fn normal_with_abrupt(
+        &mut self,
+        expression: ExprId,
+        block: BlockId,
+        value: Option<ValueId>,
+        abrupt_values: Vec<(BlockId, ValueId)>,
+    ) -> Flow {
         if self.retain_expression_values {
             self.cfg.expression_values[expression.0 as usize] = value;
         }
@@ -317,6 +328,7 @@ impl<'program> Builder<'program> {
             block,
             value,
             reachable: true,
+            abrupt_values,
         }
     }
 
@@ -328,6 +340,37 @@ impl<'program> Builder<'program> {
             block,
             value: None,
             reachable: false,
+            abrupt_values: Vec::new(),
+        }
+    }
+
+    fn abrupt_with_values(
+        &mut self,
+        expression: ExprId,
+        block: BlockId,
+        abrupt_values: Vec<(BlockId, ValueId)>,
+    ) -> Flow {
+        if self.retain_expression_values {
+            self.cfg.expression_values[expression.0 as usize] = None;
+        }
+        Flow {
+            block,
+            value: None,
+            reachable: false,
+            abrupt_values,
+        }
+    }
+
+    fn record_abrupt_values(&mut self, expression: ExprId, values: &[(BlockId, ValueId)]) {
+        for (block, value) in values {
+            self.emit(
+                *block,
+                self.span(expression),
+                OperationKind::Record {
+                    value: Some(*value),
+                },
+                false,
+            );
         }
     }
 
@@ -498,23 +541,28 @@ impl<'program> Builder<'program> {
             block,
             value: None,
             reachable: true,
+            abrupt_values: Vec::new(),
         };
+        let mut abrupt_values = Vec::new();
         for part in parts {
             if !flow.reachable {
                 break;
             }
+            abrupt_values.extend(flow.abrupt_values.iter().copied());
             flow = self.lower_expr(part, flow.block);
         }
         if !flow.reachable {
-            return self.abrupt(expression, flow.block);
+            abrupt_values.extend(flow.abrupt_values.iter().copied());
+            return self.abrupt_with_values(expression, flow.block, abrupt_values);
         }
+        abrupt_values.extend(flow.abrupt_values.iter().copied());
         let value = self.emit(
             flow.block,
             span,
             OperationKind::BuildInterpolated { kind },
             true,
         );
-        self.normal(expression, flow.block, value)
+        self.normal_with_abrupt(expression, flow.block, value, abrupt_values)
     }
 
     fn lower_logical(
@@ -672,16 +720,27 @@ impl<'program> Builder<'program> {
             return self.lower_literal(expression, block, self.span(expression), hir::Literal::Nil);
         }
         let mut flow = self.lower_expr(expressions[0], block);
+        let mut abrupt_values = flow.abrupt_values.clone();
         for child in expressions.into_iter().skip(1) {
             if !flow.reachable {
                 break;
             }
             flow = self.lower_expr(child, flow.block);
+            abrupt_values.extend(flow.abrupt_values.iter().copied());
         }
         if flow.reachable {
-            self.normal(expression, flow.block, flow.value)
+            if self.closure_kind == Some(hir::ClosureKind::Block) && !abrupt_values.is_empty() {
+                self.record_abrupt_values(expression, &abrupt_values);
+                self.emit(
+                    flow.block,
+                    self.span(expression),
+                    OperationKind::Record { value: flow.value },
+                    false,
+                );
+            }
+            self.normal_with_abrupt(expression, flow.block, flow.value, abrupt_values)
         } else {
-            self.abrupt(expression, flow.block)
+            self.abrupt_with_values(expression, flow.block, abrupt_values)
         }
     }
 
@@ -1001,6 +1060,7 @@ impl<'program> Builder<'program> {
         });
 
         let then_flow = self.lower_expr(then_body, then_block);
+        let mut abrupt_values = then_flow.abrupt_values.clone();
         if then_flow.reachable {
             self.jump(
                 then_flow.block,
@@ -1008,7 +1068,9 @@ impl<'program> Builder<'program> {
                 vec![then_flow.value.expect("then branch produces a value")],
             );
         } else {
-            self.record_terminal_return(then_flow.block, expression);
+            if then_flow.abrupt_values.is_empty() {
+                self.record_terminal_return(then_flow.block, expression);
+            }
         }
 
         let else_flow = match else_body {
@@ -1025,6 +1087,7 @@ impl<'program> Builder<'program> {
                 self.normal(expression, else_block, nil)
             }
         };
+        abrupt_values.extend(else_flow.abrupt_values.iter().copied());
         if else_flow.reachable {
             self.jump(
                 else_flow.block,
@@ -1032,11 +1095,14 @@ impl<'program> Builder<'program> {
                 vec![else_flow.value.expect("else branch produces a value")],
             );
         } else {
-            self.record_terminal_return(else_flow.block, expression);
+            if else_flow.abrupt_values.is_empty() {
+                self.record_terminal_return(else_flow.block, expression);
+            }
         }
 
         let reachable = then_flow.reachable || else_flow.reachable;
         if reachable {
+            self.record_abrupt_values(expression, &abrupt_values);
             self.emit(
                 join,
                 self.span(expression),
@@ -1045,9 +1111,10 @@ impl<'program> Builder<'program> {
                 },
                 false,
             );
-            self.normal(expression, join, Some(joined))
+            self.normal_with_abrupt(expression, join, Some(joined), abrupt_values)
         } else {
-            self.abrupt(expression, join)
+            self.record_abrupt_values(expression, &abrupt_values);
+            self.abrupt_with_values(expression, join, abrupt_values)
         }
     }
 
@@ -1349,6 +1416,7 @@ impl<'program> Builder<'program> {
                     block,
                     value,
                     reachable: true,
+                    abrupt_values: Vec::new(),
                 }
             }
             TargetRuntime::Attribute { receiver, name } => {
@@ -1368,6 +1436,7 @@ impl<'program> Builder<'program> {
                     block,
                     value,
                     reachable: true,
+                    abrupt_values: Vec::new(),
                 }
             }
             TargetRuntime::Index {
@@ -1390,6 +1459,7 @@ impl<'program> Builder<'program> {
                     block,
                     value,
                     reachable: true,
+                    abrupt_values: Vec::new(),
                 }
             }
         }
@@ -1730,6 +1800,14 @@ impl<'program> Builder<'program> {
             exit,
             vec![normal.expect("loop exit produces a value")],
         );
+        self.emit(
+            exit,
+            span,
+            OperationKind::Record {
+                value: Some(exit_value),
+            },
+            false,
+        );
         self.normal(expression, exit, Some(exit_value))
     }
 
@@ -1841,6 +1919,14 @@ impl<'program> Builder<'program> {
             exit,
             vec![normal.expect("for loop exit produces a value")],
         );
+        self.emit(
+            exit,
+            span,
+            OperationKind::Record {
+                value: Some(exit_value),
+            },
+            false,
+        );
         self.normal(expression, exit, Some(exit_value))
     }
 
@@ -1882,7 +1968,7 @@ impl<'program> Builder<'program> {
             };
             self.set_terminator(block, terminator);
         }
-        self.abrupt(expression, block)
+        self.abrupt_with_values(expression, block, vec![(block, value)])
     }
 
     fn lower_break(&mut self, expression: ExprId, block: BlockId, value: Option<ExprId>) -> Flow {
@@ -1907,8 +1993,14 @@ impl<'program> Builder<'program> {
             )
             .expect("break seed produces a value")
         });
+        self.emit(
+            block,
+            self.span(expression),
+            OperationKind::Record { value: Some(value) },
+            false,
+        );
         self.jump(block, context.break_target, vec![value]);
-        self.abrupt(expression, block)
+        self.abrupt_with_values(expression, block, vec![(block, value)])
     }
 
     fn lower_next(&mut self, expression: ExprId, block: BlockId, value: Option<ExprId>) -> Flow {
@@ -1933,8 +2025,14 @@ impl<'program> Builder<'program> {
             )
             .expect("next seed produces a value")
         });
+        self.emit(
+            block,
+            self.span(expression),
+            OperationKind::Record { value: Some(value) },
+            false,
+        );
         self.jump(block, context.next_target, vec![value]);
-        self.abrupt(expression, block)
+        self.abrupt_with_values(expression, block, vec![(block, value)])
     }
 
     fn lower_block_outcome(
@@ -1959,6 +2057,12 @@ impl<'program> Builder<'program> {
         self.emit(
             block,
             self.span(expression),
+            OperationKind::Record { value: Some(value) },
+            false,
+        );
+        self.emit(
+            block,
+            self.span(expression),
             OperationKind::SetOutcome { kind, value },
             false,
         );
@@ -1967,7 +2071,7 @@ impl<'program> Builder<'program> {
         } else {
             self.set_terminator(block, Terminator::Unreachable);
         }
-        self.abrupt(expression, block)
+        self.abrupt_with_values(expression, block, vec![(block, value)])
     }
 
     fn lower_optional_value(
@@ -2074,11 +2178,8 @@ impl<'program> Builder<'program> {
                 normal_flow = self.lower_expr(else_body, else_block);
             }
             if normal_flow.reachable {
-                finish_normal(
-                    self,
-                    normal_flow,
-                    normal_flow.value.expect("begin body produces a value"),
-                );
+                let value = normal_flow.value.expect("begin body produces a value");
+                finish_normal(self, normal_flow, value);
             }
         }
 
@@ -2170,11 +2271,8 @@ impl<'program> Builder<'program> {
                     }
                 };
                 if body_flow.reachable {
-                    finish_normal(
-                        self,
-                        body_flow,
-                        body_flow.value.expect("rescue body produces a value"),
-                    );
+                    let value = body_flow.value.expect("rescue body produces a value");
+                    finish_normal(self, body_flow, value);
                 }
                 if let Some(next) = next {
                     test = next;

@@ -787,7 +787,11 @@ impl<'src> Analyzer<'src> {
                 return None;
             }
             transfer.normal_type = normal_type.clone();
-            if region.may_raise && !transfer.probe_normal_type.is_never() {
+            let handler_reached = worklist
+                .states
+                .get(region.entry.0 as usize)
+                .is_some_and(Option::is_some);
+            if region.may_raise && !handler_reached && !transfer.probe_normal_type.is_never() {
                 normal_type = if normal_type.is_never() {
                     transfer.probe_normal_type.clone()
                 } else {
