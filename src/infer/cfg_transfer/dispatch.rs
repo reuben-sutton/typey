@@ -398,6 +398,36 @@ pub(super) fn transfer_receiver_call(
 
     if name == "new" {
         if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
+            // `Class.new(Superclass) { ... }` creates a new class object whose
+            // block executes with that class as `self`.  The generic
+            // `Class#new` contract would otherwise construct `Class` itself
+            // and lose the inherited singleton methods visible in the block.
+            if Analyzer::named_type_name(&instance).is_some_and(|name| name_matches(&name, "Class"))
+            {
+                if let Some(superclass) = arguments
+                    .argument_types
+                    .first()
+                    .filter(|argument| Analyzer::class_object_instance_type(argument).is_some())
+                {
+                    let block_result = match input.block.as_ref() {
+                        Some(cfg::BlockOperand::Inline(closure)) => analyzer
+                            .transfer_owned_closure_body(
+                                *closure,
+                                &[],
+                                None,
+                                Some(superclass),
+                                environment,
+                            ),
+                        Some(cfg::BlockOperand::Passed(_)) | None => None,
+                    };
+                    return Ok(ReceiverTransfer {
+                        type_: superclass.clone(),
+                        block_result,
+                        untyped_origin: UntypedOrigin::InferredMethod,
+                        missing_method: false,
+                    });
+                }
+            }
             if instance.is_any() || matches!(instance, Type::Anything) {
                 return Ok(ReceiverTransfer {
                     type_: instance,
@@ -430,6 +460,29 @@ pub(super) fn transfer_receiver_call(
                         missing_method: false,
                     });
                 }
+            }
+        }
+        if let Type::Named(owner, type_arguments) = receiver {
+            if !type_arguments.is_empty()
+                && analyzer
+                    .declarations
+                    .classes
+                    .get(owner)
+                    .is_some_and(|info| !info.type_members.is_empty())
+            {
+                analyzer.infer_initializer_call_at(
+                    input.site,
+                    owner,
+                    arguments,
+                    input.block.is_some(),
+                    environment,
+                );
+                return Ok(ReceiverTransfer {
+                    type_: receiver.clone(),
+                    block_result: None,
+                    untyped_origin: UntypedOrigin::InferredMethod,
+                    missing_method: false,
+                });
             }
         }
         if let Some(owner) = Analyzer::named_type_name(receiver)

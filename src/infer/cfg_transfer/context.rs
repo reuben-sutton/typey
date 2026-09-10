@@ -196,6 +196,55 @@ pub(super) fn transfer_implicit_call(
             untyped_origin: result.untyped_origin,
         });
     }
+    if let Type::AttachedClassOf(owner) = receiver {
+        // `self` inside a singleton method is represented as
+        // `AttachedClassOf(owner)`, while explicit class-object dispatch uses
+        // `Class[owner]`. Route implicit calls through the latter shape so
+        // `new` and inherited singleton methods receive the same contract.
+        let class_object = Type::Named("Class".to_owned(), vec![Type::named(owner)]);
+        let result = super::dispatch::transfer_receiver_call(
+            analyzer,
+            input,
+            &class_object,
+            arguments,
+            values,
+            environment,
+            None,
+        )?;
+        let type_ = if input.name.as_str() == "new" {
+            Type::AttachedClassOf(owner.clone())
+        } else {
+            result.type_
+        };
+        return Ok(ContextTransfer {
+            type_,
+            block_result: result.block_result,
+            untyped_origin: result.untyped_origin,
+        });
+    }
+    if Analyzer::class_object_instance_type(receiver).is_some() {
+        let result = super::dispatch::transfer_receiver_call(
+            analyzer,
+            input,
+            receiver,
+            arguments,
+            values,
+            environment,
+            None,
+        )?;
+        let type_ = if input.name.as_str() == "new" {
+            Analyzer::class_object_owner(receiver)
+                .map(Type::AttachedClassOf)
+                .unwrap_or(result.type_)
+        } else {
+            result.type_
+        };
+        return Ok(ContextTransfer {
+            type_,
+            block_result: result.block_result,
+            untyped_origin: result.untyped_origin,
+        });
+    }
     analyzer.record_method_dependency(&key, environment);
     let inferred_accessor = analyzer
         .resolve_method_key(&key)
