@@ -43,6 +43,10 @@ pub struct Cfg {
     pub rescue_regions: Vec<RescueRegion>,
     /// Source spans where lowering required a transitional unsupported handoff.
     pub unsupported_spans: Vec<Span>,
+    /// Expressions that occur after an unconditional outcome in a sequence.
+    /// They are retained for source diagnostics even though no executable CFG
+    /// path reaches them.
+    pub unreachable_expressions: Vec<ExprId>,
     /// The value produced by each HIR expression, when it has a normally
     /// completing path. This keeps the graph connected to source HIR without
     /// embedding parser or inference state in the CFG.

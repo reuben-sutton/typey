@@ -226,6 +226,7 @@ mod tests {
             ensure_entries: Vec::new(),
             rescue_regions: Vec::new(),
             unsupported_spans: Vec::new(),
+            unreachable_expressions: Vec::new(),
             expression_values: Vec::new(),
         }
     }

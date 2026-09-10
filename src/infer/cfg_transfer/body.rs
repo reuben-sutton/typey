@@ -59,6 +59,26 @@ fn contains_class_object(type_: &Type) -> bool {
 }
 
 impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
+    fn report_unreachable_expressions(&mut self, graph: &cfg::Cfg) {
+        if self.context.method.is_none() {
+            return;
+        }
+        let mut reported = HashSet::new();
+        for expression_id in &graph.unreachable_expressions {
+            if !reported.insert(*expression_id) {
+                continue;
+            }
+            let Some(expression) = self.analyzer.program.hir_program.expression(*expression_id)
+            else {
+                continue;
+            };
+            self.analyzer.error_at(
+                SourceSite::from_span(expression.span, Some(*expression_id)),
+                "This expression appears after an unconditional return",
+            );
+        }
+    }
+
     fn first_body_expression(&self, expression: hir::ExprId) -> Option<hir::ExprId> {
         match &self
             .analyzer
@@ -696,6 +716,10 @@ impl<'src> Analyzer<'src> {
             seen_unreachable_probes: HashSet::new(),
             branch_results: HashMap::new(),
         };
+        // Dead statements are intentionally not lowered into executable CFG
+        // blocks. Report their source diagnostics from the owned metadata
+        // before transferring the reachable graph.
+        transfer.report_unreachable_expressions(&graph);
         let worklist = match cfg::transfer::run(&graph, &mut transfer, initial) {
             Ok(worklist) => worklist,
             Err(cfg::transfer::WorklistError::InvalidBlock(_)) => {

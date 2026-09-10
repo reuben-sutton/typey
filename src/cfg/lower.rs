@@ -165,6 +165,7 @@ impl<'program> Builder<'program> {
                 ensure_entries: Vec::new(),
                 rescue_regions: Vec::new(),
                 unsupported_spans: Vec::new(),
+                unreachable_expressions: Vec::new(),
                 expression_values: retain_expression_values
                     .then(|| vec![None; program.expressions.len()])
                     .unwrap_or_default(),
@@ -721,8 +722,11 @@ impl<'program> Builder<'program> {
         }
         let mut flow = self.lower_expr(expressions[0], block);
         let mut abrupt_values = flow.abrupt_values.clone();
-        for child in expressions.into_iter().skip(1) {
+        let mut remaining = expressions.into_iter().skip(1);
+        while let Some(child) = remaining.next() {
             if !flow.reachable {
+                self.cfg.unreachable_expressions.push(child);
+                self.cfg.unreachable_expressions.extend(remaining);
                 break;
             }
             flow = self.lower_expr(child, flow.block);

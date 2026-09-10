@@ -352,6 +352,7 @@ fn keeps_owned_keyword_diagnostics_on_the_value_span() {
         },
     );
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
 }
 
 #[test]
@@ -9139,6 +9140,21 @@ fn recognizes_interface_declaration_dsl() {
 #[test]
 fn suppresses_dead_code_api_errors_but_reports_unreachable_code() {
     check_fixture("tests/fixtures/unreachable_dead_api.rb");
+}
+
+#[test]
+fn preserves_unreachable_statement_diagnostics_through_cfg_transfer() {
+    let path = "tests/fixtures/unreachable_dead_api.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
 }
 
 #[test]
