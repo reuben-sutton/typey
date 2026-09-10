@@ -470,7 +470,7 @@ impl<'src> Analyzer<'src> {
                     if provisional {
                         state.observe_provisional_block_return(block_result)
                     } else {
-                        state.observe_block_return(block_result)
+                        state.observe_forwarded_block_return(block_result)
                     }
                 })
         {

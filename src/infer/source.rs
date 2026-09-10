@@ -65,6 +65,49 @@ impl SourceSite {
 }
 
 impl<'src> Analyzer<'src> {
+    /// Convert internal inference placeholders to types suitable for callers.
+    ///
+    /// Forwarded unannotated blocks need a symbolic result while a method is
+    /// being solved: the result belongs to the eventual call site's block,
+    /// not to the method definition. That symbol is useful inside the
+    /// fixpoint, but it is not a type parameter that a caller can act on.
+    /// Never expose it through the public per-expression type stream.
+    fn published_type(type_: &Type) -> Type {
+        match type_ {
+            Type::TypeVar(name) if name.starts_with("$block_return:") => Type::Anything,
+            Type::Named(name, arguments) => Type::Named(
+                name.clone(),
+                arguments.iter().map(Self::published_type).collect(),
+            ),
+            Type::Array(element) => Type::Array(Box::new(Self::published_type(element))),
+            Type::Hash(key, value) => Type::Hash(
+                Box::new(Self::published_type(key)),
+                Box::new(Self::published_type(value)),
+            ),
+            Type::Tuple(elements) => {
+                Type::Tuple(elements.iter().map(Self::published_type).collect())
+            }
+            Type::Proc(parameters, result) => Type::Proc(
+                parameters.iter().map(Self::published_type).collect(),
+                Box::new(Self::published_type(result)),
+            ),
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => Type::BoundProc {
+                receiver: Box::new(Self::published_type(receiver)),
+                parameters: parameters.iter().map(Self::published_type).collect(),
+                result: Box::new(Self::published_type(result)),
+            },
+            Type::Union(members) => Type::union(members.iter().map(Self::published_type)),
+            Type::Intersection(members) => {
+                Type::intersection(members.iter().map(Self::published_type))
+            }
+            other => other.clone(),
+        }
+    }
+
     pub(super) fn strictness_at(&self, offset: usize) -> Strictness {
         let mut strictness = self.config.strictness;
         for (start, end, candidate) in &self.strictness_ranges {
@@ -295,10 +338,11 @@ impl<'src> Analyzer<'src> {
         } else {
             None
         };
+        let published_type = Self::published_type(&type_);
         self.reporting.types.push(InferredType {
             start: site.start,
             end: site.end,
-            type_: type_.clone(),
+            type_: published_type,
             untyped_origin,
             is_send: self.reporting.report && is_send,
         });

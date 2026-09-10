@@ -464,6 +464,21 @@ impl MethodState {
         self.observe_block_return_with_provenance(actual, true)
     }
 
+    pub(super) fn observe_forwarded_block_return(&mut self, actual: &Type) -> bool {
+        if self.block_return_type.as_ref().is_some_and(
+            |type_| matches!(type_, Type::TypeVar(name) if name.starts_with("$block_return:")),
+        ) && !actual.contains_any()
+        {
+            let changed =
+                self.block_return_type.as_ref() != Some(actual) || self.block_return_provisional;
+            self.block_return_type = Some(actual.clone());
+            self.block_return_provisional = false;
+            changed
+        } else {
+            self.observe_block_return(actual)
+        }
+    }
+
     fn observe_block_return_with_provenance(&mut self, actual: &Type, provisional: bool) -> bool {
         let (next, next_provisional) = match &self.block_return_type {
             None => (actual.clone(), provisional),

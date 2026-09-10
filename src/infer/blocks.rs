@@ -920,6 +920,7 @@ impl<'src> Analyzer<'src> {
             if let Some((_, expected_return)) = proc_parts(&block_signature) {
                 if !expected_return.is_any()
                     && !expected_return.is_nil()
+                    && !Self::is_forwarded_block_return(expected_return)
                     && !self.is_assignable(&block_type, &expected_return)
                 {
                     self.check_assignable(block, &block_type, &expected_return);
@@ -1179,14 +1180,19 @@ impl<'src> Analyzer<'src> {
         let Some((_, actual_return)) = proc_parts(actual) else {
             return false;
         };
+        let symbolic_return = Self::is_forwarded_block_return(actual_return);
         if expected_parameters.is_empty() {
             // A block contract such as `T.proc.returns(String)` does not
             // constrain the block's arity. This is also how an inferred
             // method's unannotated `&block` is represented.
-            analyzer.is_assignable(actual_return, expected_return)
+            symbolic_return || analyzer.is_assignable(actual_return, expected_return)
         } else {
-            analyzer.is_assignable(actual, expected)
+            symbolic_return || analyzer.is_assignable(actual, expected)
         }
+    }
+
+    fn is_forwarded_block_return(type_: &Type) -> bool {
+        matches!(type_, Type::TypeVar(name) if name.starts_with("$block_return:"))
     }
 
     fn eval_symbol_passed_block_fallback(

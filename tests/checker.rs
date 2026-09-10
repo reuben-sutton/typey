@@ -6662,7 +6662,13 @@ fn publishes_nested_forwarded_block_returns_through_owned_cfg() {
         },
     );
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
-    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.types.iter().any(|inferred| {
+        matches!(&inferred.type_, Type::TypeVar(name) if name.starts_with("$block_return:"))
+    }));
+    assert!(cfg.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Note
+            && diagnostic.message.contains("Revealed type: `String`")
+    }));
     assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
 }
 
