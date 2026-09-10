@@ -82,6 +82,7 @@ pub(super) fn transfer_super_call(
         Some(receiver),
         block_return_type.as_ref(),
     );
+    let type_ = analyzer.widen_recursive_call_return(&key, type_, environment);
     let untyped_origin = analyzer
         .resolve_method_key(&key)
         .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
@@ -212,6 +213,7 @@ pub(super) fn transfer_implicit_call(
             Some(receiver),
             block_return_type.as_ref(),
         );
+        let type_ = analyzer.widen_recursive_call_return(&key, type_, environment);
         let untyped_origin = analyzer
             .resolve_method_key(&key)
             .and_then(|resolved| analyzer.declarations.methods.get(&resolved))

@@ -5,9 +5,11 @@
 //! navigation and inline assertions, and records the raised exception type.
 
 use super::super::{
-    Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput, UntypedOrigin,
+    Analyzer, Environment, Eval, Flow, FlowKind, MethodKey, OutcomeTypes, OwnedCallInput,
+    UntypedOrigin,
 };
 use crate::cfg;
+use crate::hir;
 use crate::types::Type;
 
 pub(super) fn finish_call(
@@ -27,10 +29,17 @@ pub(super) fn finish_call(
     // callback so its body is checked, while keeping its control outcomes in
     // the callback's execution context.
     let deferred_callback = callback_is_deferred(input, receiver_type);
+    // An inferred method starts with `T.noreturn` as its provisional summary.
+    // That summary is a bottom element for recursive inference, but a direct
+    // recursive call still has a normal runtime path: otherwise a body such
+    // as `[recursive_wrap(value)]` stops before the enclosing array is built
+    // and the fixpoint can never observe its widening step.
+    let provisional_recursive_return =
+        type_.is_never() && analyzer.is_recursive_inferred_call(input, receiver_type, environment);
     if input.safe_navigation && !receiver_type.is_any() {
         type_ = Type::union([Type::Nil, type_]);
     }
-    let call_can_return = !type_.is_never();
+    let call_can_return = !type_.is_never() || provisional_recursive_return;
     let raise_type = if call_can_return {
         Type::Never
     } else {
@@ -71,6 +80,78 @@ pub(super) fn finish_call(
     }
     analyzer.remember_untyped_origin_at(input.site, &result.type_, untyped_origin);
     result
+}
+
+impl<'src> Analyzer<'src> {
+    fn is_recursive_inferred_call(
+        &self,
+        input: &OwnedCallInput,
+        receiver_type: &Type,
+        environment: &Environment,
+    ) -> bool {
+        if !self.fixpoint.collecting_returns {
+            return false;
+        }
+        let Some(current) = environment
+            .method_key
+            .as_ref()
+            .and_then(|key| self.resolve_method_key(key))
+        else {
+            return false;
+        };
+        let Some(callee) = (match &input.receiver {
+            cfg::ReceiverOperand::Implicit => {
+                Some(self.implicit_method_key(input.name.as_str(), environment))
+            }
+            cfg::ReceiverOperand::Super => environment
+                .method_key
+                .as_ref()
+                .and_then(|key| self.super_method_key(key)),
+            cfg::ReceiverOperand::Value(_) => {
+                let explicit_self = input
+                    .expression
+                    .and_then(|expression| self.program.hir_program.expression(expression))
+                    .and_then(|expression| match &expression.kind {
+                        hir::ExprKind::Call(call) => match call.receiver {
+                            hir::Receiver::Explicit(receiver) => {
+                                Some(self.program.hir_program.expression(receiver).is_some_and(
+                                    |receiver| {
+                                        matches!(
+                                            &receiver.kind,
+                                            hir::ExprKind::Read(hir::Read::SelfValue)
+                                        )
+                                    },
+                                ))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                if explicit_self {
+                    Some(MethodKey {
+                        owner: current.owner.clone(),
+                        name: input.name.as_str().to_owned(),
+                        singleton: current.singleton,
+                    })
+                } else {
+                    self.receiver_method_key(None, receiver_type, input.name.as_str(), environment)
+                }
+            }
+            cfg::ReceiverOperand::Yield => None,
+        }) else {
+            return false;
+        };
+        let Some(callee) = self.resolve_method_key(&callee) else {
+            return false;
+        };
+        callee == current
+            && self
+                .declarations
+                .methods
+                .get(&callee)
+                .is_some_and(|state| !state.explicit)
+    }
 }
 
 fn callback_is_deferred(input: &OwnedCallInput, receiver_type: &Type) -> bool {

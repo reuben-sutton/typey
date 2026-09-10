@@ -555,6 +555,7 @@ pub(super) fn transfer_receiver_call(
                 Some(receiver),
                 block_return_type.as_ref(),
             );
+            let type_ = analyzer.widen_recursive_call_return(&key, type_, environment);
             let type_ = if name == "new" {
                 let type_ = analyzer.instantiate_generic_class(type_);
                 analyzer.default_class_constructor_type(receiver, type_)

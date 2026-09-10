@@ -3384,6 +3384,22 @@ fn widens_recursive_inferred_returns_to_a_finite_concrete_type() {
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.message.contains("T.untyped")));
+
+    let source = std::fs::read_to_string("tests/fixtures/recursive_inferred_return.rb").unwrap();
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(cfg.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Note && diagnostic.message.contains("T::Array[Object]")
+    }));
+    assert!(!cfg
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("T.untyped")));
 }
 
 #[test]
