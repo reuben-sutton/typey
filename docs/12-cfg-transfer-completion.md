@@ -32,7 +32,7 @@ contracts and some passed/forwarded-block contexts still need migration.
 Ordinary inline callbacks now use an owned HIR contract; a body containing an
 unsupported operation or an unmigrated callback shape falls back as a whole.
 
-## Current status (2026-09-09)
+## Current status (2026-09-10)
 
 The broad transfer surface is complete enough to exercise real repositories.
 The release runs below are the current coverage and parity snapshot; the body
@@ -42,8 +42,8 @@ necessarily selected for application inference.
 | Check | Compiled HIR bodies | Owned bodies transferred | Owned calls | Transfer fallbacks | Diagnostics |
 | --- | ---: | ---: | ---: | --- | ---: |
 | Spoom | 66,178 | 9,215 (13.9%) | 34,784 | 0 / 0 / 0 | 3 |
-| Packwerk | 83,314 | 9,518 (11.4%) | 39,832 | 0 / 0 / 0 | 22 visible |
-| Rails ActiveSupport | 30,265 | 17,331 (57.3%) | 51,305 | 0 / 0 / 0 | 640 |
+| Packwerk | 83,314 | 9,386 (11.3%) | 39,018 | 0 / 0 / 0 | 22 visible |
+| Rails ActiveSupport | 30,265 | 17,334 (57.3%) | 51,301 | 0 / 0 / 0 | 640 |
 
 The fallback columns are `unsupported_operation / unsupported_edge /
 legacy_bridge`; all three repository runs report `0 / 0 / 0`, and all report
@@ -333,44 +333,48 @@ The first modularization steps are now in place:
   retry back into the protected body; handler sends are therefore published
   without leaking handler-local assignments into normal flow.
 
+* inferred methods use `T.noreturn` as a provisional bottom summary during
+  fixpoint seeding. A direct recursive CFG call now keeps its normal path while
+  that summary is provisional, allowing enclosing expressions to reach their
+  widening point. The recursive-container regression converges in two rounds,
+  and the combined fixture workload converges in four rounds without a round
+  limit.
+
 The latest release Spoom CFG run compiled 66,178 HIR bodies and transferred
 9,215 bodies and 34,784 calls with zero unsupported-operation fallbacks, zero
 unsupported edges, and zero legacy bridges. It reports the same 3 diagnostics
-as the recursive path. The CFG run takes 6.48 seconds including repository
-checking versus 6.15 seconds recursively; both converge in four rounds. The
-application send accounting is close but not identical: 862/5,979 CFG sends
-contain `T.untyped`, compared with 845/5,979 on the recursive path, and neither
-path has an unrecorded application send.
+as the recursive path. The CFG run takes 2.74 seconds including repository
+checking versus 2.44 seconds recursively, or about 12.1% slower; both converge
+in four rounds. The application send accounting is close but not identical:
+862/5,979 CFG sends contain `T.untyped`, compared with 845/5,979 on the
+recursive path, and neither path has an unrecorded application send.
 
 The latest release Packwerk CFG run compiled 83,314 HIR bodies and transferred
-9,518 bodies and 39,832 calls with zero unsupported-operation, edge, or
+9,386 bodies and 39,018 calls with zero unsupported-operation, edge, or
 legacy-bridge fallbacks. Its 22 visible diagnostics match the recursive path;
 the legacy raw diagnostic counter is 23 because one diagnostic is filtered
-from the directory result by the typed-file policy. CFG took 6.08 seconds
-including repository checking versus 6.09 seconds recursively. Application
-send accounting remains a known publication difference: 258/1,578 CFG sends
-contain `T.untyped`, versus 214/1,578 recursively, with zero unrecorded sends
-on either path. The `YAML = Psych` standard-library alias remains modeled
-through the owned declaration path.
+from the directory result by the typed-file policy. CFG took 2.52 seconds
+including repository checking versus 2.45 seconds recursively, or about 2.6%
+slower. Application send accounting remains a known publication difference:
+258/1,578 CFG sends contain `T.untyped`, versus 214/1,578 recursively, with
+zero unrecorded sends on either path. The `YAML = Psych` standard-library alias
+remains modeled through the owned declaration path.
 
-ActiveSupport is the current large-component boundary. The post-fix CFG run
-compiled 30,265 HIR bodies and transferred 17,331 bodies and 51,305 calls
+ActiveSupport is the current large-component boundary. The latest CFG run
+compiled 30,265 HIR bodies and transferred 17,334 bodies and 51,301 calls
 across five rounds, with zero unsupported-operation, edge, or legacy-bridge
 fallbacks and zero unsupported HIR handoffs. It reports 640 diagnostics and
-42,890 recorded types. An uncontended baseline for the same component is
-The latest uncontended runs take 179.68 seconds for CFG versus 182.27 seconds
-recursively, so CFG is about 1.4% faster on this component. The older
-168.35-second legacy run was a different parser/publication snapshot and is
-not comparable. A concurrent CFG measurement reached 384.9 seconds and is
-not comparable. The diagnostic differential is now 640 CFG versus 650 legacy,
-with 543 shared, 97 CFG-only, and 107 legacy-only findings. These differences
-still need classification before CFG can replace the recursive path.
+42,890 recorded types. The paired uncontended runs take 167.36 seconds for
+CFG versus 166.51 seconds recursively, so CFG is about 0.5% slower on this
+component. The diagnostic differential is 640 CFG versus 650 legacy, with
+543 shared, 97 CFG-only, and 107 legacy-only findings. These differences still
+need classification before CFG can replace the recursive path.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
 
-As of 2026-09-09, the implementation is therefore in the final parity phase,
+As of 2026-09-10, the implementation is therefore in the final parity phase,
 not at the exit condition. The checker gate is 441/441, the local conformance
 suite has 246 passing fixtures, and the preceding upstream smoke run was
 green. Spoom and Packwerk have matching visible diagnostics. The CFG transfer
