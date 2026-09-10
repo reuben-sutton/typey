@@ -6,7 +6,19 @@ use typey::CheckerConfig;
 
 fn assert_fixture_matches_expectations(path: &str) {
     let path = Path::new(path);
-    let report = check_fixture(path, CheckerConfig::default()).expect("fixture is readable");
+    // Fixtures named `cfg_*` exercise the owned transfer path. Keep the
+    // ordinary fixture set on the legacy default until the repository
+    // differential gate is green, but do not run an explicitly CFG-only
+    // regression through the wrong evaluator.
+    let config = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.starts_with("cfg_"));
+    let config = CheckerConfig {
+        enable_cfg: config,
+        ..CheckerConfig::default()
+    };
+    let report = check_fixture(path, config).expect("fixture is readable");
     assert!(report.passed(), "{}: {:?}", path.display(), report.failures);
 }
 
