@@ -9190,6 +9190,21 @@ fn preserves_unreachable_statement_diagnostics_through_cfg_transfer() {
 }
 
 #[test]
+fn preserves_inferred_raising_unreachable_diagnostics_through_cfg_transfer() {
+    let path = "tests/fixtures/overridable_raising_method.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+}
+
+#[test]
 fn does_not_treat_concern_class_methods_as_module_instances() {
     check_fixture("tests/fixtures/concern_class_methods_self.rb");
 }

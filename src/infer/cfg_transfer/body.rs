@@ -79,6 +79,32 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         }
     }
 
+    fn report_unreachable_operations(&mut self, operations: &[cfg::Operation]) {
+        if self.context.method.is_none() {
+            return;
+        }
+        let mut reported = HashSet::new();
+        for operation in operations {
+            let Some(expression_id) = operation.expression else {
+                continue;
+            };
+            if !reported.insert(expression_id) {
+                continue;
+            }
+            let Some(expression) = self.analyzer.program.hir_program.expression(expression_id)
+            else {
+                continue;
+            };
+            if expression.synthetic {
+                continue;
+            }
+            self.analyzer.error_at(
+                SourceSite::from_span(expression.span, Some(expression_id)),
+                "This expression appears after an unconditional return",
+            );
+        }
+    }
+
     fn first_body_expression(&self, expression: hir::ExprId) -> Option<hir::ExprId> {
         match &self
             .analyzer
@@ -895,7 +921,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
         let _strictness = self.context.strictness;
         let mut next = state.clone();
         let mut exception_edges = Vec::new();
-        for operation in &block.operations {
+        for (operation_index, operation) in block.operations.iter().enumerate() {
             // Vendored RBI files are declaration input, not executable Ruby.
             // Their combined top-level graph can still contain parser-shaped
             // operations such as `undef` or placeholder assignments; ignore
@@ -1364,7 +1390,12 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
             }
             let type_ = match operation_result? {
                 OperationTransfer::Value(type_) => type_,
-                OperationTransfer::Stop => return Ok(exception_edges),
+                OperationTransfer::Stop => {
+                    self.report_unreachable_operations(
+                        &block.operations[operation_index.saturating_add(1)..],
+                    );
+                    return Ok(exception_edges);
+                }
             };
             if let Some(result) = operation.result {
                 next.set_value(result, type_.clone());
