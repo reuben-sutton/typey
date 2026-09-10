@@ -553,6 +553,9 @@ impl<'src> Analyzer<'src> {
                     current.without(&argument_type)
                 }
             }
+            "<" | "<=" if argument.is_some() => {
+                self.class_object_subclass_narrowing(&current, &argument_type, truthy)
+            }
             "==" | "equal?" | "eql?" if argument.is_some() => {
                 if truthy {
                     current.meet(&argument_type)

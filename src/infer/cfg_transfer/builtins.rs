@@ -106,6 +106,9 @@ pub(super) fn transfer_builtin_call(
     }
 
     if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
+        if matches!(name, "<" | "<=" | ">" | ">=") {
+            return Some((Type::bool(), None));
+        }
         if let Type::Named(class, _) = &instance {
             if name_matches(class, "ActiveSupport::Inflector") {
                 return Some((
