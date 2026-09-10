@@ -2536,6 +2536,59 @@ fn transfers_nominal_generic_collection_methods_through_owned_cfg() {
 }
 
 #[test]
+fn transfers_core_collection_contracts_through_owned_cfg() {
+    let source = r#"
+class Set
+end
+
+values = T.let([1, 2, 3], T::Array[Integer])
+T.reveal_type(values.fetch(0))
+T.reveal_type(values.fetch(0, 0.0))
+T.reveal_type(values.fetch(0) { |index| index.to_s })
+T.reveal_type(values.delete_if { |value| value.even? })
+T.reveal_type(values.delete_if)
+
+entries = T.let({"a" => 1}, T::Hash[String, Integer])
+T.reveal_type(entries.fetch("a"))
+T.reveal_type(entries.transform_keys { |key| key.to_sym })
+T.reveal_type(entries.transform_keys)
+T.reveal_type(entries.sort)
+
+set = T.let(Set.new, T::Set[String])
+T.reveal_type(set.any? { |value| value.empty? })
+T.reveal_type(set - set)
+"#;
+    let result = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    for expected in [
+        "Revealed type: `Integer`",
+        "Revealed type: `T.any(Float, Integer)`",
+        "Revealed type: `T.any(Integer, String)`",
+        "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `Enumerator`",
+        "Revealed type: `T::Hash[Symbol, Integer]`",
+        "Revealed type: `T::Array[[String, Integer]]`",
+        "Revealed type: `T::Boolean`",
+        "Revealed type: `T::Set[String]`",
+    ] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing {expected} in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn destructures_typed_tuple_elements_in_collection_blocks() {
     let result = check_fixture("tests/fixtures/tuple_block_destructuring.rb");
     let notes = result

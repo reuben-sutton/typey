@@ -48,6 +48,7 @@ pub(super) fn transfer_collection_call(
             | "select"
             | "filter"
             | "reject"
+            | "delete_if"
             | "each_with_object"
             | "each_with_index"
             | "each_index"
@@ -60,12 +61,15 @@ pub(super) fn transfer_collection_call(
             | "drop_while"
             | "sort_by"
             | "sort_by!"
+            | "sort"
             | "min_by"
             | "max_by"
             | "any?"
             | "all?"
             | "none?"
             | "count"
+            | "transform_keys"
+            | "transform_values"
     ) && match &kind {
         CollectionKind::Array => !matches!(name, "each_pair" | "each_key" | "each_value"),
         CollectionKind::Hash(_, _) => true,
@@ -74,6 +78,12 @@ pub(super) fn transfer_collection_call(
         if values.get(value.0 as usize).and_then(Option::as_ref).is_some_and(Type::is_nil));
     if input.block.is_none() || block_is_nil {
         if matches!(name, "any?" | "all?" | "none?" | "count") {
+            return None;
+        }
+        if name == "sort" {
+            return None;
+        }
+        if name == "to_h" {
             return None;
         }
         return requires_block.then(|| (Type::named("Enumerator"), None));
@@ -85,6 +95,10 @@ pub(super) fn transfer_collection_call(
         vec![parameters[0].clone(), Type::Integer]
     } else if name == "each_index" {
         vec![Type::Integer]
+    } else if name == "transform_keys" {
+        vec![parameters[0].clone()]
+    } else if name == "transform_values" {
+        vec![parameters[1].clone()]
     } else {
         parameters.clone()
     };
@@ -104,7 +118,7 @@ pub(super) fn transfer_collection_call(
         }
         "flat_map" => Type::Array(Box::new(analyzer.flat_map_element_type(&callback_type))),
         "filter_map" => Type::Array(Box::new(callback_type.truthy_part())),
-        "each" | "select" | "filter" | "reject" => match kind {
+        "each" | "select" | "filter" | "reject" | "delete_if" => match kind {
             CollectionKind::Array => Type::Array(Box::new(parameters[0].clone())),
             CollectionKind::Hash(key, value) => Type::Hash(Box::new(key), Box::new(value)),
         },
@@ -122,6 +136,10 @@ pub(super) fn transfer_collection_call(
         "find_index" => Type::union([Type::Nil, Type::Integer]),
         "any?" | "all?" | "none?" => Type::bool(),
         "count" => Type::Integer,
+        "to_h" => {
+            let (key, value) = Analyzer::pair_types(&callback_type)?;
+            Type::Hash(Box::new(key), Box::new(value))
+        }
         "group_by" => Type::Hash(
             Box::new(callback_type),
             Box::new(Type::Array(Box::new(parameters[0].clone()))),
@@ -132,6 +150,20 @@ pub(super) fn transfer_collection_call(
             CollectionKind::Hash(key, value) => {
                 Type::Array(Box::new(Type::Tuple(vec![key, value])))
             }
+        },
+        "sort" => match kind {
+            CollectionKind::Array => Type::Array(Box::new(parameters[0].clone())),
+            CollectionKind::Hash(key, value) => {
+                Type::Array(Box::new(Type::Tuple(vec![key, value])))
+            }
+        },
+        "transform_keys" => match kind {
+            CollectionKind::Array => return None,
+            CollectionKind::Hash(_, value) => Type::Hash(Box::new(callback_type), Box::new(value)),
+        },
+        "transform_values" => match kind {
+            CollectionKind::Array => return None,
+            CollectionKind::Hash(key, _) => Type::Hash(Box::new(key), Box::new(callback_type)),
         },
         "each_pair" => match kind {
             CollectionKind::Hash(key, value) => Type::Hash(Box::new(key), Box::new(value)),

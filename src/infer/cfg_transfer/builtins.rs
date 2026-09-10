@@ -212,10 +212,12 @@ pub(super) fn transfer_builtin_call(
             "==" | "!=" => Some(Type::bool()),
             _ => None,
         },
-        Type::Array(element) => transfer_array_builtin(analyzer, input, element, arguments),
+        Type::Array(element) => {
+            transfer_array_builtin(analyzer, input, element, arguments, values, environment)
+        }
         Type::Tuple(elements) => {
             let element = analyzer.array_element_type(&Type::Tuple(elements.clone()));
-            transfer_array_builtin(analyzer, input, &element, arguments)
+            transfer_array_builtin(analyzer, input, &element, arguments, values, environment)
         }
         Type::Hash(key, value) => match name {
             "new" => Some(Type::Hash(key.clone(), value.clone())),
@@ -227,6 +229,28 @@ pub(super) fn transfer_builtin_call(
                 })
             }
             "default" | "dig" => Some(Type::union([Type::Nil, value.as_ref().clone()])),
+            "fetch" => {
+                if let Some(default) = arguments.argument_types.get(1) {
+                    Some(value.as_ref().clone().join(default))
+                } else if input.block.is_some() {
+                    let callback = analyzer.cfg_owned_block_return_type(
+                        input,
+                        std::slice::from_ref(key.as_ref()),
+                        &Type::Anything,
+                        values,
+                        environment,
+                    )?;
+                    Some(
+                        value
+                            .as_ref()
+                            .clone()
+                            .join(&Analyzer::block_value_type(&callback)),
+                    )
+                } else {
+                    Some(value.as_ref().clone())
+                }
+            }
+            "fetch_values" => Some(Type::Array(Box::new(value.as_ref().clone()))),
             "[]=" => Some(
                 arguments
                     .argument_types
@@ -237,8 +261,21 @@ pub(super) fn transfer_builtin_call(
             "keys" => Some(Type::Array(Box::new(key.as_ref().clone()))),
             "values" => Some(Type::Array(Box::new(value.as_ref().clone()))),
             "length" | "size" => Some(Type::Integer),
-            "empty?" | "include?" | "key?" | "has_key?" => Some(Type::bool()),
-            "to_h" | "dup" | "clone" => Some(Type::Hash(key.clone(), value.clone())),
+            "empty?" | "include?" | "key?" | "has_key?" | "any?" | "all?" | "none?" => {
+                Some(Type::bool())
+            }
+            "to_h" | "dup" | "clone" | "merge" | "merge!" | "update" | "reverse_merge"
+            | "slice" | "except" => Some(Type::Hash(key.clone(), value.clone())),
+            "compact" => Some(Type::Hash(
+                key.clone(),
+                Box::new(value.as_ref().clone().without(&Type::Nil)),
+            )),
+            "invert" => Some(Type::Hash(value.clone(), key.clone())),
+            "sort" => Some(Type::Array(Box::new(Type::Tuple(vec![
+                key.as_ref().clone(),
+                value.as_ref().clone(),
+            ])))),
+            "values_at" => Some(Type::Array(Box::new(value.as_ref().clone()))),
             "to_a" => Some(Type::Array(Box::new(Type::Tuple(vec![
                 key.as_ref().clone(),
                 value.as_ref().clone(),
@@ -259,13 +296,52 @@ pub(super) fn transfer_builtin_call(
                 _ => None,
             }
         }
-        Type::Named(class, arguments) if name_matches(class, "Set") => match name {
-            "empty?" | "include?" | "member?" | "intersect?" => Some(Type::bool()),
-            "to_a" => Some(Type::Array(Box::new(
-                arguments.first().cloned().unwrap_or(Type::Any),
-            ))),
-            _ => None,
-        },
+        Type::Named(class, type_arguments) if name_matches(class, "Set") => {
+            let element = type_arguments.first().cloned().unwrap_or(Type::Any);
+            match name {
+                "empty?" | "include?" | "member?" | "intersect?" | "any?" | "all?" | "none?" => {
+                    if input.block.is_some() {
+                        let _ = callback(std::slice::from_ref(&element))?;
+                    }
+                    Some(Type::bool())
+                }
+                "each" => {
+                    if input.block.is_none() {
+                        Some(Type::named("Enumerator"))
+                    } else {
+                        let _ = callback(std::slice::from_ref(&element))?;
+                        Some(Type::Named(class.clone(), type_arguments.clone()))
+                    }
+                }
+                "map" | "collect" => {
+                    if input.block.is_none() {
+                        Some(Type::named("Enumerator"))
+                    } else {
+                        let callback = callback(std::slice::from_ref(&element))?;
+                        Some(Type::Array(Box::new(Analyzer::block_value_type(&callback))))
+                    }
+                }
+                "select" | "filter" | "reject" => {
+                    if input.block.is_none() {
+                        Some(Type::named("Enumerator"))
+                    } else {
+                        let _ = callback(std::slice::from_ref(&element))?;
+                        Some(Type::Named(class.clone(), type_arguments.clone()))
+                    }
+                }
+                "-" => Some(Type::Named(class.clone(), type_arguments.clone())),
+                "|" | "&" | "+" => {
+                    let other = arguments
+                        .argument_types
+                        .first()
+                        .map(|argument| analyzer.array_element_type(argument))
+                        .unwrap_or(Type::Any);
+                    Some(Type::Named(class.clone(), vec![element.join(&other)]))
+                }
+                "to_a" => Some(Type::Array(Box::new(element))),
+                _ => None,
+            }
+        }
         Type::Named(class, arguments)
             if name_matches(class, "Enumerator") || name_matches(class, "Enumerable") =>
         {
@@ -387,6 +463,8 @@ fn transfer_array_builtin(
     input: &OwnedCallInput,
     element: &Type,
     arguments: &CallArguments<'_>,
+    values: &[Option<Type>],
+    environment: &mut Environment,
 ) -> Option<Type> {
     let name = input.name.as_str();
     match name {
@@ -428,12 +506,45 @@ fn transfer_array_builtin(
                 .unwrap_or(Type::Any),
         ),
         "length" | "size" => Some(Type::Integer),
-        "empty?" | "include?" | "intersect?" => Some(Type::bool()),
+        "empty?" | "include?" | "intersect?" | "any?" | "all?" | "none?" => Some(Type::bool()),
+        "inspect" | "to_s" => Some(Type::String),
+        "compact" => Some(Type::Array(Box::new(element.without(&Type::Nil)))),
         "to_a" | "dup" | "clone" => Some(Type::Array(Box::new(element.clone()))),
         "to_set" => Some(Type::Named("Set".to_owned(), vec![element.clone()])),
         "to_h" => {
             let (key, value) = Analyzer::pair_types(element)?;
             Some(Type::Hash(Box::new(key), Box::new(value)))
+        }
+        "fetch" => {
+            if let Some(default) = arguments.argument_types.get(1) {
+                Some(element.join(default))
+            } else if input.block.is_some() {
+                let callback = analyzer.cfg_owned_block_return_type(
+                    input,
+                    std::slice::from_ref(&Type::Integer),
+                    &Type::Anything,
+                    values,
+                    environment,
+                )?;
+                Some(element.join(&Analyzer::block_value_type(&callback)))
+            } else {
+                Some(element.clone())
+            }
+        }
+        "at" => Some(Type::union([Type::Nil, element.clone()])),
+        "shift" | "pop" if arguments.argument_types.is_empty() => {
+            Some(Type::union([Type::Nil, element.clone()]))
+        }
+        "shift" | "pop" => Some(Type::Array(Box::new(element.clone()))),
+        "values_at" => Some(Type::Array(Box::new(element.clone()))),
+        "grep" => {
+            let filtered = arguments
+                .argument_types
+                .first()
+                .and_then(Analyzer::class_object_value_type)
+                .map(|expected| analyzer.meet_predicate_type(element, &expected))
+                .unwrap_or_else(|| element.clone());
+            Some(Type::Array(Box::new(filtered)))
         }
         "concat" | "+" | "|" => {
             let element = arguments
