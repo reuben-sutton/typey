@@ -9657,6 +9657,7 @@ fn transfers_standard_collection_contracts_through_owned_cfg() {
         "Revealed type: `T::Array[String]`",
         "Revealed type: `Integer`",
         "Revealed type: `T.nilable(T::Array[Integer])`",
+        "Revealed type: `T.nilable(Integer)`",
         "Revealed type: `String`",
         "Revealed type: `Enumerator`",
     ] {

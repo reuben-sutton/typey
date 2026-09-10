@@ -712,6 +712,20 @@ fn transfer_array_builtin(
                 ]))
             }
         }
+        "fill" | "replace" | "clear" | "unshift" | "insert" | "reverse!" | "rotate!"
+        | "shuffle!" | "sort!" => Some(Type::Array(Box::new(element.clone()))),
+        "uniq!" => Some(Type::union([
+            Type::Nil,
+            Type::Array(Box::new(element.clone())),
+        ])),
+        "bsearch" => {
+            if input.block.is_none() {
+                Some(Type::named("Enumerator"))
+            } else {
+                let _ = callback(std::slice::from_ref(element))?;
+                Some(Type::union([Type::Nil, element.clone()]))
+            }
+        }
         "min_by" | "max_by" => {
             if input.block.is_none() {
                 Some(Type::named("Enumerator"))
