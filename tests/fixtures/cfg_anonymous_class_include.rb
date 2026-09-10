@@ -1,4 +1,5 @@
 # typed: true
+# conformance: cfg
 
 module AnonymousFormatter
   def identifier

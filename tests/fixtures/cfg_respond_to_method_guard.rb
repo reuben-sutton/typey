@@ -1,4 +1,5 @@
 # typed: strict
+# conformance: cfg
 
 class CfgRespondToMethodGuard
 end
