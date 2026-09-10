@@ -66,6 +66,21 @@ pub(super) fn conditional_reachability(
     {
         if call.name.as_str() == "!" {
             if let hir::Receiver::Explicit(receiver) = call.receiver {
+                if let Some(hir::ExprKind::Read(Read::Local(local))) = analyzer
+                    .program
+                    .hir_program
+                    .expression(receiver)
+                    .map(|expression| &expression.kind)
+                {
+                    if let Some(name) = analyzer.program.hir_program.local_name(*local) {
+                        if let Some(truthy) = state.environment.known_truthiness(name.as_str()) {
+                            return (!truthy, truthy);
+                        }
+                        if state.environment.is_inferred(name.as_str()) {
+                            return (true, true);
+                        }
+                    }
+                }
                 let receiver_value = graph.value_for(receiver);
                 if let Some(receiver_value) = receiver_value {
                     let receiver_type = state.value(receiver_value);

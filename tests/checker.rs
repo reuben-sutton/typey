@@ -829,6 +829,31 @@ fn refines_double_bang_operands_in_owned_logical_cfg() {
 }
 
 #[test]
+fn keeps_inferred_negated_locals_non_exhaustive() {
+    let source = r#"# typed: true
+
+def inferred_negation(value)
+  if !value
+    T.reveal_type(value)
+  else
+    T.reveal_type(value)
+  end
+end
+
+inferred_negation("value")
+"#;
+    let baseline = check(source, CheckerConfig::default());
+    let cfg = check(
+        source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+}
+
+#[test]
 fn transfers_owned_collection_trees_without_prism_child_evaluation() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_owned_collection_trees.rb").expect("fixture");
