@@ -20,11 +20,10 @@ transfer spec described. Typey now has:
   routing and owned join-value recording.
 
 The current local gates include 23 CFG tests, 12 HIR tests, and 466 checker
-tests. The local conformance suite currently contains 260 fixtures; the latest
-full run passed 258 before the CFG-fixture selection fix, and the full rerun is
-in progress. The suite reloads the bundled RBI set per fixture and is
-correspondingly expensive. A separate 37-fixture upstream smoke suite was
-green in the preceding run.
+tests. The local conformance suite currently contains 260 fixtures and the
+latest full run passed all 260. The suite reloads the bundled RBI set per
+fixture and is correspondingly expensive. A separate 37-fixture upstream smoke
+suite was green in the preceding run.
 The CFG path is still opt-in because the transfer host retains semantic
 bridges in the legacy recursive path: the recursive evaluator still uses Prism
 children for exact diagnostics and builtin hooks, while parser-backed callback
@@ -414,8 +413,7 @@ are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-10, the implementation is therefore in the final parity phase,
 not at the exit condition. The checker gate is 466/466 and the conformance gate
-is 260/260 pending the current full rerun. The preceding upstream smoke run was
-green, but the differential
+is 260/260. The preceding upstream smoke run was green, but the differential
 gate is not yet green: the three repositories above still have classified
 legacy/CFG differences. The CFG transfer surface has zero measured fallbacks
 on all three repository checks. What remains is resolving those differential
