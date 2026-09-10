@@ -868,7 +868,12 @@ impl<'src> Analyzer<'src> {
         drop(worklist);
         drop(transfer);
         self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);
-        if self.is_rbi_offset(body_site.start) {
+        if self
+            .program
+            .hir_program
+            .body(body_id)
+            .is_some_and(|body| self.is_rbi_offset(body.span.start as usize))
+        {
             self.cfg_transfer_rbi_bodies = self.cfg_transfer_rbi_bodies.saturating_add(1);
         }
         commit_cfg_global_state(self, &graph, &final_environment);
