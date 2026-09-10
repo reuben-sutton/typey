@@ -1222,6 +1222,9 @@ impl<'src> Analyzer<'src> {
     pub(crate) fn array_element_type(&self, type_: &Type) -> Type {
         match type_ {
             Type::Array(element) => element.as_ref().clone(),
+            Type::Named(name, arguments) if name_matches(name, "Array") => {
+                arguments.first().cloned().unwrap_or(Type::Any)
+            }
             Type::Tuple(elements) => {
                 let element = elements
                     .iter()
@@ -1253,6 +1256,9 @@ impl<'src> Analyzer<'src> {
                 Some((elements[0].clone(), elements[1].clone()))
             }
             Type::Array(element) => Self::pair_types(element),
+            Type::Named(name, arguments) if name_matches(name, "Array") => {
+                arguments.first().and_then(Self::pair_types)
+            }
             Type::Union(members) => {
                 let mut pairs = members.iter().map(Self::pair_types);
                 let (mut key, mut value) = pairs.next()??;
@@ -1270,6 +1276,9 @@ impl<'src> Analyzer<'src> {
     pub(crate) fn flat_map_element_type(&self, type_: &Type) -> Type {
         match type_ {
             Type::Array(element) => element.as_ref().clone(),
+            Type::Named(name, arguments) if name_matches(name, "Array") => {
+                arguments.first().cloned().unwrap_or(Type::Any)
+            }
             Type::Tuple(elements) => {
                 let element = elements
                     .iter()
@@ -1297,6 +1306,11 @@ impl<'src> Analyzer<'src> {
     pub(crate) fn flattened_array_element_type(&self, type_: &Type) -> Type {
         match type_ {
             Type::Array(element) => self.flattened_array_element_type(element),
+            Type::Named(name, arguments) if name_matches(name, "Array") => {
+                arguments.first().map_or(Type::Any, |element| {
+                    self.flattened_array_element_type(element)
+                })
+            }
             Type::Tuple(elements) => {
                 let element = elements.iter().fold(Type::Never, |current, element| {
                     current.join(&self.flattened_array_element_type(element))

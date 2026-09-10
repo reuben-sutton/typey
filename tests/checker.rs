@@ -2507,6 +2507,35 @@ fn visits_hash_sort_by_blocks() {
 }
 
 #[test]
+fn transfers_nominal_generic_collection_methods_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_nominal_collection_dispatch.rb")
+        .expect("fixture");
+    let result = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    for expected in [
+        "Revealed type: `T::Array[Integer]`",
+        "Revealed type: `T.nilable(Integer)`",
+        "Revealed type: `T::Array[[String, Integer]]`",
+        "Revealed type: `T::Boolean`",
+    ] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing {expected} in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn destructures_typed_tuple_elements_in_collection_blocks() {
     let result = check_fixture("tests/fixtures/tuple_block_destructuring.rb");
     let notes = result

@@ -512,7 +512,7 @@ impl<'src> Analyzer<'src> {
     }
 }
 
-fn owned_literal_block_tuple_type(
+pub(super) fn owned_literal_block_tuple_type(
     program: &hir::Program,
     closure_id: hir::ClosureId,
 ) -> Option<Type> {

@@ -496,13 +496,29 @@ impl<'src> Analyzer<'src> {
             Box::new(expected_return.clone()),
         );
         match input.block.as_ref()? {
-            cfg::BlockOperand::Inline(closure) => self.transfer_owned_closure_body(
-                *closure,
-                expected_parameters,
-                Some(expected_return),
-                None,
-                environment,
-            ),
+            cfg::BlockOperand::Inline(closure) => {
+                // Collection callbacks with a literal pair result need to
+                // retain the fixed shape for consumers such as `to_h`.
+                // Legacy collection transfer derives this expectation from
+                // the block body; do the same here when the structural
+                // contract intentionally leaves the callback result open.
+                let literal_return = matches!(expected_return, Type::Anything)
+                    .then(|| {
+                        super::owned_blocks::owned_literal_block_tuple_type(
+                            &self.program.hir_program,
+                            *closure,
+                        )
+                    })
+                    .flatten();
+                let expected_return = literal_return.as_ref().unwrap_or(expected_return);
+                self.transfer_owned_closure_body(
+                    *closure,
+                    expected_parameters,
+                    Some(expected_return),
+                    None,
+                    environment,
+                )
+            }
             cfg::BlockOperand::Passed(value) => {
                 let actual = values.get(value.0 as usize).cloned().flatten()?;
                 if actual.is_nil() {

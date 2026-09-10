@@ -138,6 +138,23 @@ pub(super) fn transfer_receiver_call(
             missing_method: false,
         });
     }
+    // Sorbet prints both runtime arrays and generic type expressions as
+    // `T::Array[Elem]`. The type parser keeps the latter nominal so it can
+    // preserve the source spelling, but instance dispatch still needs the
+    // structural Array contract. Normalize only the receiver used for this
+    // call; do not change the public type representation.
+    if let Some(structural) = structural_collection_receiver(receiver) {
+        return transfer_receiver_call(
+            analyzer,
+            input,
+            &structural,
+            arguments,
+            values,
+            environment,
+            hash_shape,
+        );
+    }
+
     let callable_type = if matches!(name, "call" | "[]") {
         transfer_callable_call(analyzer, input.site, receiver, arguments)
     } else {
@@ -689,6 +706,23 @@ pub(super) fn transfer_receiver_call(
         untyped_origin: UntypedOrigin::FallbackCall,
         missing_method: true,
     })
+}
+
+fn structural_collection_receiver(receiver: &Type) -> Option<Type> {
+    let Type::Named(name, arguments) = receiver else {
+        return None;
+    };
+    match (
+        name_matches(name, "Array"),
+        name_matches(name, "Hash"),
+        arguments.as_slice(),
+    ) {
+        (true, false, [element]) => Some(Type::Array(Box::new(element.clone()))),
+        (false, true, [key, value]) => {
+            Some(Type::Hash(Box::new(key.clone()), Box::new(value.clone())))
+        }
+        _ => None,
+    }
 }
 
 fn join_untyped_origin(left: UntypedOrigin, right: UntypedOrigin) -> UntypedOrigin {

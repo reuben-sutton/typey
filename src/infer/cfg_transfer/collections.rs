@@ -48,6 +48,24 @@ pub(super) fn transfer_collection_call(
             | "select"
             | "filter"
             | "reject"
+            | "each_with_object"
+            | "each_with_index"
+            | "each_index"
+            | "find"
+            | "detect"
+            | "find_index"
+            | "group_by"
+            | "partition"
+            | "take_while"
+            | "drop_while"
+            | "sort_by"
+            | "sort_by!"
+            | "min_by"
+            | "max_by"
+            | "any?"
+            | "all?"
+            | "none?"
+            | "count"
     ) && match &kind {
         CollectionKind::Array => !matches!(name, "each_pair" | "each_key" | "each_value"),
         CollectionKind::Hash(_, _) => true,
@@ -55,17 +73,25 @@ pub(super) fn transfer_collection_call(
     let block_is_nil = matches!(input.block, Some(cfg::BlockOperand::Passed(value))
         if values.get(value.0 as usize).and_then(Option::as_ref).is_some_and(Type::is_nil));
     if input.block.is_none() || block_is_nil {
+        if matches!(name, "any?" | "all?" | "none?" | "count") {
+            return None;
+        }
         return requires_block.then(|| (Type::named("Enumerator"), None));
     }
 
+    let callback_parameters = if name == "each_with_object" {
+        vec![parameters[0].clone(), arguments_first_or_any(input, values)]
+    } else if name == "each_with_index" {
+        vec![parameters[0].clone(), Type::Integer]
+    } else if name == "each_index" {
+        vec![Type::Integer]
+    } else {
+        parameters.clone()
+    };
     let callback = analyzer.cfg_owned_block_return_type(
         input,
-        &parameters,
-        &if parameters.len() > 1 {
-            Type::Tuple(vec![Type::Any; parameters.len()])
-        } else {
-            Type::Anything
-        },
+        &callback_parameters,
+        &Type::Anything,
         values,
         environment,
     )?;
@@ -82,6 +108,31 @@ pub(super) fn transfer_collection_call(
             CollectionKind::Array => Type::Array(Box::new(parameters[0].clone())),
             CollectionKind::Hash(key, value) => Type::Hash(Box::new(key), Box::new(value)),
         },
+        "each_with_object" => arguments_first_or_any(input, values),
+        "each_with_index" | "each_index" => match kind {
+            CollectionKind::Array => Type::Array(Box::new(parameters[0].clone())),
+            CollectionKind::Hash(key, value) => Type::Hash(Box::new(key), Box::new(value)),
+        },
+        "find" | "detect" | "min_by" | "max_by" => match kind {
+            CollectionKind::Array => Type::union([Type::Nil, parameters[0].clone()]),
+            CollectionKind::Hash(key, value) => {
+                Type::union([Type::Nil, Type::Tuple(vec![key.clone(), value.clone()])])
+            }
+        },
+        "find_index" => Type::union([Type::Nil, Type::Integer]),
+        "any?" | "all?" | "none?" => Type::bool(),
+        "count" => Type::Integer,
+        "group_by" => Type::Hash(
+            Box::new(callback_type),
+            Box::new(Type::Array(Box::new(parameters[0].clone()))),
+        ),
+        "partition" => Type::Array(Box::new(Type::Array(Box::new(parameters[0].clone())))),
+        "take_while" | "drop_while" | "sort_by" | "sort_by!" => match kind {
+            CollectionKind::Array => Type::Array(Box::new(parameters[0].clone())),
+            CollectionKind::Hash(key, value) => {
+                Type::Array(Box::new(Type::Tuple(vec![key, value])))
+            }
+        },
         "each_pair" => match kind {
             CollectionKind::Hash(key, value) => Type::Hash(Box::new(key), Box::new(value)),
             CollectionKind::Array => return None,
@@ -93,4 +144,15 @@ pub(super) fn transfer_collection_call(
         _ => return None,
     };
     Some((result, Some(callback)))
+}
+
+fn arguments_first_or_any(input: &OwnedCallInput, values: &[Option<Type>]) -> Type {
+    let Some(crate::cfg::ArgumentOperand::Positional(value)) = input.arguments.first() else {
+        return Type::Any;
+    };
+    values
+        .get(value.0 as usize)
+        .and_then(Option::as_ref)
+        .cloned()
+        .unwrap_or(Type::Any)
 }
