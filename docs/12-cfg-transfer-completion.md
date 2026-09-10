@@ -19,12 +19,12 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 22 CFG tests, 12 HIR tests, 442 checker tests,
-and 246 local conformance tests. A separate 37-fixture upstream smoke suite
-was green in the preceding run, but a fresh rerun on this snapshot did not
-finish within roughly fourteen minutes and was interrupted without reporting
-a failure. The conformance tests reload the bundled RBI set per fixture and
-are correspondingly expensive.
+The current local gates include 22 CFG tests, 12 HIR tests, and 453 checker
+tests. The local conformance suite contains 249 fixtures. Its last full run
+was 248 passing fixtures and one forwarded-block fixture that is now green in
+a focused rerun after the latest CFG fix; the suite reloads the bundled RBI
+set per fixture and is correspondingly expensive. A separate 37-fixture
+upstream smoke suite was green in the preceding run.
 The CFG path is still opt-in because the transfer host retains semantic
 bridges in the legacy recursive path: the recursive evaluator still uses Prism
 children for exact diagnostics and builtin hooks, while parser-backed callback
@@ -46,6 +46,16 @@ necessarily selected for application inference.
 | Spoom | 66,178 | 9,215 (13.9%) | 34,784 | 0 / 0 / 0 | 3 |
 | Packwerk | 83,314 | 9,386 (11.3%) | 39,018 | 0 / 0 / 0 | 22 visible |
 | Rails ActiveSupport | 30,265 | 17,334 (57.3%) | 51,301 | 0 / 0 / 0 | 640 |
+
+Transfer coverage is a body-level ownership metric: `owned bodies transferred /
+compiled HIR bodies`. For example, Spoom's 13.9% means that 9,215 of its
+66,178 compiled bodies completed through the owned CFG transfer path. It does
+not mean that 13.9% of lines, sends, types, or diagnostics are covered, and a
+single transferred body can contain many calls. The denominator includes all
+compiled bodies, including RBI bodies that are not selected for application
+inference. Bodies outside the attempted owned-transfer set are not counted as
+fallbacks; the fallback counters only describe owned bodies that were entered
+and then had to return to the legacy evaluator.
 
 The fallback columns are `unsupported_operation / unsupported_edge /
 legacy_bridge`; all three repository runs report `0 / 0 / 0`, and all report
@@ -382,9 +392,10 @@ outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
 
 As of 2026-09-10, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 442/442, the local conformance
-suite has 246 passing fixtures, and the preceding upstream smoke run was
-green. Spoom and Packwerk have matching visible diagnostics. The CFG transfer
+not at the exit condition. The checker gate is 453/453; the last full local
+conformance run was 248/249, with its remaining forwarded-block fixture now
+passing in a focused rerun. The preceding upstream smoke run was green.
+Spoom and Packwerk have matching visible diagnostics. The CFG transfer
 surface has zero measured fallbacks on all three repository checks. What
 remains is not broad CFG coverage: it is classifying
 ActiveSupport's non-shared diagnostics, closing the owned type-publication
