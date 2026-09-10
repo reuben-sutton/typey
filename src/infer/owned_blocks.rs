@@ -465,6 +465,24 @@ impl<'src> Analyzer<'src> {
         bound_receiver: Option<&Type>,
         outer: &mut Environment,
     ) -> Option<Eval> {
+        self.transfer_owned_closure_body_with_environment(
+            closure_id,
+            expected,
+            expected_return,
+            bound_receiver,
+            outer,
+        )
+        .map(|(result, _)| result)
+    }
+
+    pub(super) fn transfer_owned_closure_body_with_environment(
+        &mut self,
+        closure_id: hir::ClosureId,
+        expected: &[Type],
+        expected_return: Option<&Type>,
+        bound_receiver: Option<&Type>,
+        outer: &mut Environment,
+    ) -> Option<(Eval, Environment)> {
         let closure = self.program.hir_program.closure(closure_id)?.clone();
         let captured = outer.clone();
         let mut closure_environment = outer.clone();
@@ -508,7 +526,7 @@ impl<'src> Analyzer<'src> {
         self.expected_return_type = previous_expected_return;
         let body_result = body_result?;
         self.propagate_block_locals(outer, &captured, &closure_environment);
-        Some(body_result)
+        Some((body_result, closure_environment))
     }
 }
 
@@ -591,7 +609,16 @@ fn bind_owned_parameters(
             if parameter.kind == hir::ParameterKind::Block {
                 environment.bind_block_parameter(name.as_str().to_owned(), type_.clone());
             } else {
-                environment.bind(name.as_str().to_owned(), type_.clone());
+                let name = name.as_str().to_owned();
+                let open_array = matches!(&type_, Type::Array(element) if element.is_any());
+                environment.bind(name.clone(), type_.clone());
+                if open_array {
+                    // An empty array passed as a callback accumulator starts
+                    // with an unknown element placeholder. Keep it open so
+                    // owned calls such as `<<` can refine it from their
+                    // concrete argument type.
+                    environment.open_array_locals.insert(name);
+                }
             }
         }
         if positional_index == 1 && parameter.name.is_none() {

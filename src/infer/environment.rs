@@ -212,6 +212,34 @@ impl Environment {
         Some(type_)
     }
 
+    /// Refine a hash local from an index write.  Empty hash literals enter
+    /// inference as `Hash[Any, Any]`; an owned callback such as
+    /// `each_with_object({}) { |value, output| output[key] = value }` gives
+    /// concrete evidence for both generic parameters.
+    pub(super) fn widen_hash_local(
+        &mut self,
+        name: &str,
+        key_type: Type,
+        value_type: Type,
+    ) -> Option<Type> {
+        let Type::Hash(current_key, current_value) = self.locals.get(name)? else {
+            return None;
+        };
+        let key = if current_key.is_any() {
+            key_type
+        } else {
+            current_key.join(&key_type)
+        };
+        let value = if current_value.is_any() {
+            value_type
+        } else {
+            current_value.join(&value_type)
+        };
+        let type_ = Type::Hash(Box::new(key), Box::new(value));
+        self.locals.insert(name.to_owned(), type_.clone());
+        Some(type_)
+    }
+
     /// Join two control-flow environments using the same type lattice as
     /// expression inference. A local which exists on only one path can be
     /// `nil` when the other path is taken.

@@ -102,13 +102,24 @@ pub(super) fn transfer_collection_call(
     } else {
         parameters.clone()
     };
-    let callback = analyzer.cfg_owned_block_return_type(
-        input,
-        &callback_parameters,
-        &Type::Anything,
-        values,
-        environment,
-    )?;
+    let (callback, callback_environment) = if name == "each_with_object" {
+        analyzer.cfg_owned_block_return_type_with_environment(
+            input,
+            &callback_parameters,
+            &Type::Anything,
+            values,
+            environment,
+        )?
+    } else {
+        let callback = analyzer.cfg_owned_block_return_type(
+            input,
+            &callback_parameters,
+            &Type::Anything,
+            values,
+            environment,
+        )?;
+        (callback, environment.clone())
+    };
     let callback_type = Analyzer::block_value_type(&callback);
     let result = match name {
         "map" | "collect" | "map!" | "collect!"
@@ -122,7 +133,9 @@ pub(super) fn transfer_collection_call(
             CollectionKind::Array => Type::Array(Box::new(parameters[0].clone())),
             CollectionKind::Hash(key, value) => Type::Hash(Box::new(key), Box::new(value)),
         },
-        "each_with_object" => arguments_first_or_any(input, values),
+        "each_with_object" => {
+            each_with_object_result(analyzer, input, values, &callback_environment)
+        }
         "each_with_index" | "each_index" => match kind {
             CollectionKind::Array => Type::Array(Box::new(parameters[0].clone())),
             CollectionKind::Hash(key, value) => Type::Hash(Box::new(key), Box::new(value)),
@@ -176,6 +189,33 @@ pub(super) fn transfer_collection_call(
         _ => return None,
     };
     Some((result, Some(callback)))
+}
+
+fn each_with_object_result(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    values: &[Option<Type>],
+    callback_environment: &Environment,
+) -> Type {
+    let Some(cfg::BlockOperand::Inline(closure)) = input.block.as_ref() else {
+        return arguments_first_or_any(input, values);
+    };
+    let Some(name) = analyzer
+        .program
+        .hir_program
+        .closure(*closure)
+        .and_then(|closure| closure.parameters.parameters.get(1))
+        .and_then(|parameter| parameter.name.as_ref())
+        .map(|name| name.as_str())
+    else {
+        return arguments_first_or_any(input, values);
+    };
+    let refined = callback_environment.get(name);
+    if refined.is_any() {
+        arguments_first_or_any(input, values)
+    } else {
+        refined
+    }
 }
 
 fn arguments_first_or_any(input: &OwnedCallInput, values: &[Option<Type>]) -> Type {

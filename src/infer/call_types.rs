@@ -490,6 +490,29 @@ impl<'src> Analyzer<'src> {
         values: &[Option<Type>],
         environment: &mut super::Environment,
     ) -> Option<Eval> {
+        self.cfg_owned_block_return_type_with_environment(
+            input,
+            expected_parameters,
+            expected_return,
+            values,
+            environment,
+        )
+        .map(|(result, _)| result)
+    }
+
+    /// As [`cfg_owned_block_return_type`], but retain the callback's local
+    /// environment.  This matters for callbacks whose contract mutates a
+    /// block parameter, such as `each_with_object`: the callback result is
+    /// not the collection result, so callers need the post-callback binding
+    /// to recover the refined accumulator type.
+    pub(super) fn cfg_owned_block_return_type_with_environment(
+        &mut self,
+        input: &OwnedCallInput,
+        expected_parameters: &[Type],
+        expected_return: &Type,
+        values: &[Option<Type>],
+        environment: &mut super::Environment,
+    ) -> Option<(Eval, super::Environment)> {
         let block_site = self.cfg_passed_block_site(input).unwrap_or(input.site);
         let expected = Type::Proc(
             expected_parameters.to_vec(),
@@ -511,7 +534,7 @@ impl<'src> Analyzer<'src> {
                     })
                     .flatten();
                 let expected_return = literal_return.as_ref().unwrap_or(expected_return);
-                self.transfer_owned_closure_body(
+                self.transfer_owned_closure_body_with_environment(
                     *closure,
                     expected_parameters,
                     Some(expected_return),
@@ -526,13 +549,14 @@ impl<'src> Analyzer<'src> {
                     return None;
                 }
                 if let Some(name) = self.cfg_passed_symbol_name(input) {
-                    return Some(Eval::value(self.eval_symbol_passed_block_named(
+                    let result = self.eval_symbol_passed_block_named(
                         None,
                         block_site,
                         &name,
                         &expected,
                         environment,
-                    )));
+                    );
+                    return Some((Eval::value(result), environment.clone()));
                 }
                 let Some(signature) = Self::passed_block_signature(&actual) else {
                     if let Some(local_name) = self.cfg_passed_block_local_name(input) {
@@ -544,14 +568,14 @@ impl<'src> Analyzer<'src> {
                         ) {
                             let result = proc_parts(&signature)
                                 .map_or(Type::Any, |(_, result)| result.clone());
-                            return Some(Eval::value(result));
+                            return Some((Eval::value(result), environment.clone()));
                         }
                     }
                     // An ordinary unannotated Proc still has no callback
                     // contract. Preserve the gradual result in that case;
                     // only a marked `&block` parameter is eligible for the
                     // forwarding rule above.
-                    return Some(Eval::value(Type::Any));
+                    return Some((Eval::value(Type::Any), environment.clone()));
                 };
                 if !Self::passed_block_is_assignable(self, &signature, &expected) {
                     self.error_at(
@@ -564,7 +588,7 @@ impl<'src> Analyzer<'src> {
                     );
                 }
                 let result = proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
-                Some(Eval::value(result))
+                Some((Eval::value(result), environment.clone()))
             }
         }
     }

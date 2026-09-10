@@ -349,53 +349,68 @@ fn update_hash_shape_after_call(
     let key = assigned_hash_key(analyzer, input)
         .or_else(|| super::builtins::owned_hash_key(analyzer, input));
     let value = arguments.argument_types.last().cloned();
-    if let (Some(key), Some(value)) = (key, value) {
-        if let Some(shape) = hash_shapes
-            .get_mut(receiver_value.0 as usize)
-            .and_then(Option::as_mut)
-        {
-            shape.write(key.clone(), value.clone());
+    let read = hash_receiver_read(analyzer, input);
+    if let Some(value) = value {
+        if let Some(key) = key {
+            if let Some(shape) = hash_shapes
+                .get_mut(receiver_value.0 as usize)
+                .and_then(Option::as_mut)
+            {
+                shape.write(key.clone(), value.clone());
+            }
+            if let Some(read) = read.as_ref() {
+                if let Some(storage_key) =
+                    super::assignment::hash_shape_key_for_read(analyzer, read)
+                {
+                    if let Some(shape) = environment.hash_shape(&storage_key).cloned() {
+                        let mut shape = shape;
+                        shape.write(key, value.clone());
+                        environment.set_hash_shape(storage_key, Some(shape));
+                    }
+                }
+            }
         }
-        if let Some(read) = input
-            .expression
-            .and_then(|id| analyzer.program.hir_program.expression(id))
-            .and_then(|expression| match &expression.kind {
-                hir::ExprKind::Call(call) => match call.receiver {
-                    hir::Receiver::Explicit(receiver) => analyzer
-                        .program
-                        .hir_program
-                        .expression(receiver)
-                        .and_then(|receiver| match &receiver.kind {
-                            hir::ExprKind::Read(read) => Some(read),
-                            _ => None,
-                        }),
-                    _ => None,
-                },
-                hir::ExprKind::Assign { target, .. } => match target {
-                    hir::AssignTarget::Index { receiver, .. } => analyzer
-                        .program
-                        .hir_program
-                        .expression(*receiver)
-                        .and_then(|receiver| match &receiver.kind {
-                            hir::ExprKind::Read(read) => Some(read),
-                            _ => None,
-                        }),
-                    _ => None,
-                },
-                _ => None,
-            })
-        {
-            if let Some(storage_key) = super::assignment::hash_shape_key_for_read(analyzer, read) {
-                if let Some(shape) = environment.hash_shape(&storage_key).cloned() {
-                    let mut shape = shape;
-                    shape.write(key, value);
-                    environment.set_hash_shape(storage_key, Some(shape));
+        if let Some(hir::Read::Local(local)) = read.as_ref() {
+            if let Some(name) = analyzer.program.hir_program.local_name(*local) {
+                if let Some(key_type) = arguments.argument_types.first().cloned() {
+                    environment.widen_hash_local(name.as_str(), key_type, value);
                 }
             }
         }
     } else if let Some(shape) = hash_shapes.get_mut(receiver_value.0 as usize) {
         *shape = None;
     }
+}
+
+fn hash_receiver_read<'a>(analyzer: &'a Analyzer<'_>, input: &OwnedCallInput) -> Option<hir::Read> {
+    input
+        .expression
+        .and_then(|id| analyzer.program.hir_program.expression(id))
+        .and_then(|expression| match &expression.kind {
+            hir::ExprKind::Call(call) => match call.receiver {
+                hir::Receiver::Explicit(receiver) => analyzer
+                    .program
+                    .hir_program
+                    .expression(receiver)
+                    .and_then(|receiver| match &receiver.kind {
+                        hir::ExprKind::Read(read) => Some(read.clone()),
+                        _ => None,
+                    }),
+                _ => None,
+            },
+            hir::ExprKind::Assign { target, .. } => match target {
+                hir::AssignTarget::Index { receiver, .. } => analyzer
+                    .program
+                    .hir_program
+                    .expression(*receiver)
+                    .and_then(|receiver| match &receiver.kind {
+                        hir::ExprKind::Read(read) => Some(read.clone()),
+                        _ => None,
+                    }),
+                _ => None,
+            },
+            _ => None,
+        })
 }
 
 fn assigned_hash_key(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<HashKey> {

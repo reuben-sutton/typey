@@ -2589,6 +2589,33 @@ T.reveal_type(set - set)
 }
 
 #[test]
+fn transfers_each_with_object_accumulator_types_through_owned_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_each_with_object_accumulator.rb")
+        .expect("fixture");
+    let result = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    for expected in [
+        "Revealed type: `T::Array[String]`",
+        "Revealed type: `T::Hash[String, Integer]`",
+    ] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing {expected} in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn transfers_standard_library_contracts_through_owned_cfg() {
     let source = r#"
 T.reveal_type("a" <=> "b")
