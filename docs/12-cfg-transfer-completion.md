@@ -19,11 +19,12 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 23 CFG tests, 13 HIR tests, and 470 checker
-tests. The local conformance suite currently contains 259 Ruby/RBI fixtures
-and 264 tests; the latest full run passed all 264. The suite reloads the
-bundled RBI set per fixture and is correspondingly expensive. A separate
-37-fixture upstream smoke suite was green in the preceding run.
+The current local gates include 23 CFG tests, 13 HIR tests, and 471 checker
+tests. The local conformance suite currently contains 260 Ruby/RBI fixtures
+and 265 generated tests; the latest full run passed all 264 tests before the
+new Proc fixture was added, and its focused conformance run passes. The suite
+reloads the bundled RBI set per fixture and is correspondingly expensive. A
+separate 37-fixture upstream smoke suite was green in the preceding run.
 The CFG path is still opt-in because the transfer host retains semantic
 bridges in the legacy recursive path: the recursive evaluator still uses Prism
 children for exact diagnostics and builtin hooks, while parser-backed callback
@@ -45,7 +46,7 @@ transfer telemetry.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Spoom | 2,895 | 2,895 | 100.00% | 1 | 9,200 | 34,746 | 6 |
 | Packwerk | 1,219 | 1,219 | 100.00% | 1 | 9,541 | 39,797 | 23 visible |
-| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,197 | 51,096 | 665 |
+| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,203 | 51,105 | 652 |
 
 The current release differential snapshot is not yet exact parity:
 
@@ -53,15 +54,17 @@ The current release differential snapshot is not yet exact parity:
 | --- | ---: | ---: | --- |
 | Spoom | 3 | 6 | 3 CFG-only safe-navigation diagnostics where owned source inference is concrete and legacy lookup remains gradual |
 | Packwerk | 23 | 23 | 1 distinct CFG-only finding; the count is otherwise exact |
-| Rails ActiveSupport | 651 | 665 | 14 more CFG diagnostics; 152 unique CFG-only and 138 legacy-only location/message entries, primarily receiver/model precision differences |
+| Rails ActiveSupport | 651 | 652 | 1 more CFG diagnostic; 139 CFG-only and 138 legacy-only location/message entries, primarily receiver/model precision differences |
 
 These are differential findings, not silently accepted parity. Spoom's three
 additional findings are the same safe-navigation contract applied to concrete
 source returns that the legacy path leaves untyped. Packwerk's sole remaining
 CFG-only finding is the `T.anything` formatter contract; the earlier
 parser-source-map, `Set[...]`, and anonymous `Class.new` findings were fixed in
-the owned dispatch path. ActiveSupport still needs category-by-category review
-of its generic receiver, framework-hook, and control-flow differences.
+the owned dispatch path. The owned dispatch path also now keeps `Proc.new` on
+the class-object singleton contract, removing the corresponding ActiveSupport
+false positives. ActiveSupport still needs category-by-category review of its
+generic receiver, framework-hook, and control-flow differences.
 
 Transfer coverage is a body-level ownership metric over distinct bodies:
 `unique executable source bodies transferred / executable source bodies`. A
