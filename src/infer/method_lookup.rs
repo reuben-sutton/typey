@@ -177,10 +177,15 @@ impl<'src> Analyzer<'src> {
         visited: &mut BTreeSet<String>,
         candidates: &mut Vec<MethodKey>,
     ) {
-        if !visited.insert(owner.to_owned()) {
+        // Declaration registration preserves an absolute `::` marker on
+        // superclass references so lexical resolution cannot accidentally
+        // bind them to a nested class. Once the reference is being followed,
+        // class-table identities are root-relative, so normalize it here.
+        let owner = self.resolve_global_name(owner.trim_start_matches("::"));
+        if !visited.insert(owner.clone()) {
             return;
         }
-        let info = self.declarations.classes.get(owner);
+        let info = self.declarations.classes.get(&owner);
         if !singleton {
             if let Some(info) = info {
                 for module in info.prepends.iter().rev() {
@@ -189,7 +194,7 @@ impl<'src> Analyzer<'src> {
             }
         }
         candidates.push(MethodKey {
-            owner: Some(owner.to_owned()),
+            owner: Some(owner.clone()),
             name: name.to_owned(),
             singleton,
         });

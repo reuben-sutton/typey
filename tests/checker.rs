@@ -5165,6 +5165,43 @@ fn uses_typed_constants_from_rbis() {
 }
 
 #[test]
+fn resolves_methods_through_absolute_rbi_superclasses() {
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "concurrent_map.rbi",
+        r#"
+class Concurrent::Collection::NonConcurrentMapBackend
+  def [](key); end
+  def []=(key, value); end
+end
+
+class Concurrent::Map < ::Concurrent::Collection::NonConcurrentMapBackend
+end
+"#,
+    ));
+    files.push(WorkspaceFile::new(
+        "absolute_superclass.rb",
+        r#"# typed: true
+
+map = Concurrent::Map.new
+map[:key] = "value"
+T.reveal_type(map[:key])
+"#,
+    ));
+    let baseline = check_workspace(&files, CheckerConfig::default());
+    let cfg = check_workspace(
+        &files,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn infers_builtin_generic_block_return_types() {
     let source = r#"
 class Base
