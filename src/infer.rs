@@ -224,6 +224,7 @@ pub(crate) fn check_with_policies(
     let parsed = prism::parse(bytes);
     let root = parsed.node();
     let hir_program = hir::lower(hir::FileId(0), bytes);
+    let signature_declaration_bodies = hir_program.signature_declaration_body_ids();
     let cfg_graphs = config
         .enable_cfg
         .then(|| Arc::<[cfg::Cfg]>::from(cfg::lower::build_all_for_index(&hir_program)));
@@ -254,6 +255,7 @@ pub(crate) fn check_with_policies(
     let analyzer = Analyzer {
         program,
         config,
+        signature_declaration_bodies,
         declarations: DeclarationState::default(),
         method_resolution_cache: RefCell::new(BTreeMap::new()),
         global_name_cache: RefCell::new(HashMap::new()),
@@ -280,6 +282,7 @@ pub(crate) fn check_with_policies(
         reporting: ReportingState::new(diagnostics.clone()),
         cfg_transfer_bodies: 0,
         cfg_transferred_bodies: BTreeSet::new(),
+        cfg_transferred_bodies_this_pass: BTreeSet::new(),
         cfg_transfer_calls: 0,
         cfg_transfer_assignments: 0,
         cfg_transfer_values: 0,
@@ -302,6 +305,7 @@ fn source_strictness_ranges(source: &str) -> Vec<(usize, usize, Strictness)> {
 struct Analyzer<'src> {
     program: ProgramContext<'src>,
     config: CheckerConfig,
+    signature_declaration_bodies: BTreeSet<hir::BodyId>,
     declarations: DeclarationState,
     method_resolution_cache: RefCell<BTreeMap<MethodKey, Option<MethodKey>>>,
     global_name_cache: RefCell<HashMap<String, String>>,
@@ -328,6 +332,7 @@ struct Analyzer<'src> {
     reporting: ReportingState,
     cfg_transfer_bodies: usize,
     cfg_transferred_bodies: BTreeSet<hir::BodyId>,
+    cfg_transferred_bodies_this_pass: BTreeSet<hir::BodyId>,
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
     cfg_transfer_values: usize,
@@ -364,6 +369,7 @@ pub(super) struct CfgTransferSnapshot {
     reporting: ReportingState,
     cfg_transfer_bodies: usize,
     cfg_transferred_bodies: BTreeSet<hir::BodyId>,
+    cfg_transferred_bodies_this_pass: BTreeSet<hir::BodyId>,
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
     cfg_transfer_values: usize,
@@ -396,6 +402,7 @@ impl<'src> Analyzer<'src> {
             reporting: self.reporting.clone(),
             cfg_transfer_bodies: self.cfg_transfer_bodies,
             cfg_transferred_bodies: self.cfg_transferred_bodies.clone(),
+            cfg_transferred_bodies_this_pass: self.cfg_transferred_bodies_this_pass.clone(),
             cfg_transfer_calls: self.cfg_transfer_calls,
             cfg_transfer_assignments: self.cfg_transfer_assignments,
             cfg_transfer_values: self.cfg_transfer_values,
@@ -427,6 +434,7 @@ impl<'src> Analyzer<'src> {
         self.reporting = snapshot.reporting;
         self.cfg_transfer_bodies = snapshot.cfg_transfer_bodies;
         self.cfg_transferred_bodies = snapshot.cfg_transferred_bodies;
+        self.cfg_transferred_bodies_this_pass = snapshot.cfg_transferred_bodies_this_pass;
         self.cfg_transfer_calls = snapshot.cfg_transfer_calls;
         self.cfg_transfer_assignments = snapshot.cfg_transfer_assignments;
         self.cfg_transfer_values = snapshot.cfg_transfer_values;

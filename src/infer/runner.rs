@@ -113,6 +113,7 @@ impl<'src> Analyzer<'src> {
         self.fixpoint.debug_phase = "seed";
         self.fixpoint.debug_round = 0;
         self.reporting.types.clear();
+        self.cfg_transferred_bodies_this_pass.clear();
         self.fixpoint.debug_nodes = 0;
         if self.config.debug {
             eprintln!("[typey] seeding top-level call sites");
@@ -156,6 +157,7 @@ impl<'src> Analyzer<'src> {
             self.fixpoint.debug_phase = "inference";
             self.fixpoint.debug_round = round;
             self.reporting.types.clear();
+            self.cfg_transferred_bodies_this_pass.clear();
             self.fixpoint.debug_nodes = 0;
             if self.config.debug {
                 eprintln!(
@@ -212,6 +214,7 @@ impl<'src> Analyzer<'src> {
         self.reporting.diagnostics = parse_diagnostics;
         self.seed_calls = false;
         self.reporting.types.clear();
+        self.cfg_transferred_bodies_this_pass.clear();
         self.filter_method_bodies = false;
         self.fixpoint.active_methods.clear();
         self.fixpoint.debug_phase = "final";
@@ -247,7 +250,7 @@ impl<'src> Analyzer<'src> {
                 .then_with(|| left.message.cmp(&right.message))
         });
         if self.config.debug {
-            let signature_bodies = self.program.hir_program.signature_declaration_body_ids();
+            let signature_bodies = &self.signature_declaration_bodies;
             let missing_source_bodies = self
                 .program
                 .hir_program
@@ -353,7 +356,7 @@ impl<'src> Analyzer<'src> {
         let Some(_index) = self.program.cfg_index.as_ref() else {
             return 0;
         };
-        let signature_bodies = self.program.hir_program.signature_declaration_body_ids();
+        let signature_bodies = &self.signature_declaration_bodies;
         self.program
             .hir_program
             .bodies
@@ -369,7 +372,7 @@ impl<'src> Analyzer<'src> {
         let Some(_index) = self.program.cfg_index.as_ref() else {
             return 0;
         };
-        let signature_bodies = self.program.hir_program.signature_declaration_body_ids();
+        let signature_bodies = &self.signature_declaration_bodies;
         self.program
             .hir_program
             .bodies
@@ -382,9 +385,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn is_rbi_body(&self, body: &hir::Body) -> bool {
-        self.rbi_ranges.iter().any(|(start, end)| {
-            body.span.start as usize >= *start && body.span.end as usize <= *end
-        })
+        self.is_rbi_offset(body.span.start as usize)
     }
 
     fn report_inference_gaps(&mut self) {

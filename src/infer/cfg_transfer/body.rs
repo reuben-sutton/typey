@@ -12,7 +12,7 @@ use super::preflight;
 use crate::cfg;
 use crate::hir::{self, Read};
 use crate::types::Type;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub(super) struct BodyTransfer<'analyzer, 'src> {
     pub(super) analyzer: &'analyzer mut Analyzer<'src>,
@@ -647,6 +647,51 @@ impl<'src> Analyzer<'src> {
         direct_failure || self.body_has_known_cfg_failure(body_id, &mut HashSet::new())
     }
 
+    fn transfer_unvisited_inline_blocks(&mut self, graph: &cfg::Cfg, environment: &Environment) {
+        let closures = graph
+            .blocks
+            .iter()
+            .flat_map(|block| block.operations.iter())
+            .filter_map(|operation| match &operation.kind {
+                cfg::OperationKind::Call {
+                    block: Some(cfg::BlockOperand::Inline(closure)),
+                    ..
+                } => Some(*closure),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+
+        for closure_id in closures {
+            let Some((body_id, parameter_count)) = self
+                .program
+                .hir_program
+                .closure(closure_id)
+                .map(|closure| (closure.body, closure.parameters.parameters.len()))
+            else {
+                continue;
+            };
+            let already_transferred = self.cfg_transferred_bodies_this_pass.contains(&body_id);
+            let signature_body = self.signature_declaration_bodies.contains(&body_id);
+            let rbi_body = self
+                .program
+                .hir_program
+                .body(body_id)
+                .is_some_and(|body| self.is_rbi_offset(body.span.start as usize));
+            if already_transferred || signature_body || rbi_body {
+                continue;
+            }
+            let expected = vec![Type::Any; parameter_count];
+            let mut closure_environment = environment.clone();
+            let _ = self.transfer_owned_closure_body(
+                closure_id,
+                &expected,
+                None,
+                None,
+                &mut closure_environment,
+            );
+        }
+    }
+
     pub(in crate::infer) fn eval_cfg_body_owned(
         &mut self,
         body_site: SourceSite,
@@ -983,6 +1028,8 @@ impl<'src> Analyzer<'src> {
         drop(transfer);
         self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);
         self.cfg_transferred_bodies.insert(body_id);
+        self.cfg_transferred_bodies_this_pass.insert(body_id);
+        self.transfer_unvisited_inline_blocks(&graph, &final_environment);
         commit_cfg_global_state(self, &graph, &final_environment);
         clear_cfg_global_state(&graph, &mut final_environment);
         *environment = final_environment;

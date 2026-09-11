@@ -1525,6 +1525,27 @@ fn transfers_nonlocal_block_returns_and_ensure_outcomes() {
 }
 
 #[test]
+fn transfers_inline_callbacks_after_a_nonlocal_return_path() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_unreachable_inline_callback.rb").unwrap();
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+
+    assert!(!baseline.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Expected `String`, but found `Integer`")));
+    assert!(cfg.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Expected `String`, but found `Integer`")));
+}
+
+#[test]
 fn keeps_the_normal_call_type_separate_from_nonlocal_block_returns() {
     check_fixture("tests/fixtures/nonlocal_return_keeps_call_normal_type.rb");
 }
