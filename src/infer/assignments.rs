@@ -236,10 +236,23 @@ impl<'src> Analyzer<'src> {
             hir::AssignOperator::Set => {
                 let actual = self.eval_node(&value_node, environment).normal_type();
                 let type_ = self.apply_inline_assertion_in_environment(node, actual, environment);
+                let block_parameter_source = value_node
+                    .as_local_variable_read_node()
+                    .map(|local| prism::constant_name(local.name()));
+                let block_alias = block_parameter_source
+                    .as_deref()
+                    .is_some_and(|source| environment.is_block_parameter(source));
                 if let Some(alias) = self.predicate_alias_for_value(&value_node, environment) {
                     environment.bind_predicate_alias(name.clone(), type_.clone(), alias);
                 } else {
-                    environment.bind(name.clone(), type_.clone());
+                    environment.bind_block_alias(
+                        name.clone(),
+                        type_.clone(),
+                        block_parameter_source.as_deref(),
+                    );
+                }
+                if block_alias {
+                    environment.mark_block_parameter_alias(&name);
                 }
                 if value_node
                     .as_array_node()

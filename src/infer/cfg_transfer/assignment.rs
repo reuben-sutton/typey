@@ -88,6 +88,22 @@ fn transfer_write_inner<'src>(
                 .hir_program
                 .local_name(*local)
                 .map_or_else(String::new, |name| name.as_str().to_owned());
+            let block_parameter_source = expression
+                .and_then(|expression| analyzer.program.hir_program.expression(expression))
+                .and_then(|expression| match &expression.kind {
+                    hir::ExprKind::Assign { value, .. } => {
+                        analyzer.program.hir_program.expression(*value)
+                    }
+                    _ => None,
+                })
+                .and_then(|expression| match &expression.kind {
+                    hir::ExprKind::Read(hir::Read::Local(local)) => analyzer
+                        .program
+                        .hir_program
+                        .local_name(*local)
+                        .map(|name| name.as_str().to_owned()),
+                    _ => None,
+                });
             let type_ = if apply_inline_assertion {
                 analyzer.apply_inline_assertion_in_environment_at(site, actual, environment)
             } else {
@@ -98,7 +114,7 @@ fn transfer_write_inner<'src>(
             } else {
                 type_
             };
-            environment.bind(&name, type_.clone());
+            environment.bind_block_alias(&name, type_.clone(), block_parameter_source.as_deref());
             let empty_array = expression
                 .and_then(|id| analyzer.program.hir_program.expression(id))
                 .and_then(|expression| match &expression.kind {

@@ -126,6 +126,26 @@ impl Environment {
         self.block_parameters.insert(name);
     }
 
+    pub(super) fn bind_block_alias(
+        &mut self,
+        name: impl Into<String>,
+        type_: Type,
+        source: Option<&str>,
+    ) {
+        let name = name.into();
+        let is_block_alias = source.is_some_and(|source| self.is_block_parameter(source));
+        self.bind(name.clone(), type_);
+        if is_block_alias {
+            self.block_parameters.insert(name);
+        }
+    }
+
+    pub(super) fn mark_block_parameter_alias(&mut self, name: &str) {
+        if self.locals.contains_key(name) {
+            self.block_parameters.insert(name.to_owned());
+        }
+    }
+
     pub(super) fn is_block_parameter(&self, name: &str) -> bool {
         self.block_parameters.contains(name)
     }

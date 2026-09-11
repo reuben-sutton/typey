@@ -7022,6 +7022,31 @@ fn publishes_nested_forwarded_block_returns_through_owned_cfg() {
 }
 
 #[test]
+fn preserves_forwarded_block_contracts_through_local_aliases() {
+    let path = "tests/fixtures/cfg_forwarded_block_alias.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(baseline.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Note
+            && diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+    }));
+    assert!(cfg.types.iter().any(|inferred| {
+        inferred.start == 127 && inferred.type_ == Type::Array(Box::new(Type::String))
+    }));
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn publishes_forwarded_symbol_block_returns_through_owned_cfg() {
     let path = "tests/fixtures/cfg_forwarded_symbol_block.rb";
     let source = std::fs::read_to_string(path).expect("fixture");

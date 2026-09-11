@@ -402,12 +402,25 @@ impl<'src> Analyzer<'src> {
                     )?;
                     return Some(Eval::value(result));
                 }
-                let result = values
-                    .get(value.0 as usize)
-                    .and_then(Option::as_ref)
-                    .and_then(optional_proc_type)
+                let actual = values.get(value.0 as usize).cloned().flatten()?;
+                let result = optional_proc_type(&actual)
+                    .filter(|block| Self::passed_block_signature(block).is_some())
                     .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()))
-                    .map(Eval::value);
+                    .map(Eval::value)
+                    .or_else(|| {
+                        let name = self.cfg_passed_block_local_name(input)?;
+                        let expected_parameters = expected
+                            .as_ref()
+                            .and_then(|expected| proc_parts(expected))
+                            .map(|(parameters, _)| parameters.to_vec())?;
+                        let signature = self.forwarded_block_signature(
+                            &name,
+                            &actual,
+                            &expected_parameters,
+                            environment,
+                        )?;
+                        proc_parts(&signature).map(|(_, result)| Eval::value(result.clone()))
+                    });
                 if let Some(block_result) = result.as_ref().map(Self::block_value_type) {
                     let provisional = self.cfg_passed_block_is_provisional(input, environment);
                     self.observe_cfg_block_return(&key, &block_result, provisional);

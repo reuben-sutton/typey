@@ -452,7 +452,7 @@ impl<'src> Analyzer<'src> {
                 .declarations
                 .methods
                 .get_mut(&key)
-                .is_some_and(|state| state.observe_block_return(&block_type))
+                .is_some_and(|state| state.observe_forwarded_block_return(&block_type))
         {
             self.fixpoint.changed_methods.insert(key);
         }
