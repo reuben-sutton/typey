@@ -460,9 +460,10 @@ are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-11, the implementation is therefore in the final parity phase,
 not at the exit condition. The checker gate is 474/474. The latest complete
-conformance gate is 266/266, with the two newly added CFG fixtures also
-passing their targeted conformance tests.
-The preceding upstream smoke run was green, but the differential
+conformance gate is 268/268. The upstream smoke gate was started but not
+completed in the latest aggregate run because its 37-fixture sequential test
+continued without a terminal result and was stopped.
+The differential
 gate is not yet green: the three repositories above still have classified
 legacy/CFG differences. The CFG transfer surface has zero measured fallbacks
 on all three repository checks. What remains is resolving those differential
