@@ -1085,6 +1085,7 @@ impl<'program> Builder<'program> {
             falsy: else_block,
             join,
             loop_condition: false,
+            loop_body: None,
         });
 
         let then_flow = self.lower_expr(then_body, then_block);
@@ -1658,6 +1659,7 @@ impl<'program> Builder<'program> {
                         falsy: false_target,
                         join,
                         loop_condition: false,
+                        loop_body: None,
                     });
                     test = false_target;
                 }
@@ -1800,6 +1802,7 @@ impl<'program> Builder<'program> {
                 falsy,
                 join: exit,
                 loop_condition: true,
+                loop_body: Some(body),
             });
             match loop_expr.kind {
                 LoopKind::Until => {

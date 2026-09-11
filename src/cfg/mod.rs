@@ -79,6 +79,10 @@ pub struct Conditional {
     /// first iteration, even when ordinary branch narrowing can prove the
     /// condition itself truthy.
     pub loop_condition: bool,
+    /// The body target for a loop condition. Unlike ordinary conditionals,
+    /// the loop's `then_body` expression is not necessarily the truthy
+    /// branch (`until` enters the body on false).
+    pub loop_body: Option<BlockId>,
 }
 
 impl Cfg {

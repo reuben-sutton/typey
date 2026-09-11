@@ -33,6 +33,7 @@ pub(super) struct BodyTransfer<'analyzer, 'src> {
     unreachable_probes: Vec<UnreachableProbe>,
     seen_unreachable_probes: HashSet<(cfg::BlockId, cfg::BlockId)>,
     branch_results: HashMap<cfg::BlockId, BranchResult>,
+    closure_environments: HashMap<hir::ClosureId, Environment>,
 }
 
 #[derive(Clone)]
@@ -354,7 +355,15 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
                         conditional.truthy == branch.truthy && conditional.falsy == branch.falsy
                     })
                     .and_then(|conditional| {
-                        if !branch.truthy_reachable {
+                        if let Some(loop_body) = conditional.loop_body {
+                            if !branch.truthy_reachable && conditional.truthy == loop_body {
+                                Some(conditional.then_body)
+                            } else if !branch.falsy_reachable && conditional.falsy == loop_body {
+                                Some(conditional.then_body)
+                            } else {
+                                None
+                            }
+                        } else if !branch.truthy_reachable {
                             Some(conditional.then_body)
                         } else {
                             conditional.else_body
@@ -658,7 +667,12 @@ impl<'src> Analyzer<'src> {
         direct_failure || self.body_has_known_cfg_failure(body_id, &mut HashSet::new())
     }
 
-    fn transfer_unvisited_inline_blocks(&mut self, graph: &cfg::Cfg, environment: &Environment) {
+    fn transfer_unvisited_inline_blocks(
+        &mut self,
+        graph: &cfg::Cfg,
+        environment: &Environment,
+        closure_environments: &HashMap<hir::ClosureId, Environment>,
+    ) {
         let closures = graph
             .blocks
             .iter()
@@ -692,7 +706,10 @@ impl<'src> Analyzer<'src> {
                 continue;
             }
             let expected = vec![Type::Any; parameter_count];
-            let mut closure_environment = environment.clone();
+            let mut closure_environment = closure_environments
+                .get(&closure_id)
+                .cloned()
+                .unwrap_or_else(|| environment.clone());
             let _ = self.transfer_owned_closure_body(
                 closure_id,
                 &expected,
@@ -893,6 +910,7 @@ impl<'src> Analyzer<'src> {
             unreachable_probes: Vec::new(),
             seen_unreachable_probes: HashSet::new(),
             branch_results: HashMap::new(),
+            closure_environments: HashMap::new(),
         };
         // Dead statements are intentionally not lowered into executable CFG
         // blocks. Report their source diagnostics from the owned metadata
@@ -1035,12 +1053,13 @@ impl<'src> Analyzer<'src> {
         // publish the temporary receiver context to the enclosing method or
         // caller environment.
         final_environment.self_type = original_self_type;
+        let closure_environments = std::mem::take(&mut transfer.closure_environments);
         drop(worklist);
         drop(transfer);
         self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);
         self.cfg_transferred_bodies.insert(body_id);
         self.cfg_transferred_bodies_this_pass.insert(body_id);
-        self.transfer_unvisited_inline_blocks(&graph, &final_environment);
+        self.transfer_unvisited_inline_blocks(&graph, &final_environment, &closure_environments);
         commit_cfg_global_state(self, &graph, &final_environment);
         clear_cfg_global_state(&graph, &mut final_environment);
         *environment = final_environment;
@@ -1292,11 +1311,22 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         .ok_or_else(|| format!("unsupported for target at {:?}", operation.span))?
                     }
                     cfg::OperationKind::Call { .. } => {
-                        let mut result = super::calls::transfer_call(
-                            self.analyzer,
+                        let call_input =
                             OwnedCallInput::from_operation(operation).ok_or_else(|| {
                                 format!("missing owned call input at {:?}", operation.span)
-                            })?,
+                            })?;
+                        if let Some(cfg::BlockOperand::Inline(closure)) = call_input.block.as_ref()
+                        {
+                            self.closure_environments
+                                .entry(*closure)
+                                .and_modify(|captured| {
+                                    *captured = captured.join(&next.environment);
+                                })
+                                .or_insert_with(|| next.environment.clone());
+                        }
+                        let mut result = super::calls::transfer_call(
+                            self.analyzer,
+                            call_input,
                             &next.values,
                             &self.fixed_array_elements,
                             &mut next.hash_shapes,

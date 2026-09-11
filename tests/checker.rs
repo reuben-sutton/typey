@@ -904,6 +904,19 @@ fn keeps_open_inferred_parameters_reachable_in_cfg() {
 }
 
 #[test]
+fn keeps_until_loop_bodies_reachable_in_cfg() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_until_loop_flow.rb").expect("fixture");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_star_forwarding_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_star_forwarding.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());
