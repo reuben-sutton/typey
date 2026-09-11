@@ -38,13 +38,14 @@ back as a whole.
 
 The broad transfer surface is complete enough to exercise real repositories.
 The release runs below are the current coverage and parity snapshot. Body
-counts and coverage denominators include source bodies only; RBI bodies are
-reported separately as transfer telemetry.
+counts and coverage denominators include executable source bodies only;
+signature declaration bodies and RBI bodies are reported separately as
+transfer telemetry.
 
-| Check | Source HIR bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
+| Check | Executable source HIR bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Spoom | 2,896 | 2,895 | 99.97% | 1 | 9,200 | 34,746 | 6 |
-| Packwerk | 1,226 | 1,219 | 99.43% | 1 | 9,540 | 39,796 | 23 visible |
+| Packwerk | 1,220 | 1,219 | 99.92% | 1 | 9,540 | 39,796 | 23 visible |
 | Rails ActiveSupport | 4,532 | 4,529 | 99.93% | 1 | 17,191 | 51,087 | 672 |
 
 The current release differential snapshot is not yet exact parity:
@@ -64,16 +65,17 @@ the owned dispatch path. ActiveSupport still needs category-by-category review
 of its generic receiver, framework-hook, and control-flow differences.
 
 Transfer coverage is a body-level ownership metric over distinct bodies:
-`unique source bodies transferred / compiled source bodies`. A body counts once
-even if fixpoint inference visits it repeatedly. For example, Spoom's 99.97%
-means that 2,895 of its 2,896 source bodies completed through the owned CFG
-transfer path. It does not mean that 99.97% of lines, sends, types, or
-diagnostics are covered, and a single transferred body can contain many calls.
-RBI bodies are excluded from the application coverage denominator and are
-reported separately. Transfer visits are retained as performance/convergence
-telemetry, not as coverage. Bodies outside the attempted owned-transfer set
-are not counted as fallbacks; the fallback counters only describe owned bodies
-that were entered and then had to return to the legacy evaluator.
+`unique executable source bodies transferred / executable source bodies`. A
+body counts once even if fixpoint inference visits it repeatedly. For example,
+Spoom's 99.97% means that 2,895 of its 2,896 executable source bodies
+completed through the owned CFG transfer path. It does not mean that 99.97% of
+lines, sends, types, or diagnostics are covered, and a single transferred body
+can contain many calls. Signature declaration bodies and RBI bodies are
+excluded from the application coverage denominator and reported separately.
+Transfer visits are retained as performance/convergence telemetry, not as
+coverage. Bodies outside the attempted owned-transfer set are not counted as
+fallbacks; the fallback counters only describe owned bodies that were entered
+and then had to return to the legacy evaluator.
 
 The fallback columns are `unsupported_operation / unsupported_edge /
 legacy_bridge`; all three repository runs report `0 / 0 / 0`, and all report
@@ -392,8 +394,10 @@ bridges. It reports 6 diagnostics in the current checkout. The current CFG
 analysis completes in 4.01 seconds internally (5.00 seconds including the CLI
 repository wrapper).
 
-The latest release Packwerk CFG run has 1,226 source HIR bodies and transferred
-1,219 distinct source bodies plus one RBI body. It made 9,540 body visits and
+The latest release Packwerk CFG run has 1,220 executable source HIR bodies and
+transferred 1,219 distinct source bodies plus one RBI body. Six `sig` declaration
+bodies are reported separately and excluded from application coverage. It made
+9,540 body visits and
 39,796 calls with zero unsupported-operation,
 edge, or legacy-bridge fallbacks. It reports 23 visible diagnostics in the
 current checkout. The `YAML = Psych` standard-library alias remains modeled
@@ -416,13 +420,10 @@ edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
 
-The debug coverage report also identifies six Packwerk source bodies that are
-`sig` declaration closures and two ActiveSupport callbacks that occur after a
-non-local-return path in `Rotator#read_message`. They are not RBI bodies and
-are therefore not removed from the source denominator; neither is an owned CFG
-fallback. The former needs an explicit declaration-body coverage category, and
-the latter needs the callback/control-flow path to be transferred before the
-source coverage can be considered complete.
+The debug coverage report also identifies two ActiveSupport callbacks that occur
+after a non-local-return path in `Rotator#read_message`. They are not RBI bodies
+and are not owned CFG fallbacks; the callback/control-flow path needs to be
+transferred before the source coverage can be considered complete.
 
 In the same individual release/debug runs, the legacy path completed in 4.45s
 for Spoom, 5.15s for Packwerk, and 4.49s for ActiveSupport. The CFG path was

@@ -82,10 +82,9 @@ impl<'src> Analyzer<'src> {
                 self.declarations.type_aliases.len()
             );
             eprintln!(
-                "[typey] CFG body count: {} source HIR bodies ({} RBI bodies excluded from application count)",
-                self.program.cfg_index.as_ref().map_or(0, |index| {
-                    index.body_count_excluding_ranges(&self.rbi_ranges)
-                }),
+                "[typey] CFG body count: {} executable source HIR bodies ({} signature declaration bodies, {} RBI bodies excluded from application count)",
+                self.cfg_application_body_count(),
+                self.cfg_signature_body_count(),
                 self.program
                     .cfg_index
                     .as_ref()
@@ -248,6 +247,7 @@ impl<'src> Analyzer<'src> {
                 .then_with(|| left.message.cmp(&right.message))
         });
         if self.config.debug {
+            let signature_bodies = self.program.hir_program.signature_declaration_body_ids();
             let missing_source_bodies = self
                 .program
                 .hir_program
@@ -256,11 +256,28 @@ impl<'src> Analyzer<'src> {
                 .enumerate()
                 .filter_map(|(index, body)| {
                     let body_id = hir::BodyId(index as u32);
-                    (!self.is_rbi_offset(body.span.start as usize)
+                    (!signature_bodies.contains(&body_id)
+                        && !self.is_rbi_offset(body.span.start as usize)
                         && !self.cfg_transferred_bodies.contains(&body_id))
                     .then_some((body_id, body))
                 })
                 .collect::<Vec<_>>();
+            let signature_source_bodies = self
+                .program
+                .hir_program
+                .bodies
+                .iter()
+                .enumerate()
+                .filter(|(index, body)| {
+                    signature_bodies.contains(&hir::BodyId(*index as u32))
+                        && !self.is_rbi_body(body)
+                })
+                .count();
+            if signature_source_bodies > 0 {
+                eprintln!(
+                    "[typey] CFG signature declaration bodies excluded from application coverage: {signature_source_bodies}"
+                );
+            }
             if !missing_source_bodies.is_empty() {
                 eprintln!(
                     "[typey] CFG source bodies not transferred: {}",
@@ -296,7 +313,10 @@ impl<'src> Analyzer<'src> {
                         self.program
                             .hir_program
                             .body(**body_id)
-                            .is_some_and(|body| !self.is_rbi_offset(body.span.start as usize))
+                            .is_some_and(|body| {
+                                !signature_bodies.contains(body_id)
+                                    && !self.is_rbi_offset(body.span.start as usize)
+                            })
                     })
                     .count(),
                 self.cfg_transferred_bodies
@@ -327,6 +347,44 @@ impl<'src> Analyzer<'src> {
             diagnostics: self.reporting.diagnostics,
             types,
         }
+    }
+
+    fn cfg_signature_body_count(&self) -> usize {
+        let Some(_index) = self.program.cfg_index.as_ref() else {
+            return 0;
+        };
+        let signature_bodies = self.program.hir_program.signature_declaration_body_ids();
+        self.program
+            .hir_program
+            .bodies
+            .iter()
+            .enumerate()
+            .filter(|(index, body)| {
+                signature_bodies.contains(&hir::BodyId(*index as u32)) && !self.is_rbi_body(body)
+            })
+            .count()
+    }
+
+    fn cfg_application_body_count(&self) -> usize {
+        let Some(_index) = self.program.cfg_index.as_ref() else {
+            return 0;
+        };
+        let signature_bodies = self.program.hir_program.signature_declaration_body_ids();
+        self.program
+            .hir_program
+            .bodies
+            .iter()
+            .enumerate()
+            .filter(|(index, body)| {
+                !signature_bodies.contains(&hir::BodyId(*index as u32)) && !self.is_rbi_body(body)
+            })
+            .count()
+    }
+
+    fn is_rbi_body(&self, body: &hir::Body) -> bool {
+        self.rbi_ranges.iter().any(|(start, end)| {
+            body.span.start as usize >= *start && body.span.end as usize <= *end
+        })
     }
 
     fn report_inference_gaps(&mut self) {

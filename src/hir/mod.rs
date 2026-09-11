@@ -5,6 +5,7 @@
 //! values. Source locations are represented by [`Span`] rather than by a
 //! parser-backed location, so a program can outlive the Prism parse tree.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 pub mod lower;
@@ -534,5 +535,30 @@ impl Program {
     #[must_use]
     pub fn local_name(&self, id: LocalId) -> Option<&Name> {
         self.locals.get(id.0 as usize)
+    }
+
+    /// Return bodies belonging to Sorbet's signature declaration blocks.
+    ///
+    /// These blocks are parsed as ordinary Ruby closures, but their contents
+    /// describe a method contract and are consumed during declaration
+    /// registration rather than executed as application callbacks. Keeping
+    /// the classification in HIR makes coverage accounting independent of a
+    /// particular parser or source-directory convention.
+    #[must_use]
+    pub fn signature_declaration_body_ids(&self) -> BTreeSet<BodyId> {
+        self.expressions
+            .iter()
+            .filter_map(|expression| match &expression.kind {
+                ExprKind::Call(call) if call.name.as_str() == "sig" => {
+                    match call.block.as_ref()? {
+                        BlockArgument::Inline(closure) => {
+                            self.closure(*closure).map(|closure| closure.body)
+                        }
+                        BlockArgument::Passed(_) => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect()
     }
 }

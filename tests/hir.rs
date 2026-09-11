@@ -128,6 +128,20 @@ fn lowers_inline_blocks_as_owned_closures() {
 }
 
 #[test]
+fn classifies_signature_blocks_as_non_runtime_bodies() {
+    let program =
+        expressions("sig { params(value: Integer).returns(String) }\ndef build\n  value\nend\n");
+    let signature_bodies = program.signature_declaration_body_ids();
+
+    assert_eq!(signature_bodies.len(), 1);
+    let body_id = *signature_bodies.iter().next().expect("signature body");
+    assert!(matches!(
+        program.body(body_id).map(|body| &body.owner),
+        Some(typey::hir::BodyOwner::Closure(_))
+    ));
+}
+
+#[test]
 fn lowers_else_statement_bodies_as_owned_hir() {
     let program = expressions("if flag\n  left\nelse\n  \"missing\"\nend");
     let if_expression = program
