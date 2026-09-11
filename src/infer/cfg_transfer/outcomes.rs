@@ -51,8 +51,8 @@ pub(super) fn finish_call(
     // Keep ordinary callback calls normally reachable while retaining their
     // abrupt outcomes below; a terminating callee is represented by its own
     // `type_`/flow instead.
-    let callback_must_run = !deferred_callback
-        && analyzer.cfg_call_guarantees_yield(input, receiver_type, environment);
+    let callback_must_run =
+        !deferred_callback && analyzer.cfg_call_guarantees_yield(input, receiver_type, environment);
     let has_normal_path = call_can_return
         && (!callback_must_run
             || block_result
