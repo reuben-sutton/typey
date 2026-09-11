@@ -82,7 +82,7 @@ impl<'src> Analyzer<'src> {
                 self.declarations.type_aliases.len()
             );
             eprintln!(
-                "[typey] compiled {} source HIR bodies into CFG ({} RBI bodies excluded, {} total)",
+                "[typey] CFG body count: {} source HIR bodies ({} RBI bodies excluded from application count)",
                 self.program.cfg_index.as_ref().map_or(0, |index| {
                     index.body_count_excluding_ranges(&self.rbi_ranges)
                 }),

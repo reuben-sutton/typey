@@ -37,15 +37,15 @@ back as a whole.
 ## Current status (2026-09-10)
 
 The broad transfer surface is complete enough to exercise real repositories.
-The release runs below are the current coverage and parity snapshot. The
-compiled-body column includes RBI bodies for inventory, but the application
-coverage denominator includes source bodies only.
+The release runs below are the current coverage and parity snapshot. Body
+counts and coverage denominators include source bodies only; RBI bodies are
+reported separately as transfer telemetry.
 
-| Check | Compiled HIR bodies | Source bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Spoom | 66,178 (2,896 source / 63,282 RBI) | 2,896 | 2,895 | 99.97% | 1 | 9,200 | 34,746 | 6 |
-| Packwerk | 83,314 (1,226 source / 82,088 RBI) | 1,226 | 1,219 | 99.43% | 1 | 9,540 | 39,796 | 23 visible |
-| Rails ActiveSupport | 30,265 (4,532 source / 25,733 RBI) | 4,532 | 4,529 | 99.93% | 1 | 17,169 | 51,039 | 672 |
+| Check | Source HIR bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Spoom | 2,896 | 2,895 | 99.97% | 1 | 9,200 | 34,746 | 6 |
+| Packwerk | 1,226 | 1,219 | 99.43% | 1 | 9,540 | 39,796 | 23 visible |
+| Rails ActiveSupport | 4,532 | 4,529 | 99.93% | 1 | 17,169 | 51,039 | 672 |
 
 The current release differential snapshot is not yet exact parity:
 
@@ -383,17 +383,17 @@ The first modularization steps are now in place:
   and the combined fixture workload converges in four rounds without a round
   limit.
 
-The latest release Spoom CFG run compiled 66,178 HIR bodies, of which 2,896
-are source bodies, and transferred 2,895 distinct source bodies plus one RBI
-body. It made 9,200 body visits and 34,746 calls with zero
+The latest release Spoom CFG run has 2,896 source HIR bodies and transferred
+2,895 distinct source bodies plus one RBI body. It made 9,200 body visits and
+34,746 calls with zero
 unsupported-operation fallbacks, zero unsupported edges, and zero legacy
 bridges. It reports 6 diagnostics in the current checkout. The current CFG
 analysis completes in 4.01 seconds internally (5.00 seconds including the CLI
 repository wrapper).
 
-The latest release Packwerk CFG run compiled 83,314 HIR bodies, of which 1,226
-are source bodies, and transferred 1,219 distinct source bodies plus one RBI
-body. It made 9,540 body visits and 39,796 calls with zero unsupported-operation,
+The latest release Packwerk CFG run has 1,226 source HIR bodies and transferred
+1,219 distinct source bodies plus one RBI body. It made 9,540 body visits and
+39,796 calls with zero unsupported-operation,
 edge, or legacy-bridge fallbacks. It reports 23 visible diagnostics in the
 current checkout. The `YAML = Psych` standard-library alias remains modeled
 through the owned declaration path; runtime `Set[...]` now uses its singleton
@@ -401,8 +401,8 @@ RBI contract, and anonymous `Class.new` blocks retain their included methods.
 The CFG analysis completes in about 5.57 seconds internally (6.63 seconds
 including the CLI repository wrapper).
 
-ActiveSupport is the current large-component boundary. The current CFG run
-compiled 30,265 HIR bodies, of which 4,532 are source bodies. After separating
+ActiveSupport is the current large-component boundary. The current CFG run has
+4,532 source HIR bodies. After separating
 ordinary class-body self types from dynamic missing-method dispatch, preserving
 hash shape at recursive widening points, and distinguishing generic type
 applications from runtime `Constant[]` sends, it transfers 4,529 distinct
