@@ -89,11 +89,7 @@ impl<'src> Analyzer<'src> {
                 self.program
                     .cfg_index
                     .as_ref()
-                    .map_or(0, |index| index.body_count_in_ranges(&self.rbi_ranges)),
-                self.program
-                    .cfg_index
-                    .as_ref()
-                    .map_or(0, cfg::CfgIndex::body_count)
+                    .map_or(0, |index| index.body_count_in_ranges(&self.rbi_ranges))
             );
             eprintln!(
                 "[typey] CFG unsupported handoffs: {}",
