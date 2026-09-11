@@ -509,7 +509,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn ivar_type_with_initialization(&self, key: &IvarKey, type_: Type) -> Type {
-        if self.initialized_ivars.contains(key) {
+        if key.singleton || self.initialized_ivars.contains(key) {
             type_
         } else {
             type_.join(&Type::Nil)
