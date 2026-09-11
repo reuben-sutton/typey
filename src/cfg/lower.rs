@@ -918,52 +918,54 @@ impl<'program> Builder<'program> {
         block: BlockId,
         argument: Argument,
     ) -> Option<(BlockId, ArgumentOperand)> {
-        let operand = match argument {
-            Argument::Forwarded => return Some((block, ArgumentOperand::Forwarded)),
+        match argument {
+            Argument::Forwarded => Some((block, ArgumentOperand::Forwarded)),
             Argument::Positional(value) => {
                 let flow = self.lower_expr(value, block);
                 if !flow.reachable {
                     return None;
                 }
-                return Some((
+                Some((
                     flow.block,
                     ArgumentOperand::Positional(flow.value.expect("argument produces a value")),
-                ));
+                ))
             }
             Argument::Splat(value) => {
                 let flow = self.lower_expr(value, block);
                 if !flow.reachable {
                     return None;
                 }
-                ArgumentOperand::Splat(flow.value.expect("splat produces a value"))
+                Some((
+                    flow.block,
+                    ArgumentOperand::Splat(flow.value.expect("splat produces a value")),
+                ))
             }
             Argument::Keyword { name, value, .. } => {
                 let flow = self.lower_expr(value, block);
                 if !flow.reachable {
                     return None;
                 }
-                return Some((
+                Some((
                     flow.block,
                     ArgumentOperand::Keyword {
                         name,
                         value: flow.value.expect("keyword produces a value"),
                     },
-                ));
+                ))
             }
             Argument::KeywordSplat(value) => {
                 let flow = self.lower_expr(value, block);
                 if !flow.reachable {
                     return None;
                 }
-                return Some((
+                Some((
                     flow.block,
                     ArgumentOperand::KeywordSplat(
                         flow.value.expect("keyword splat produces a value"),
                     ),
-                ));
+                ))
             }
-        };
-        Some((block, operand))
+        }
     }
 
     fn lower_array(

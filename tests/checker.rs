@@ -842,6 +842,22 @@ fn advances_after_logical_keyword_splat_values_in_owned_cfg() {
 }
 
 #[test]
+fn advances_after_logical_positional_splat_values_in_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_positional_splat_logical.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_star_forwarding_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_star_forwarding.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());
