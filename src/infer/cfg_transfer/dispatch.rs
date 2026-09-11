@@ -497,27 +497,34 @@ pub(super) fn transfer_receiver_call(
                 }
             }
         }
-        if let Type::Named(owner, type_arguments) = receiver {
-            if !type_arguments.is_empty()
-                && analyzer
-                    .declarations
-                    .classes
-                    .get(owner)
-                    .is_some_and(|info| !info.type_members.is_empty())
-            {
-                analyzer.infer_initializer_call_at(
-                    input.site,
-                    owner,
-                    arguments,
-                    input.block.is_some(),
-                    environment,
-                );
-                return Ok(ReceiverTransfer {
-                    type_: receiver.clone(),
-                    block_result: None,
-                    untyped_origin: UntypedOrigin::InferredMethod,
-                    missing_method: false,
-                });
+        // A generic instance such as `Box[String]` can use its own type
+        // arguments when constructing a value. Class objects such as
+        // `Class[Proc]` also have a named type argument, but must continue to
+        // ordinary singleton dispatch so `Proc.new` returns `Proc` rather
+        // than the class-object type itself.
+        if Analyzer::class_object_instance_type(receiver).is_none() {
+            if let Type::Named(owner, type_arguments) = receiver {
+                if !type_arguments.is_empty()
+                    && analyzer
+                        .declarations
+                        .classes
+                        .get(owner)
+                        .is_some_and(|info| !info.type_members.is_empty())
+                {
+                    analyzer.infer_initializer_call_at(
+                        input.site,
+                        owner,
+                        arguments,
+                        input.block.is_some(),
+                        environment,
+                    );
+                    return Ok(ReceiverTransfer {
+                        type_: receiver.clone(),
+                        block_result: None,
+                        untyped_origin: UntypedOrigin::InferredMethod,
+                        missing_method: false,
+                    });
+                }
             }
         }
         if let Some(owner) = Analyzer::named_type_name(receiver)

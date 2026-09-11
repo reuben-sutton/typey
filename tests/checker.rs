@@ -506,6 +506,42 @@ end
 }
 
 #[test]
+fn preserves_proc_constructor_instance_dispatch_through_owned_cfg() {
+    let path = "tests/fixtures/cfg_proc_constructor.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(path, source));
+
+    let baseline = check_workspace(&files, CheckerConfig::default());
+    let cfg = check_workspace(
+        &files,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    for result in [&baseline, &cfg] {
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.path == Path::new(path)
+                    && diagnostic.diagnostic.severity == Severity::Error
+            })
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected Proc diagnostics: {errors:?}");
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == Path::new(path)
+                && diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Revealed type: `Proc`")
+        }));
+    }
+}
+
+#[test]
 fn transfers_union_enumerable_predicates_through_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_union_enumerable_predicates.rb")
         .expect("fixture");
