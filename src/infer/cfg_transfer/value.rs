@@ -502,7 +502,25 @@ impl<'src> Analyzer<'src> {
             return;
         };
         if environment.is_open(name) {
-            environment.bind(name.to_owned(), Type::Any);
+            let current = environment.get(name);
+            let narrowed = if truthy {
+                current.meet(&current.truthy_part())
+            } else {
+                current.meet(&current.falsy_part())
+            };
+            // An observed concrete type is still useful on a branch that
+            // would be impossible for that observation. Open inference only
+            // needs a gradual widening when a truthy branch has no observed
+            // inhabitant (for example an observed `nil` parameter used as a
+            // future, non-nil argument).
+            let branch_type = if truthy && narrowed.is_never() {
+                Type::Any
+            } else if narrowed.is_never() {
+                current
+            } else {
+                narrowed
+            };
+            environment.bind(name.to_owned(), branch_type);
             environment.set_known_truthiness(name.to_owned(), truthy);
             return;
         }
