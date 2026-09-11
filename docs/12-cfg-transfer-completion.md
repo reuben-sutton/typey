@@ -19,10 +19,9 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 23 CFG tests, 12 HIR tests, and 467 checker
-tests. The local conformance suite currently contains 261 fixtures; the latest
-full run passed all 260 before the transactional-fallback fixture was added,
-and that fixture's focused conformance run is green. The suite reloads the
+The current local gates include 23 CFG tests, 13 HIR tests, and 469 checker
+tests. The local conformance suite currently contains 258 Ruby/RBI fixtures
+and 263 tests; the latest full run passed all 263. The suite reloads the
 bundled RBI set per fixture and is correspondingly expensive. A separate
 37-fixture upstream smoke suite was green in the preceding run.
 The CFG path is still opt-in because the transfer host retains semantic
@@ -44,9 +43,9 @@ transfer telemetry.
 
 | Check | Executable source HIR bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Spoom | 2,896 | 2,895 | 99.97% | 1 | 9,200 | 34,746 | 6 |
-| Packwerk | 1,220 | 1,219 | 99.92% | 1 | 9,540 | 39,796 | 23 visible |
-| Rails ActiveSupport | 4,532 | 4,529 | 99.93% | 1 | 17,191 | 51,087 | 672 |
+| Spoom | 2,895 | 2,895 | 100.00% | 1 | 9,200 | 34,746 | 6 |
+| Packwerk | 1,219 | 1,219 | 100.00% | 1 | 9,541 | 39,797 | 23 visible |
+| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,197 | 51,096 | 672 |
 
 The current release differential snapshot is not yet exact parity:
 
@@ -67,8 +66,8 @@ of its generic receiver, framework-hook, and control-flow differences.
 Transfer coverage is a body-level ownership metric over distinct bodies:
 `unique executable source bodies transferred / executable source bodies`. A
 body counts once even if fixpoint inference visits it repeatedly. For example,
-Spoom's 99.97% means that 2,895 of its 2,896 executable source bodies
-completed through the owned CFG transfer path. It does not mean that 99.97% of
+Spoom's 100.00% means that all 2,895 of its executable source bodies
+completed through the owned CFG transfer path. It does not mean that 100.00% of
 lines, sends, types, or diagnostics are covered, and a single transferred body
 can contain many calls. Signature declaration bodies and RBI bodies are
 excluded from the application coverage denominator and reported separately.
@@ -86,8 +85,7 @@ call. The successful-body result now has an explicit rollback boundary for
 late, context-sensitive transfer failures; the regression fixture proves that
 reports, types, and analyzer state are restored before legacy evaluation.
 Remaining implementation work is to finish the remaining passed/forwarded-block
-binding cases, account for source callbacks reached only through non-local
-control flow, and remove the parser-facing legacy adapters before making CFG
+binding cases and remove the parser-facing legacy adapters before making CFG
 the default.
 
 The next step is therefore not another scheduler abstraction. It is to make
@@ -386,53 +384,54 @@ The first modularization steps are now in place:
   and the combined fixture workload converges in four rounds without a round
   limit.
 
-The latest release Spoom CFG run has 2,896 source HIR bodies and transferred
-2,895 distinct source bodies plus one RBI body. It made 9,200 body visits and
+The latest release Spoom CFG run has 2,895 executable source HIR bodies and
+transferred all 2,895 distinct source bodies plus one RBI body. It made 9,200
+body visits and
 34,746 calls with zero
 unsupported-operation fallbacks, zero unsupported edges, and zero legacy
 bridges. It reports 6 diagnostics in the current checkout. The current CFG
-analysis completes in 4.01 seconds internally (5.00 seconds including the CLI
+analysis completes in 4.20 seconds internally (5.22 seconds including the CLI
 repository wrapper).
 
-The latest release Packwerk CFG run has 1,220 executable source HIR bodies and
-transferred 1,219 distinct source bodies plus one RBI body. Six `sig` declaration
+The latest release Packwerk CFG run has 1,219 executable source HIR bodies and
+transferred all 1,219 distinct source bodies plus one RBI body. Six `sig` declaration
 bodies are reported separately and excluded from application coverage. It made
-9,540 body visits and
-39,796 calls with zero unsupported-operation,
+9,541 body visits and
+39,797 calls with zero unsupported-operation,
 edge, or legacy-bridge fallbacks. It reports 23 visible diagnostics in the
 current checkout. The `YAML = Psych` standard-library alias remains modeled
 through the owned declaration path; runtime `Set[...]` now uses its singleton
 RBI contract, and anonymous `Class.new` blocks retain their included methods.
-The CFG analysis completes in about 5.57 seconds internally (6.63 seconds
+The CFG analysis completes in about 7.28 seconds internally (8.49 seconds
 including the CLI repository wrapper).
 
 ActiveSupport is the current large-component boundary. The current CFG run has
-4,532 source HIR bodies. After separating
+4,531 executable source HIR bodies. After separating
 ordinary class-body self types from dynamic missing-method dispatch, preserving
 hash shape at recursive widening points, and distinguishing generic type
-applications from runtime `Constant[]` sends, it transfers 4,529 distinct
-source bodies plus one RBI body. It made 17,191 body visits and 51,087 calls
+applications from runtime `Constant[]` sends, it transfers all 4,531 distinct
+source bodies plus one RBI body. It made 17,197 body visits and 51,096 calls
 with zero unsupported-operation, edge, or legacy-bridge fallbacks, reports 672
-diagnostics, and completes in 5.98 seconds internally (6.66 seconds including
+diagnostics, and completes in 7.38 seconds internally (8.27 seconds including
 the CLI repository wrapper).
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
 
-The debug coverage report also identifies two ActiveSupport callbacks that occur
-after a non-local-return path in `Rotator#read_message`. They are not RBI bodies
-and are not owned CFG fallbacks; the callback/control-flow path needs to be
-transferred before the source coverage can be considered complete.
+The two ActiveSupport callbacks that occur after a non-local-return path in
+`Rotator#read_message` are now transferred through the generic owned-HIR
+callback path. They are not RBI bodies or owned CFG fallbacks, and the release
+report now shows complete executable-source coverage.
 
-In the same individual release/debug runs, the legacy path completed in 4.45s
-for Spoom, 5.15s for Packwerk, and 4.49s for ActiveSupport. The CFG path was
-therefore about 18%, 36%, and 23% slower respectively in this snapshot; these
+In the same individual release/debug runs, the legacy path completed in 2.97s
+for Spoom, 3.55s for Packwerk, and 3.25s for ActiveSupport. The CFG path was
+therefore about 33%, 81%, and 107% slower respectively in this snapshot; these
 are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-10, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 467/467 and the conformance gate
-is 261/261 (the new transactional-fallback fixture passed in its focused run).
+not at the exit condition. The checker gate is 469/469 and the conformance gate
+is 263/263.
 The preceding upstream smoke run was green, but the differential
 gate is not yet green: the three repositories above still have classified
 legacy/CFG differences. The CFG transfer surface has zero measured fallbacks
