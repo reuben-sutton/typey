@@ -28,7 +28,7 @@ bundled RBI set per fixture and is correspondingly expensive. A separate
 The CFG path is still opt-in because the transfer host retains semantic
 bridges in the legacy recursive path: the recursive evaluator still uses Prism
 children for exact diagnostics and builtin hooks, while parser-backed callback
-contracts and some symbol/passed/forwarded-block contexts still need migration.
+contracts and some passed/forwarded-block contexts still need migration.
 Ordinary inline callbacks now use an owned HIR contract; optional callable
 blocks and nested `&block` forwarding publish concrete return summaries. A
 body containing an unsupported operation or an unmigrated callback shape falls
@@ -83,9 +83,9 @@ still come from an RBI, an explicit unsafe operation, or a genuinely unresolved
 call. The successful-body result now has an explicit rollback boundary for
 late, context-sensitive transfer failures; the regression fixture proves that
 reports, types, and analyzer state are restored before legacy evaluation.
-Remaining implementation work is to finish the remaining
-symbol/passed/forwarded-block binding cases and remove the parser-facing legacy
-adapters before making CFG the default.
+Remaining implementation work is to finish the remaining passed/forwarded-block
+binding cases and remove the parser-facing legacy adapters before making CFG the
+default.
 
 The next step is therefore not another scheduler abstraction. It is to make
 CFG transfer an owned-HIR abstract interpreter, complete the remaining control
@@ -253,8 +253,9 @@ The first modularization steps are now in place:
   inline `define_method` and `define_singleton_method` bodies now use the same
   owned closure path; optional callable unions ignore their raising `nil` arm,
   and passed `&block` calls publish concrete returns through the CFG fixpoint.
-  Symbol blocks and some forwarded block identities still require future
-  binding semantics.
+  Symbol-passed blocks now use owned receiver dispatch, including component
+  diagnostics for partially supported union receivers; some forwarded block
+  identities still require future binding semantics.
 * recursive fallback no longer routes ordinary `if`, `while`/`until`, or `for`
   nodes through a synthetic CFG adapter; owned CFG bodies own branch and loop
   transfer, while unsupported bodies fall back transactionally to the legacy

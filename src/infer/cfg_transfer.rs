@@ -1,4 +1,5 @@
-use super::{Analyzer, SourceSite};
+use super::{Analyzer, CallArguments, Environment, OwnedCallInput, SourceSite};
+use crate::types::Type;
 
 mod arguments;
 mod assignment;
@@ -54,6 +55,67 @@ impl CfgFallbackCounters {
 }
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn transfer_owned_symbol_call(
+        &mut self,
+        input: &OwnedCallInput,
+        receiver: &Type,
+        arguments: &CallArguments<'_>,
+        environment: &mut Environment,
+    ) -> Result<Type, String> {
+        if let Type::Union(members) = receiver {
+            let initial_environment = environment.clone();
+            let mut result_type = Type::Never;
+            let mut joined_environment: Option<Environment> = None;
+            for member in members {
+                let mut member_environment = initial_environment.clone();
+                let result = dispatch::transfer_receiver_call(
+                    self,
+                    input,
+                    member,
+                    arguments,
+                    &[],
+                    &mut member_environment,
+                    None,
+                )?;
+                if result.missing_method {
+                    self.report_missing_method_component_if_needed_at(
+                        input.site,
+                        member,
+                        input.name.as_str(),
+                        receiver,
+                    );
+                }
+                result_type = result_type.join(&result.type_);
+                joined_environment = Some(match joined_environment {
+                    Some(joined) => joined.join(&member_environment),
+                    None => member_environment,
+                });
+            }
+            if let Some(joined_environment) = joined_environment {
+                *environment = joined_environment;
+            }
+            return Ok(result_type);
+        }
+        let result = dispatch::transfer_receiver_call(
+            self,
+            input,
+            receiver,
+            arguments,
+            &[],
+            environment,
+            None,
+        )?;
+        if result.missing_method {
+            self.report_missing_method_if_needed_at(
+                input.site,
+                receiver,
+                input.name.as_str(),
+                false,
+            );
+        }
+        Ok(result.type_)
+    }
+
     pub(super) fn record_cfg_fallback_at(
         &mut self,
         site: SourceSite,

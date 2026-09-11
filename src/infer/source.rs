@@ -150,8 +150,22 @@ impl<'src> Analyzer<'src> {
         name: &str,
         resolved: bool,
     ) {
-        if resolved
-            || !self.reports_missing_api_at(site)
+        self.report_missing_method_message_if_needed_at(
+            site,
+            receiver,
+            resolved,
+            format!("Method `{name}` does not exist on `{receiver}`"),
+        );
+    }
+
+    pub(super) fn report_missing_method_component_if_needed_at(
+        &mut self,
+        site: SourceSite,
+        receiver: &Type,
+        name: &str,
+        union: &Type,
+    ) {
+        if !self.reports_missing_api_at(site)
             || receiver.is_any()
             || receiver.contains_any()
             || receiver.is_never()
@@ -160,8 +174,26 @@ impl<'src> Analyzer<'src> {
         }
         self.error_at(
             site,
-            format!("Method `{name}` does not exist on `{receiver}`"),
+            format!("Method `{name}` does not exist on `{receiver}` component of `{union}`"),
         );
+    }
+
+    fn report_missing_method_message_if_needed_at(
+        &mut self,
+        site: SourceSite,
+        receiver: &Type,
+        resolved: bool,
+        message: String,
+    ) {
+        if resolved
+            || !self.reports_missing_api_at(site)
+            || receiver.is_any()
+            || receiver.contains_any()
+            || receiver.is_never()
+        {
+            return;
+        }
+        self.error_at(site, message);
     }
 
     pub(super) fn constant_is_known(&self, environment: &Environment, name: &str) -> bool {

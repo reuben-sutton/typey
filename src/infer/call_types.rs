@@ -394,13 +394,13 @@ impl<'src> Analyzer<'src> {
                 if let (Some(expected), Some(name)) =
                     (expected.as_ref(), self.cfg_passed_symbol_name(input))
                 {
-                    return Some(Eval::value(self.eval_symbol_passed_block_named(
-                        None,
+                    let result = self.eval_owned_symbol_passed_block_named(
                         input.site,
                         &name,
                         expected,
                         environment,
-                    )));
+                    )?;
+                    return Some(Eval::value(result));
                 }
                 let result = values
                     .get(value.0 as usize)
@@ -549,13 +549,12 @@ impl<'src> Analyzer<'src> {
                     return None;
                 }
                 if let Some(name) = self.cfg_passed_symbol_name(input) {
-                    let result = self.eval_symbol_passed_block_named(
-                        None,
+                    let result = self.eval_owned_symbol_passed_block_named(
                         block_site,
                         &name,
                         &expected,
                         environment,
-                    );
+                    )?;
                     return Some((Eval::value(result), environment.clone()));
                 }
                 let Some(signature) = Self::passed_block_signature(&actual) else {

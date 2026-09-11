@@ -1,8 +1,9 @@
 use super::{
     name_matches, optional_proc_type, prism, proc_parts, proc_receiver, strictness_rank, Analyzer,
     BlockReceiverBinding, CallArguments, CallSite, Environment, Eval, KeywordArgument, MethodKey,
-    MethodState, SourceSite, Strictness,
+    MethodState, OwnedCallInput, SourceSite, Strictness,
 };
+use crate::cfg;
 use crate::hir;
 use crate::signature::{self, MethodSig};
 use crate::types::Type;
@@ -1070,7 +1071,7 @@ impl<'src> Analyzer<'src> {
         };
         // Symbol#to_proc consumes the first yielded value as the receiver;
         // all remaining yielded values are passed to the named method.
-        let arguments = Self::symbol_method_arguments(parameters, &initial_signature, site);
+        let arguments = Self::symbol_method_arguments(parameters, Some(&initial_signature), site);
         let signature = self
             .observe_call(&key, &arguments, false)
             .unwrap_or(initial_signature);
@@ -1138,24 +1139,65 @@ impl<'src> Analyzer<'src> {
         )
     }
 
+    /// Transfer a symbol-passed block without entering the recursive Prism
+    /// evaluator. The first callback parameter is the receiver consumed by
+    /// `Symbol#to_proc`; the remaining callback parameters become the owned
+    /// argument types for the named method.
+    pub(super) fn eval_owned_symbol_passed_block_named(
+        &mut self,
+        site: SourceSite,
+        name: &str,
+        expected: &Type,
+        environment: &mut Environment,
+    ) -> Option<Type> {
+        let Some((parameters, _)) = proc_parts(expected) else {
+            return Some(Type::Any);
+        };
+        let Some(receiver) = parameters.first() else {
+            return Some(Type::Any);
+        };
+        let initial_signature =
+            if let Some(key) = self.receiver_method_key(None, receiver, name, environment) {
+                self.record_method_dependency(&key, environment);
+                self.observe_call(&key, &CallArguments::default(), false)
+            } else {
+                None
+            };
+        let arguments = Self::symbol_method_arguments(parameters, initial_signature.as_ref(), site);
+        let input = OwnedCallInput {
+            site,
+            expression: None,
+            receiver: cfg::ReceiverOperand::Implicit,
+            name: hir::Name::new(name),
+            arguments: Vec::new(),
+            block: None,
+            safe_navigation: false,
+            defer_inline_assertion: false,
+        };
+        self.transfer_owned_symbol_call(&input, receiver, &arguments, environment)
+            .ok()
+    }
+
     fn symbol_method_arguments(
         parameters: &[Type],
-        signature: &MethodSig,
+        signature: Option<&MethodSig>,
         site: SourceSite,
     ) -> CallArguments<'static> {
         let mut arguments = CallArguments::default();
         for parameter in parameters.iter().skip(1) {
             let mut keyword = false;
             if let Type::Named(shape, _) = parameter {
-                for name in signature.keywords.keys() {
-                    if let Some(type_) = signature::parse_inline_record_field(shape, name) {
-                        arguments.keyword_arguments.push(KeywordArgument {
-                            name: name.clone(),
-                            node: None,
-                            site,
-                            type_,
-                        });
-                        keyword = true;
+                if let Some(signature) = signature {
+                    for name in signature.keywords.keys() {
+                        if let Some(type_) = signature::parse_inline_record_field(shape, name) {
+                            arguments.keyword_arguments.push(KeywordArgument {
+                                name: name.clone(),
+                                node: None,
+                                site,
+                                type_,
+                            });
+                            keyword = true;
+                        }
                     }
                 }
             }
