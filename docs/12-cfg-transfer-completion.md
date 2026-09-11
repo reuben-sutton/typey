@@ -405,8 +405,8 @@ The latest release Spoom CFG run has 2,895 executable source HIR bodies and
 transferred all 2,895 distinct source bodies plus one RBI body. It made 9,200
 body visits and 34,746 calls with zero unsupported-operation fallbacks, zero
 unsupported edges, and zero legacy bridges. It reports 6 diagnostics in the
-current checkout. The current CFG analysis completes in 4.97 seconds
-internally (6.04 seconds including the CLI repository wrapper).
+current checkout. The current CFG analysis completes in 4.92 seconds
+internally (6.00 seconds including the CLI repository wrapper).
 
 The latest release Packwerk CFG run has 1,219 executable source HIR bodies and
 transferred all 1,219 distinct source bodies plus one RBI body. Six `sig` declaration
@@ -417,7 +417,7 @@ edge, or legacy-bridge fallbacks. It reports 23 visible diagnostics in the
 current checkout. The `YAML = Psych` standard-library alias remains modeled
 through the owned declaration path; runtime `Set[...]` now uses its singleton
 RBI contract, and anonymous `Class.new` blocks retain their included methods.
-The CFG analysis completes in about 15.04 seconds internally (16.26 seconds
+The CFG analysis completes in about 15.36 seconds internally (16.60 seconds
 including the CLI repository wrapper).
 
 ActiveSupport is the current large-component boundary. The current CFG run has
@@ -445,7 +445,7 @@ report now shows complete executable-source coverage.
 
 In the same individual release/debug runs, the legacy path completed in 4.01s
 for Spoom, 4.45s for Packwerk, and 4.05s for ActiveSupport. The CFG path was
-therefore about 51%, 266%, and 99% slower respectively in this snapshot; these
+therefore about 50%, 273%, and 99% slower respectively in this snapshot; these
 are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-11, the implementation is therefore in the final parity phase,
