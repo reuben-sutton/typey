@@ -462,6 +462,15 @@ impl<'src> Analyzer<'src> {
         }
 
         if let Some(instance) = Self::class_object_instance_type(receiver) {
+            if Self::named_type_name(&instance).is_some_and(|name| name_matches(&name, "Ractor"))
+                && matches!(name, "[]" | "[]=")
+            {
+                // Ractor's storage operators are singleton methods even
+                // though the stdlib RBI declares their contracts on the
+                // instance class. Keep them out of the generic `Constant[]`
+                // type-application branch below.
+                return Type::Any;
+            }
             if name == "const_get" {
                 let constant_name = site.argument_nodes.first().and_then(|node| {
                     node.as_string_node()

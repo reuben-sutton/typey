@@ -747,7 +747,18 @@ impl<'src> Analyzer<'src> {
                 &dispatch_receiver_type,
                 &name,
             );
-            let mut result = if name == "singleton_class" {
+            let ractor_class_storage =
+                Self::class_object_instance_type(&dispatch_receiver_type).is_some_and(|instance| {
+                    Self::named_type_name(&instance)
+                        .is_some_and(|name| name_matches(&name, "Ractor"))
+                }) && matches!(name.as_str(), "[]" | "[]=");
+            let mut result = if ractor_class_storage {
+                // Ractor's storage operators are singleton methods even
+                // though the stdlib RBI declares their contracts on the
+                // instance class. Do not route them through generic
+                // `Constant[]` handling or report them as missing methods.
+                Type::Any
+            } else if name == "singleton_class" {
                 Type::Named("Class".to_owned(), vec![Type::Anything])
             } else if class_mixin {
                 if name == "include" {

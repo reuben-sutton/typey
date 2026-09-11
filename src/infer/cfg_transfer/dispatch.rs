@@ -48,6 +48,20 @@ pub(super) fn transfer_receiver_call(
             missing_method: false,
         });
     }
+    if Analyzer::class_object_instance_type(receiver).is_some_and(|instance| {
+        Analyzer::named_type_name(&instance).is_some_and(|name| name_matches(&name, "Ractor"))
+    }) && matches!(name, "[]" | "[]=")
+    {
+        // Ruby exposes Ractor's storage operators as singleton methods. The
+        // vendored stdlib RBI currently places their contracts on the
+        // instance class, so resolve the runtime class-object form here.
+        return Ok(ReceiverTransfer {
+            type_: Type::Any,
+            block_result: None,
+            untyped_origin: UntypedOrigin::Propagated,
+            missing_method: false,
+        });
+    }
     if matches!(name, "attr_reader" | "attr_writer" | "attr_accessor")
         && Analyzer::class_object_instance_type(receiver).is_some()
     {

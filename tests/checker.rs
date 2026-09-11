@@ -1947,6 +1947,23 @@ fn preserves_missing_method_diagnostics_through_owned_cfg() {
 }
 
 #[test]
+fn preserves_ractor_class_storage_dispatch_through_owned_cfg() {
+    let path = "tests/fixtures/ractor_class_storage.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert_eq!(cfg.types, baseline.types);
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
+}
+
+#[test]
 fn reports_missing_constants_in_typed_true_files() {
     check_fixture("tests/fixtures/missing_constants.rb");
 }
