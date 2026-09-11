@@ -45,8 +45,16 @@ pub(super) fn finish_call(
     } else {
         cfg_call_raise_type(analyzer, input, receiver_type, environment, &type_)
     };
+    // An inline block is an argument to the callee, not proof that the callee
+    // invokes it. A callee whose every normal path executes `yield` is the
+    // exception: a block with only a nonlocal return must terminate that path.
+    // Keep ordinary callback calls normally reachable while retaining their
+    // abrupt outcomes below; a terminating callee is represented by its own
+    // `type_`/flow instead.
+    let callback_must_run = !deferred_callback
+        && analyzer.cfg_call_guarantees_yield(input, receiver_type, environment);
     let has_normal_path = call_can_return
-        && (deferred_callback
+        && (!callback_must_run
             || block_result
                 .as_ref()
                 .is_none_or(Eval::callback_has_normal_path));
@@ -83,6 +91,56 @@ pub(super) fn finish_call(
 }
 
 impl<'src> Analyzer<'src> {
+    fn cfg_call_guarantees_yield(
+        &self,
+        input: &OwnedCallInput,
+        receiver_type: &Type,
+        environment: &Environment,
+    ) -> bool {
+        if !matches!(input.block, Some(cfg::BlockOperand::Inline(_))) {
+            return false;
+        }
+        let key = match input.receiver {
+            cfg::ReceiverOperand::Implicit => {
+                Some(self.implicit_method_key(input.name.as_str(), environment))
+            }
+            cfg::ReceiverOperand::Super => environment
+                .method_key
+                .as_ref()
+                .and_then(|current| self.super_method_key(current)),
+            cfg::ReceiverOperand::Value(_) => {
+                self.receiver_method_key(None, receiver_type, input.name.as_str(), environment)
+            }
+            cfg::ReceiverOperand::Yield => None,
+        };
+        let Some(key) = key.and_then(|key| self.resolve_method_key(&key)) else {
+            return false;
+        };
+        let body = self
+            .program
+            .hir_program
+            .declarations
+            .iter()
+            .find_map(|declaration| {
+                let hir::DeclarationKind::Method { body, .. } = &declaration.kind else {
+                    return None;
+                };
+                let registered = self
+                    .declarations
+                    .definitions
+                    .get(&(declaration.span.start as usize))?;
+                (registered == &key).then_some(*body)
+            });
+        let Some(body) = body else {
+            return false;
+        };
+        self.program
+            .cfg_graphs
+            .as_ref()
+            .and_then(|graphs| graphs.get(body.0 as usize))
+            .is_some_and(cfg::Cfg::guarantees_yield)
+    }
+
     fn is_recursive_inferred_call(
         &self,
         input: &OwnedCallInput,

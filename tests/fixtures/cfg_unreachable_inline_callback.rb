@@ -17,7 +17,7 @@ def sample
     return
   end
 
-  invoke_callback do # error: This expression appears after an unconditional return
+  invoke_callback do
     needs_string(1) # error: Expected `String`, but found `Integer`
   end
 end

@@ -6,6 +6,7 @@
 //! flow.
 
 use crate::hir::{self, BodyId, ClosureId, ConstantPath, ExprId, LocalId, Name, Span};
+use std::collections::HashSet;
 
 pub mod index;
 pub mod lower;
@@ -102,6 +103,47 @@ impl Cfg {
                             .flatten()
                     })
             })
+    }
+
+    /// Whether every normally terminating path through this body executes a
+    /// `yield` operation before returning. Paths that raise, return
+    /// non-locally, or remain unreachable do not make the predicate false.
+    #[must_use]
+    pub fn guarantees_yield(&self) -> bool {
+        let mut pending = vec![self.entry];
+        let mut visited = HashSet::new();
+        while let Some(block_id) = pending.pop() {
+            if !visited.insert(block_id) {
+                continue;
+            }
+            let Some(block) = self.block(block_id) else {
+                continue;
+            };
+            if block.operations.iter().any(|operation| {
+                matches!(
+                    operation.kind,
+                    OperationKind::Call {
+                        receiver: ReceiverOperand::Yield,
+                        ..
+                    }
+                )
+            }) {
+                continue;
+            }
+            match block.terminator {
+                Terminator::Jump { target, .. } => pending.push(target),
+                Terminator::Branch { truthy, falsy, .. } => {
+                    pending.push(truthy);
+                    pending.push(falsy);
+                }
+                Terminator::EnsureComplete { target, .. } => pending.push(target),
+                Terminator::Return(_)
+                | Terminator::NonLocalReturn(_)
+                | Terminator::Raise(_)
+                | Terminator::Unreachable => return false,
+            }
+        }
+        true
     }
 }
 
