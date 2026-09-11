@@ -1,4 +1,5 @@
 # typed: true
+# conformance: cfg
 
 def terminate_with_callback(&block)
   block.call
@@ -16,7 +17,7 @@ def sample
     return
   end
 
-  invoke_callback do
-    needs_string(1)
+  invoke_callback do # error: This expression appears after an unconditional return
+    needs_string(1) # error: Expected `String`, but found `Integer`
   end
 end
