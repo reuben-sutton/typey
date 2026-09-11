@@ -45,17 +45,17 @@ transfer telemetry.
 
 | Check | Executable source HIR bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Spoom | 2,895 | 2,895 | 100.00% | 1 | 9,200 | 34,746 | 6 |
-| Packwerk | 1,219 | 1,219 | 100.00% | 1 | 9,541 | 39,797 | 23 visible |
-| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,184 | 51,119 | 606 |
+| Spoom | 2,895 | 2,895 | 100.00% | 1 | 9,199 | 34,743 | 6 |
+| Packwerk | 1,219 | 1,219 | 100.00% | 1 | 8,312 | 33,709 | 70 |
+| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,169 | 51,036 | 603 |
 
 The current release differential snapshot is not yet exact parity:
 
 | Check | Legacy diagnostics | CFG diagnostics | Difference observed |
 | --- | ---: | ---: | --- |
 | Spoom | 3 | 6 | 3 CFG-only safe-navigation diagnostics where owned source inference is concrete and legacy lookup remains gradual |
-| Packwerk | 23 | 23 | 1 distinct CFG-only finding; the count is otherwise exact |
-| Rails ActiveSupport | 651 | 606 | 97 CFG-only and 142 legacy-only location/message entries, primarily receiver/model precision differences |
+| Packwerk | 70 | 70 | 1 distinct CFG-only finding; the count is otherwise exact |
+| Rails ActiveSupport | 645 | 603 | 94 CFG-only and 140 legacy-only location/message entries, primarily receiver/model precision differences |
 
 These are differential findings, not silently accepted parity. Spoom's three
 additional findings are the same safe-navigation contract applied to concrete
@@ -66,6 +66,11 @@ the owned dispatch path. The owned dispatch path also now keeps `Proc.new` on
 the class-object singleton contract, removing the corresponding ActiveSupport
 false positives. ActiveSupport still needs category-by-category review of its
 generic receiver, framework-hook, and control-flow differences.
+
+The current Packwerk checkout contains unrelated uncommitted application and
+RBI edits, including additional Minitest shim signatures. Its row above is
+therefore a measurement of that dirty checkout; the earlier 23-diagnostic
+Packwerk row was from the prior clean baseline and is not directly comparable.
 
 Transfer coverage is a body-level ownership metric over distinct bodies:
 `unique executable source bodies transferred / executable source bodies`. A
@@ -401,23 +406,28 @@ The first modularization steps are now in place:
   as `@debug_mode = false` from making later branches unreachable; the owned
   CFG and conformance regression is `cfg_mutable_accessor_ivar.rb`.
 
+* reads of ordinary instance ivars written outside `initialize` now retain the
+  possibility of Ruby's default `nil` value, including through generated
+  readers. Ivars initialized by `initialize` remain concrete, while singleton
+  ivars keep their class-body initialization semantics. The same fixture covers
+  both the mutable-writer and lazy-ivar cases.
+
 The latest release Spoom CFG run has 2,895 executable source HIR bodies and
-transferred all 2,895 distinct source bodies plus one RBI body. It made 9,200
-body visits and 34,746 calls with zero unsupported-operation fallbacks, zero
+transferred all 2,895 distinct source bodies plus one RBI body. It made 9,199
+body visits and 34,743 calls with zero unsupported-operation fallbacks, zero
 unsupported edges, and zero legacy bridges. It reports 6 diagnostics in the
-current checkout. The current CFG analysis completes in 4.92 seconds
-internally (6.00 seconds including the CLI repository wrapper).
+current checkout. The current CFG analysis completes in 4.94 seconds
+internally (5.94 seconds including the CLI repository wrapper).
 
 The latest release Packwerk CFG run has 1,219 executable source HIR bodies and
 transferred all 1,219 distinct source bodies plus one RBI body. Six `sig` declaration
 bodies are reported separately and excluded from application coverage. It made
-9,541 body visits and
-39,797 calls with zero unsupported-operation,
-edge, or legacy-bridge fallbacks. It reports 23 visible diagnostics in the
-current checkout. The `YAML = Psych` standard-library alias remains modeled
+8,312 body visits and 33,709 calls with zero unsupported-operation, edge, or
+legacy-bridge fallbacks. It reports 70 diagnostics in the current dirty
+checkout. The `YAML = Psych` standard-library alias remains modeled
 through the owned declaration path; runtime `Set[...]` now uses its singleton
 RBI contract, and anonymous `Class.new` blocks retain their included methods.
-The CFG analysis completes in about 15.36 seconds internally (16.60 seconds
+The CFG analysis completes in about 13.38 seconds internally (14.80 seconds
 including the CLI repository wrapper).
 
 ActiveSupport is the current large-component boundary. The current CFG run has
@@ -425,9 +435,9 @@ ActiveSupport is the current large-component boundary. The current CFG run has
 ordinary class-body self types from dynamic missing-method dispatch, preserving
 hash shape at recursive widening points, and distinguishing generic type
 applications from runtime `Constant[]` sends, it transfers all 4,531 distinct
-source bodies plus one RBI body. It made 17,184 body visits and 51,119 calls
-with zero unsupported-operation, edge, or legacy-bridge fallbacks, reports 606
-diagnostics, and completes in 7.27 seconds internally (8.05 seconds including
+source bodies plus one RBI body. It made 17,169 body visits and 51,036 calls
+with zero unsupported-operation, edge, or legacy-bridge fallbacks, reports 603
+diagnostics, and completes in 7.27 seconds internally (7.97 seconds including
 the CLI repository wrapper).
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
@@ -443,9 +453,9 @@ The two ActiveSupport callbacks that occur after a non-local-return path in
 callback path. They are not RBI bodies or owned CFG fallbacks, and the release
 report now shows complete executable-source coverage.
 
-In the same individual release/debug runs, the legacy path completed in 4.01s
-for Spoom, 4.45s for Packwerk, and 4.05s for ActiveSupport. The CFG path was
-therefore about 50%, 273%, and 99% slower respectively in this snapshot; these
+In the same individual release/debug runs, the legacy path completed in 3.84s
+for Spoom, 5.00s for Packwerk, and 4.01s for ActiveSupport. The CFG path was
+therefore about 55%, 196%, and 99% slower respectively in this snapshot; these
 are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-11, the implementation is therefore in the final parity phase,
