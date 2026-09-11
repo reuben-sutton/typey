@@ -1,4 +1,5 @@
 # typed: true
+# conformance: cfg
 
 class CfgPositionalSplatLogical
   def self.consume(*values)
