@@ -45,7 +45,7 @@ reported separately as transfer telemetry.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Spoom | 2,896 | 2,895 | 99.97% | 1 | 9,200 | 34,746 | 6 |
 | Packwerk | 1,226 | 1,219 | 99.43% | 1 | 9,540 | 39,796 | 23 visible |
-| Rails ActiveSupport | 4,532 | 4,529 | 99.93% | 1 | 17,169 | 51,039 | 672 |
+| Rails ActiveSupport | 4,532 | 4,529 | 99.93% | 1 | 17,191 | 51,087 | 672 |
 
 The current release differential snapshot is not yet exact parity:
 
@@ -84,8 +84,9 @@ call. The successful-body result now has an explicit rollback boundary for
 late, context-sensitive transfer failures; the regression fixture proves that
 reports, types, and analyzer state are restored before legacy evaluation.
 Remaining implementation work is to finish the remaining passed/forwarded-block
-binding cases and remove the parser-facing legacy adapters before making CFG the
-default.
+binding cases, account for source callbacks reached only through non-local
+control flow, and remove the parser-facing legacy adapters before making CFG
+the default.
 
 The next step is therefore not another scheduler abstraction. It is to make
 CFG transfer an owned-HIR abstract interpreter, complete the remaining control
@@ -406,7 +407,7 @@ ActiveSupport is the current large-component boundary. The current CFG run has
 ordinary class-body self types from dynamic missing-method dispatch, preserving
 hash shape at recursive widening points, and distinguishing generic type
 applications from runtime `Constant[]` sends, it transfers 4,529 distinct
-source bodies plus one RBI body. It made 17,169 body visits and 51,039 calls
+source bodies plus one RBI body. It made 17,191 body visits and 51,087 calls
 with zero unsupported-operation, edge, or legacy-bridge fallbacks, reports 672
 diagnostics, and completes in 5.98 seconds internally (6.66 seconds including
 the CLI repository wrapper).
@@ -414,6 +415,14 @@ CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
+
+The debug coverage report also identifies six Packwerk source bodies that are
+`sig` declaration closures and two ActiveSupport callbacks that occur after a
+non-local-return path in `Rotator#read_message`. They are not RBI bodies and
+are therefore not removed from the source denominator; neither is an owned CFG
+fallback. The former needs an explicit declaration-body coverage category, and
+the latter needs the callback/control-flow path to be transferred before the
+source coverage can be considered complete.
 
 In the same individual release/debug runs, the legacy path completed in 4.45s
 for Spoom, 5.15s for Packwerk, and 4.49s for ActiveSupport. The CFG path was
