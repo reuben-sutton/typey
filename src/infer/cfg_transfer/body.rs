@@ -1305,17 +1305,14 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         }
                         // A normal call can still raise before its result is
                         // assigned.  That path matters even when the call's
-                        // inferred return type is concrete: an enclosing
+                        // inferred return type is concrete: a rescue or
                         // `ensure` observes locals as they existed before the
-                        // assignment completed.  The ordinary rescue probe
-                        // handles handlers separately, but an ensure entry is
-                        // an executable unwind target and needs this edge in
-                        // the main transfer too.
-                        let unwinds_to_ensure = block
-                            .unwind
-                            .is_some_and(|target| graph.ensure_entries.contains(&target));
+                        // assignment completed.  The nearest unwind target
+                        // is executable CFG, so keep this edge in the main
+                        // transfer rather than only probing handlers later.
+                        let has_unwind_target = block.unwind.is_some();
                         if result.flow.contains(FlowKind::Raise)
-                            || (unwinds_to_ensure && result.flow.contains(FlowKind::Normal))
+                            || (has_unwind_target && result.flow.contains(FlowKind::Normal))
                         {
                             let exception = if result.flow.contains(FlowKind::Raise) {
                                 result.abrupt.raise_type.clone()
