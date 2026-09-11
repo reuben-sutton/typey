@@ -19,9 +19,9 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 23 CFG tests, 13 HIR tests, and 469 checker
-tests. The local conformance suite currently contains 258 Ruby/RBI fixtures
-and 263 tests; the latest full run passed all 263. The suite reloads the
+The current local gates include 23 CFG tests, 13 HIR tests, and 470 checker
+tests. The local conformance suite currently contains 259 Ruby/RBI fixtures
+and 264 tests; the latest full run passed all 264. The suite reloads the
 bundled RBI set per fixture and is correspondingly expensive. A separate
 37-fixture upstream smoke suite was green in the preceding run.
 The CFG path is still opt-in because the transfer host retains semantic
@@ -33,7 +33,7 @@ blocks and nested `&block` forwarding publish concrete return summaries. A
 body containing an unsupported operation or an unmigrated callback shape falls
 back as a whole.
 
-## Current status (2026-09-10)
+## Current status (2026-09-11)
 
 The broad transfer surface is complete enough to exercise real repositories.
 The release runs below are the current coverage and parity snapshot. Body
@@ -45,7 +45,7 @@ transfer telemetry.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Spoom | 2,895 | 2,895 | 100.00% | 1 | 9,200 | 34,746 | 6 |
 | Packwerk | 1,219 | 1,219 | 100.00% | 1 | 9,541 | 39,797 | 23 visible |
-| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,197 | 51,096 | 672 |
+| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,197 | 51,096 | 665 |
 
 The current release differential snapshot is not yet exact parity:
 
@@ -53,7 +53,7 @@ The current release differential snapshot is not yet exact parity:
 | --- | ---: | ---: | --- |
 | Spoom | 3 | 6 | 3 CFG-only safe-navigation diagnostics where owned source inference is concrete and legacy lookup remains gradual |
 | Packwerk | 23 | 23 | 1 distinct CFG-only finding; the count is otherwise exact |
-| Rails ActiveSupport | 651 | 672 | 21 more CFG diagnostics; 150 unique CFG-only and 138 legacy-only location/message entries, primarily receiver/model precision differences |
+| Rails ActiveSupport | 651 | 665 | 14 more CFG diagnostics; 152 unique CFG-only and 138 legacy-only location/message entries, primarily receiver/model precision differences |
 
 These are differential findings, not silently accepted parity. Spoom's three
 additional findings are the same safe-navigation contract applied to concrete
@@ -411,13 +411,17 @@ ordinary class-body self types from dynamic missing-method dispatch, preserving
 hash shape at recursive widening points, and distinguishing generic type
 applications from runtime `Constant[]` sends, it transfers all 4,531 distinct
 source bodies plus one RBI body. It made 17,197 body visits and 51,096 calls
-with zero unsupported-operation, edge, or legacy-bridge fallbacks, reports 672
+with zero unsupported-operation, edge, or legacy-bridge fallbacks, reports 665
 diagnostics, and completes in 7.38 seconds internally (8.27 seconds including
 the CLI repository wrapper).
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
 ensure regions.
+
+The Ractor storage operators are modeled as class-object methods in both
+dispatch paths; this removed seven CFG-only diagnostics without changing the
+application code or the RBI.
 
 The two ActiveSupport callbacks that occur after a non-local-return path in
 `Rotator#read_message` are now transferred through the generic owned-HIR
@@ -429,9 +433,9 @@ for Spoom, 3.55s for Packwerk, and 3.25s for ActiveSupport. The CFG path was
 therefore about 33%, 81%, and 107% slower respectively in this snapshot; these
 are end-to-end measurements, not a controlled benchmark.
 
-As of 2026-09-10, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 469/469 and the conformance gate
-is 263/263.
+As of 2026-09-11, the implementation is therefore in the final parity phase,
+not at the exit condition. The checker gate is 470/470 and the conformance gate
+is 264/264.
 The preceding upstream smoke run was green, but the differential
 gate is not yet green: the three repositories above still have classified
 legacy/CFG differences. The CFG transfer surface has zero measured fallbacks
