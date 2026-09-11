@@ -19,11 +19,12 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 23 CFG tests, 12 HIR tests, and 466 checker
-tests. The local conformance suite currently contains 260 fixtures and the
-latest full run passed all 260. The suite reloads the bundled RBI set per
-fixture and is correspondingly expensive. A separate 37-fixture upstream smoke
-suite was green in the preceding run.
+The current local gates include 23 CFG tests, 12 HIR tests, and 467 checker
+tests. The local conformance suite currently contains 261 fixtures; the latest
+full run passed all 260 before the transactional-fallback fixture was added,
+and that fixture's focused conformance run is green. The suite reloads the
+bundled RBI set per fixture and is correspondingly expensive. A separate
+37-fixture upstream smoke suite was green in the preceding run.
 The CFG path is still opt-in because the transfer host retains semantic
 bridges in the legacy recursive path: the recursive evaluator still uses Prism
 children for exact diagnostics and builtin hooks, while parser-backed callback
@@ -79,10 +80,12 @@ legacy_bridge`; all three repository runs report `0 / 0 / 0`, and all report
 zero unsupported HIR handoffs. This is transfer telemetry, not an assertion
 that the application has no gradual types: application-level `T.untyped` can
 still come from an RBI, an explicit unsafe operation, or a genuinely unresolved
-call. The remaining implementation work is to make the successful-body result
-transaction fully state-safe on an unexpected runtime transfer failure, finish
-the remaining symbol/passed/forwarded-block binding cases, and remove the
-parser-facing legacy adapters before making CFG the default.
+call. The successful-body result now has an explicit rollback boundary for
+late, context-sensitive transfer failures; the regression fixture proves that
+reports, types, and analyzer state are restored before legacy evaluation.
+Remaining implementation work is to finish the remaining
+symbol/passed/forwarded-block binding cases and remove the parser-facing legacy
+adapters before making CFG the default.
 
 The next step is therefore not another scheduler abstraction. It is to make
 CFG transfer an owned-HIR abstract interpreter, complete the remaining control
@@ -353,6 +356,11 @@ The first modularization steps are now in place:
   agree with the recursive evaluator; remaining top-level fallbacks are
   limited to unsupported or legacy-only source-file syntax.
 
+* risk-bearing owned bodies now snapshot and restore mutable analyzer state
+  before a late CFG fallback, while ordinary bodies avoid the deep snapshot;
+  `cfg_transactional_fallback.rb` verifies that the legacy retry does not
+  duplicate or lose recorded products.
+
 * source-file pseudo-expressions including `__FILE__` and `__LINE__`, rescue
   modifiers, backreference reads, Kernel loading calls, lambda-local outcomes,
   explicit mixin receivers, dynamic `alias_method`, the `alias` keyword,
@@ -379,7 +387,7 @@ are source bodies, and transferred 2,895 distinct source bodies plus one RBI
 body. It made 9,200 body visits and 34,746 calls with zero
 unsupported-operation fallbacks, zero unsupported edges, and zero legacy
 bridges. It reports 6 diagnostics in the current checkout. The current CFG
-analysis completes in 3.88 seconds internally (5.28 seconds including the CLI
+analysis completes in 4.01 seconds internally (5.00 seconds including the CLI
 repository wrapper).
 
 The latest release Packwerk CFG run compiled 83,314 HIR bodies, of which 1,226
@@ -389,7 +397,7 @@ edge, or legacy-bridge fallbacks. It reports 23 visible diagnostics in the
 current checkout. The `YAML = Psych` standard-library alias remains modeled
 through the owned declaration path; runtime `Set[...]` now uses its singleton
 RBI contract, and anonymous `Class.new` blocks retain their included methods.
-The CFG analysis completes in about 5.42 seconds internally (6.98 seconds
+The CFG analysis completes in about 5.57 seconds internally (6.63 seconds
 including the CLI repository wrapper).
 
 ActiveSupport is the current large-component boundary. The current CFG run
@@ -399,7 +407,7 @@ hash shape at recursive widening points, and distinguishing generic type
 applications from runtime `Constant[]` sends, it transfers 4,529 distinct
 source bodies plus one RBI body. It made 17,169 body visits and 51,039 calls
 with zero unsupported-operation, edge, or legacy-bridge fallbacks, reports 672
-diagnostics, and completes in 4.57 seconds internally (5.54 seconds including
+diagnostics, and completes in 5.98 seconds internally (6.66 seconds including
 the CLI repository wrapper).
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
@@ -412,14 +420,15 @@ therefore about 18%, 36%, and 23% slower respectively in this snapshot; these
 are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-10, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 466/466 and the conformance gate
-is 260/260. The preceding upstream smoke run was green, but the differential
+not at the exit condition. The checker gate is 467/467 and the conformance gate
+is 261/261 (the new transactional-fallback fixture passed in its focused run).
+The preceding upstream smoke run was green, but the differential
 gate is not yet green: the three repositories above still have classified
 legacy/CFG differences. The CFG transfer surface has zero measured fallbacks
 on all three repository checks. What remains is resolving those differential
 categories, closing the owned type-publication differences, completing the
-transactional failure boundary and the remaining block-binding cases, and
-rerunning the full differential gates before retiring the recursive path.
+remaining block-binding cases, and rerunning the full differential gates
+before retiring the recursive path.
 
 ## Design
 
