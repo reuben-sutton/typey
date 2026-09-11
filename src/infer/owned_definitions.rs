@@ -164,13 +164,35 @@ impl<'src> Analyzer<'src> {
             // are published, while local effects join the method's normal
             // entry state instead of becoming unconditional assignments.
             let mut default_environment = method_environment.clone();
-            self.eval_cfg_body_owned(
-                self.owned_body_site(default_body),
-                default_body,
-                &mut default_environment,
-                true,
-            )
-            .ok_or_else(|| "parameter default requires a legacy transfer".to_owned())?;
+            let default_result = self
+                .eval_cfg_body_owned(
+                    self.owned_body_site(default_body),
+                    default_body,
+                    &mut default_environment,
+                    true,
+                )
+                .ok_or_else(|| "parameter default requires a legacy transfer".to_owned())?;
+            // Call-site observations describe values supplied by callers, but
+            // they are not exhaustive for an optional parameter.  Preserve
+            // the value produced by the default path in the method entry
+            // environment; otherwise a parameter observed only with concrete
+            // arguments can make its omitted-argument branch appear dead.
+            let default_type = default_result.normal_type();
+            if !default_type.is_never()
+                && matches!(
+                    parameter.kind,
+                    hir::ParameterKind::Optional | hir::ParameterKind::OptionalKeyword
+                )
+            {
+                let name = parameter
+                    .local
+                    .and_then(|local| self.program.hir_program.local_name(local))
+                    .map(|name| name.as_str().to_owned())
+                    .or_else(|| parameter.name.as_ref().map(|name| name.as_str().to_owned()));
+                if let Some(name) = name {
+                    default_environment.bind(name, default_type);
+                }
+            }
             method_environment = method_environment.join(&default_environment);
         }
 

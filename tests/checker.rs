@@ -874,6 +874,22 @@ fn does_not_freeze_mutable_accessor_ivars_to_constructor_literals_in_cfg() {
 }
 
 #[test]
+fn preserves_optional_parameter_defaults_in_owned_cfg() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/cfg_optional_default_flow.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_star_forwarding_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_star_forwarding.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());
