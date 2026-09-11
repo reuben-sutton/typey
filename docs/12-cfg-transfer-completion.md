@@ -20,8 +20,10 @@ transfer spec described. Typey now has:
   routing and owned join-value recording.
 
 The current local gates include 23 CFG tests, 13 HIR tests, and 473 checker
-tests. The local conformance suite currently contains 261 Ruby/RBI fixtures
-and 266 generated tests; the latest full run passed all 266 tests. The suite
+tests. The local conformance suite currently contains 262 Ruby/RBI fixtures
+and 267 generated tests; the latest complete run passed all 266 tests before
+the positional-splat fixture was added, and that new CFG fixture passes its
+targeted conformance test. The suite
 reloads the bundled RBI set per fixture and is correspondingly expensive. A
 separate 37-fixture upstream smoke suite was green in the preceding run.
 The CFG path is still opt-in because the transfer host retains semantic
@@ -442,8 +444,9 @@ therefore about 51%, 263%, and 99% slower respectively in this snapshot; these
 are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-11, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 473/473 and the conformance
-gate is 266/266.
+not at the exit condition. The checker gate is 473/473. The latest complete
+conformance gate is 266/266, with the newly added positional-splat fixture
+also passing its targeted conformance test.
 The preceding upstream smoke run was green, but the differential
 gate is not yet green: the three repositories above still have classified
 legacy/CFG differences. The CFG transfer surface has zero measured fallbacks
