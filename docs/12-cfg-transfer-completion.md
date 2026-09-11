@@ -19,7 +19,7 @@ transfer spec described. Typey now has:
 * transferred rescue, ensure, and retry regions with explicit raised-state
   routing and owned join-value recording.
 
-The current local gates include 23 CFG tests, 13 HIR tests, and 472 checker
+The current local gates include 23 CFG tests, 13 HIR tests, and 473 checker
 tests. The local conformance suite currently contains 261 Ruby/RBI fixtures
 and 266 generated tests; the latest full run passed all 266 tests. The suite
 reloads the bundled RBI set per fixture and is correspondingly expensive. A
@@ -335,6 +335,10 @@ The first modularization steps are now in place:
   operands for the synthesized `[]=` call; ordinary nominal `[]` sends also
   fall back from callable shorthand to regular receiver dispatch when the
   receiver is not proc-like.
+* positional splat arguments now propagate the post-expression CFG block. A
+  logical expression inside `*args` therefore cannot re-use the pre-splat
+  block and terminate it twice; the regression is covered by
+  `cfg_positional_splat_logical.rb`.
 * owned callable dispatch now handles unary negation and explicit `Proc` /
   `BoundProc` `call`/`[]` operations from CFG values, including unioned
   callable receivers, argument checking, and optional RBS block contracts;
@@ -438,7 +442,7 @@ therefore about 51%, 263%, and 99% slower respectively in this snapshot; these
 are end-to-end measurements, not a controlled benchmark.
 
 As of 2026-09-11, the implementation is therefore in the final parity phase,
-not at the exit condition. The checker gate is 472/472 and the conformance
+not at the exit condition. The checker gate is 473/473 and the conformance
 gate is 266/266.
 The preceding upstream smoke run was green, but the differential
 gate is not yet green: the three repositories above still have classified
