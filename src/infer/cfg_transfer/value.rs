@@ -501,7 +501,8 @@ impl<'src> Analyzer<'src> {
         else {
             return;
         };
-        if environment.is_inferred(name) {
+        if environment.is_open(name) {
+            environment.bind(name.to_owned(), Type::Any);
             environment.set_known_truthiness(name.to_owned(), truthy);
             return;
         }

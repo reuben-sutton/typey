@@ -24,6 +24,19 @@ pub(super) fn narrow_pattern_value(
     let Some(source_type) = state.value(value) else {
         return;
     };
+    let pattern_source_place = match pattern {
+        cfg::Pattern::Case { source_place, .. } => source_place.as_ref(),
+        _ => source_place,
+    };
+    let open_local = matches!(
+        pattern_source_place,
+        Some(cfg::Place::Local(local))
+            if analyzer
+                .program
+                .hir_program
+                .local_name(*local)
+                .is_some_and(|name| state.environment.is_open(name.as_str()))
+    );
     let narrowed = match pattern {
         cfg::Pattern::Nil => {
             if truthy {
@@ -33,7 +46,12 @@ pub(super) fn narrow_pattern_value(
             }
         }
         cfg::Pattern::Truthy | cfg::Pattern::LogicalAnd | cfg::Pattern::LogicalOr => {
-            if truthy {
+            if open_local {
+                // The observed type is not exhaustive for an open method
+                // parameter.  Keep the branch reachable, but widen the
+                // branch-local value before checking operations on it.
+                Type::Any
+            } else if truthy {
                 source_type.truthy_part()
             } else {
                 source_type.falsy_part()
@@ -59,12 +77,7 @@ pub(super) fn narrow_pattern_value(
         }
     };
     state.set_value(value, narrowed.clone());
-    let pattern_source_place = match pattern {
-        cfg::Pattern::Case { source_place, .. } => source_place.as_ref(),
-        _ => None,
-    };
-    let source_place = pattern_source_place.or(source_place);
-    if let Some(source_place) = source_place {
+    if let Some(source_place) = pattern_source_place {
         match source_place {
             cfg::Place::Local(local) => {
                 if let Some(name) = analyzer.program.hir_program.local_name(*local) {

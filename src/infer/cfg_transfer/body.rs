@@ -294,6 +294,17 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             .value(source_id.unwrap_or(condition))
             .ok_or_else(|| format!("missing branch operand {:?}", condition))?;
         if let Some(pattern) = pattern {
+            if let Some(cfg::Place::Local(local)) = &source_place {
+                if self
+                    .analyzer
+                    .program
+                    .hir_program
+                    .local_name(*local)
+                    .is_some_and(|name| state.environment.is_open(name.as_str()))
+                {
+                    return Ok((true, true));
+                }
+            }
             let (truthy_reachable, falsy_reachable, _) =
                 super::patterns::pattern_reachability(self.analyzer, pattern, &source, state)
                     .ok_or_else(|| "unsupported pattern reachability".to_owned())?;

@@ -46,6 +46,13 @@ pub(super) fn conditional_reachability(
         // a truthy condition would otherwise prune the normal loop exit.
         return (true, true);
     }
+    if condition.is_some_and(|condition| condition_contains_open_local(analyzer, condition, state))
+    {
+        // Inferred parameter types are observations from the current
+        // workspace, not a closed-world proof of every future call. Preserve
+        // both truthiness paths when a logical predicate depends on one.
+        return (true, true);
+    }
     if let Some(hir::ExprKind::Read(Read::Local(local))) = condition
         .and_then(|condition| analyzer.program.hir_program.expression(condition))
         .map(|expression| &expression.kind)
@@ -101,4 +108,36 @@ pub(super) fn conditional_reachability(
         }
     }
     truthiness_reachability(source)
+}
+
+fn condition_contains_open_local(
+    analyzer: &Analyzer<'_>,
+    expression: hir::ExprId,
+    state: &BlockState,
+) -> bool {
+    let Some(expression) = analyzer.program.hir_program.expression(expression) else {
+        return false;
+    };
+    match &expression.kind {
+        hir::ExprKind::Read(Read::Local(local)) => analyzer
+            .program
+            .hir_program
+            .local_name(*local)
+            .is_some_and(|name| state.environment.is_open(name.as_str())),
+        hir::ExprKind::Logical { left, right, .. } => {
+            condition_contains_open_local(analyzer, *left, state)
+                || condition_contains_open_local(analyzer, *right, state)
+        }
+        hir::ExprKind::Call(call) if call.name.as_str() == "!" => {
+            if let hir::Receiver::Explicit(receiver) = call.receiver {
+                condition_contains_open_local(analyzer, receiver, state)
+            } else {
+                false
+            }
+        }
+        hir::ExprKind::Sequence(expressions) => expressions
+            .last()
+            .is_some_and(|expression| condition_contains_open_local(analyzer, *expression, state)),
+        _ => false,
+    }
 }

@@ -158,6 +158,14 @@ impl Environment {
         self.provisional_locals.contains(name)
     }
 
+    /// A local whose type came from call-site evidence or an unresolved
+    /// parameter binding is open to values that were not observed in this
+    /// workspace.  Its type remains useful for ordinary expression
+    /// inference, but it cannot make a truthiness branch unreachable.
+    pub(super) fn is_open(&self, name: &str) -> bool {
+        self.is_inferred(name) || self.is_provisional(name)
+    }
+
     pub(super) fn bind_predicate_alias(
         &mut self,
         name: impl Into<String>,
