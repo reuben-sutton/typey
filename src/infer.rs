@@ -261,6 +261,7 @@ pub(crate) fn check_with_policies(
         global_name_cache: RefCell::new(HashMap::new()),
         instance_self_type_cache: RefCell::new(HashMap::new()),
         ivars: BTreeMap::new(),
+        initialized_ivars: BTreeSet::new(),
         provisional_ivars: BTreeSet::new(),
         class_vars: BTreeMap::new(),
         globals: BTreeMap::new(),
@@ -311,6 +312,7 @@ struct Analyzer<'src> {
     global_name_cache: RefCell<HashMap<String, String>>,
     instance_self_type_cache: RefCell<HashMap<String, Type>>,
     ivars: BTreeMap<IvarKey, Type>,
+    initialized_ivars: BTreeSet<IvarKey>,
     provisional_ivars: BTreeSet<IvarKey>,
     class_vars: BTreeMap<ClassVarKey, Type>,
     globals: BTreeMap<String, Type>,
@@ -351,6 +353,7 @@ pub(super) struct CfgTransferSnapshot {
     global_name_cache: HashMap<String, String>,
     instance_self_type_cache: HashMap<String, Type>,
     ivars: BTreeMap<IvarKey, Type>,
+    initialized_ivars: BTreeSet<IvarKey>,
     provisional_ivars: BTreeSet<IvarKey>,
     class_vars: BTreeMap<ClassVarKey, Type>,
     globals: BTreeMap<String, Type>,
@@ -384,6 +387,7 @@ impl<'src> Analyzer<'src> {
             global_name_cache: self.global_name_cache.borrow().clone(),
             instance_self_type_cache: self.instance_self_type_cache.borrow().clone(),
             ivars: self.ivars.clone(),
+            initialized_ivars: self.initialized_ivars.clone(),
             provisional_ivars: self.provisional_ivars.clone(),
             class_vars: self.class_vars.clone(),
             globals: self.globals.clone(),
@@ -416,6 +420,7 @@ impl<'src> Analyzer<'src> {
         *self.global_name_cache.borrow_mut() = snapshot.global_name_cache;
         *self.instance_self_type_cache.borrow_mut() = snapshot.instance_self_type_cache;
         self.ivars = snapshot.ivars;
+        self.initialized_ivars = snapshot.initialized_ivars;
         self.provisional_ivars = snapshot.provisional_ivars;
         self.class_vars = snapshot.class_vars;
         self.globals = snapshot.globals;

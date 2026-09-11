@@ -160,6 +160,15 @@ impl<'src> Analyzer<'src> {
         let Some(key) = self.ivar_key(environment, &name) else {
             return;
         };
+        let initialized = environment
+            .method_key
+            .as_ref()
+            .is_some_and(|method| !method.singleton && method.name == "initialize");
+        if initialized && self.initialized_ivars.insert(key.clone()) {
+            self.fixpoint
+                .changed_shared
+                .insert(SharedKey::Ivar(key.clone()));
+        }
         // A provisional `Any` write means the assigned expression has not
         // been inferred yet. It must not erase a concrete value learned in a
         // previous pass; doing so makes a later concrete write restore the
@@ -363,7 +372,8 @@ impl<'src> Analyzer<'src> {
                 );
             }
             if let Some(type_) = self.ivars.get(&candidate).cloned() {
-                self.record_shared_read(SharedKey::Ivar(candidate), environment);
+                self.record_shared_read(SharedKey::Ivar(candidate.clone()), environment);
+                let type_ = self.ivar_type_with_initialization(&candidate, type_);
                 return writable_type.map_or(type_.clone(), |writable| type_.join(&writable));
             }
             if let Some(info) = self.declarations.classes.get(&owner_name) {
@@ -382,8 +392,11 @@ impl<'src> Analyzer<'src> {
                         name: key.name.clone(),
                     };
                     if let Some(type_) = self.ivars.get(&extended_candidate).cloned() {
-                        self.record_shared_read(SharedKey::Ivar(extended_candidate), environment);
-                        return type_;
+                        self.record_shared_read(
+                            SharedKey::Ivar(extended_candidate.clone()),
+                            environment,
+                        );
+                        return self.ivar_type_with_initialization(&extended_candidate, type_);
                     }
                 }
                 pending.extend(info.includes.iter().cloned());
@@ -474,8 +487,8 @@ impl<'src> Analyzer<'src> {
                 name: format!("@{name}"),
             };
             if let Some(type_) = self.ivars.get(&key).cloned() {
-                self.record_shared_read(SharedKey::Ivar(key), environment);
-                return Some(type_);
+                self.record_shared_read(SharedKey::Ivar(key.clone()), environment);
+                return Some(self.ivar_type_with_initialization(&key, type_));
             }
             if let Some(info) = self.declarations.classes.get(&current) {
                 if info.extends.iter().any(|module| module == class) {
@@ -485,14 +498,22 @@ impl<'src> Analyzer<'src> {
                         name: format!("@{name}"),
                     };
                     if let Some(type_) = self.ivars.get(&extended_key).cloned() {
-                        self.record_shared_read(SharedKey::Ivar(extended_key), environment);
-                        return Some(type_);
+                        self.record_shared_read(SharedKey::Ivar(extended_key.clone()), environment);
+                        return Some(self.ivar_type_with_initialization(&extended_key, type_));
                     }
                 }
                 pending.extend(info.superclass.iter().cloned());
             }
         }
         None
+    }
+
+    fn ivar_type_with_initialization(&self, key: &IvarKey, type_: Type) -> Type {
+        if self.initialized_ivars.contains(key) {
+            type_
+        } else {
+            type_.join(&Type::Nil)
+        }
     }
 
     pub(super) fn observe_accessor_ivar(
