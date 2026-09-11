@@ -1303,8 +1303,25 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             // the fallback exception class.
                             result.abrupt.raise_type = Type::Never;
                         }
-                        if result.flow.contains(FlowKind::Raise) {
-                            let exception = result.abrupt.raise_type.clone();
+                        // A normal call can still raise before its result is
+                        // assigned.  That path matters even when the call's
+                        // inferred return type is concrete: an enclosing
+                        // `ensure` observes locals as they existed before the
+                        // assignment completed.  The ordinary rescue probe
+                        // handles handlers separately, but an ensure entry is
+                        // an executable unwind target and needs this edge in
+                        // the main transfer too.
+                        let unwinds_to_ensure = block
+                            .unwind
+                            .is_some_and(|target| graph.ensure_entries.contains(&target));
+                        if result.flow.contains(FlowKind::Raise)
+                            || (unwinds_to_ensure && result.flow.contains(FlowKind::Normal))
+                        {
+                            let exception = if result.flow.contains(FlowKind::Raise) {
+                                result.abrupt.raise_type.clone()
+                            } else {
+                                Type::named("StandardError")
+                            };
                             if let Some(edge) = super::exceptions::exception_edge(
                                 graph,
                                 block,
@@ -1627,7 +1644,8 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     next.set_value(parameter.value, type_);
                     next.set_hash_shape(parameter.value, shape);
                 }
-                Ok(vec![edge(*target, next)])
+                exception_edges.push(edge(*target, next));
+                Ok(exception_edges)
             }
             cfg::Terminator::Return(value) => {
                 let return_type = value
@@ -1648,14 +1666,14 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     None => next.environment,
                 });
                 self.terminal_flow = self.terminal_flow.union(next.flow);
-                Ok(Vec::new())
+                Ok(exception_edges)
             }
             cfg::Terminator::NonLocalReturn(value) => {
                 let return_type = value
                     .and_then(|value| next.value(value))
                     .unwrap_or(Type::Nil);
                 self.finish_outcome(FlowKind::Return, return_type, next.environment);
-                Ok(Vec::new())
+                Ok(exception_edges)
             }
             cfg::Terminator::Unreachable => {
                 for (kind, type_) in [
@@ -1668,7 +1686,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         self.finish_outcome(kind, type_, next.environment.clone());
                     }
                 }
-                Ok(Vec::new())
+                Ok(exception_edges)
             }
             cfg::Terminator::Branch {
                 condition,
@@ -1700,7 +1718,8 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         conditional.truthy == *truthy && conditional.falsy == *falsy
                     })
                     .map(|conditional| conditional.join);
-                let mut edges = Vec::with_capacity(2);
+                let mut edges = exception_edges;
+                edges.reserve(2);
                 let truthy_state = self.branch_state(
                     graph,
                     &next,
@@ -1760,11 +1779,8 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 let target_block = graph
                     .block(*target)
                     .ok_or_else(|| format!("missing ensure target {:?}", target))?;
-                let mut edges = Vec::new();
-                if next.flow.contains(FlowKind::Normal)
-                    && next.pending_exception.is_none()
-                    && next.pending_outcomes.all().is_never()
-                {
+                let mut edges = exception_edges;
+                if next.normal_reachable && next.pending_outcomes.all().is_never() {
                     let mut normal = next.clone();
                     normal.pending_exception = None;
                     normal.flow = normal.flow.without(FlowKind::Raise);

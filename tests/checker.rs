@@ -1528,6 +1528,22 @@ fn transfers_ensure_on_normal_and_exceptional_paths_without_changing_results() {
 }
 
 #[test]
+fn preserves_possible_nil_for_locals_before_ensure_assignments_complete() {
+    let source = std::fs::read_to_string("tests/fixtures/cfg_ensure_local_initialization.rb")
+        .expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn transfers_retry_back_to_the_protected_body_without_changing_results() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_retry_transfer.rb").expect("fixture");
     let baseline = check(&source, CheckerConfig::default());

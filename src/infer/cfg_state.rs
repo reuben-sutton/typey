@@ -15,6 +15,11 @@ pub(super) struct BlockState {
     pub(super) hash_shapes: Vec<Option<HashShape>>,
     pub(super) environment: Environment,
     pub(super) flow: Flow,
+    /// Whether at least one normal path reaches this state.  An exceptional
+    /// path through an `ensure` executes the cleanup body as ordinary code,
+    /// so its `flow` also contains `Normal`; keep this bit separate to avoid
+    /// mistaking that cleanup-only path for a normal continuation afterward.
+    pub(super) normal_reachable: bool,
     /// The exception currently being routed through an unwind edge. A
     /// rescue handler consumes this fact on its matching branch; an
     /// unmatched branch keeps it until the next handler or outer unwind.
@@ -36,6 +41,7 @@ impl BlockState {
             hash_shapes: Vec::new(),
             environment,
             flow,
+            normal_reachable: flow.contains(FlowKind::Normal),
             pending_exception: None,
             pending_outcomes: OutcomeTypes::default(),
         }
@@ -77,6 +83,7 @@ impl BlockState {
             hash_shapes,
             environment,
             flow: self.flow.union(other.flow),
+            normal_reachable: self.normal_reachable || other.normal_reachable,
             pending_exception,
             pending_outcomes,
         }
@@ -110,6 +117,7 @@ impl BlockState {
         self.pending_exception = Some(exception);
         self.pending_outcomes = OutcomeTypes::default();
         self.flow = Flow::abrupt(FlowKind::Raise);
+        self.normal_reachable = false;
     }
 
     pub(super) fn set_pending_outcome(&mut self, kind: FlowKind, type_: Type) {
@@ -120,6 +128,7 @@ impl BlockState {
     pub(super) fn handle_exception(&mut self) {
         self.pending_exception = None;
         self.flow = self.flow.without(FlowKind::Raise);
+        self.normal_reachable = true;
         if self.flow.is_empty() {
             self.flow = Flow::normal();
         }
