@@ -1,4 +1,5 @@
 use super::{Analyzer, CallArguments, Environment, OwnedCallInput, SourceSite};
+use crate::hir;
 use crate::types::Type;
 
 mod arguments;
@@ -55,6 +56,18 @@ impl CfgFallbackCounters {
 }
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn cfg_body_preflight_failure(
+        &self,
+        body_id: hir::BodyId,
+    ) -> Option<(hir::Span, String)> {
+        preflight::body_transfer_failure_ignoring_ranges(
+            &self.program.hir_program,
+            body_id,
+            &self.rbi_ranges,
+        )
+        .map(|failure| (failure.span, failure.reason))
+    }
+
     pub(super) fn transfer_owned_symbol_call(
         &mut self,
         input: &OwnedCallInput,

@@ -248,6 +248,44 @@ impl<'src> Analyzer<'src> {
                 .then_with(|| left.message.cmp(&right.message))
         });
         if self.config.debug {
+            let missing_source_bodies = self
+                .program
+                .hir_program
+                .bodies
+                .iter()
+                .enumerate()
+                .filter_map(|(index, body)| {
+                    let body_id = hir::BodyId(index as u32);
+                    (!self.is_rbi_offset(body.span.start as usize)
+                        && !self.cfg_transferred_bodies.contains(&body_id))
+                    .then_some((body_id, body))
+                })
+                .collect::<Vec<_>>();
+            if !missing_source_bodies.is_empty() {
+                eprintln!(
+                    "[typey] CFG source bodies not transferred: {}",
+                    missing_source_bodies.len()
+                );
+                for (body_id, body) in missing_source_bodies {
+                    let start = body.span.start as usize;
+                    let end = body.span.end as usize;
+                    let preview_end = end.min(start.saturating_add(120));
+                    let preview = self
+                        .program
+                        .source
+                        .get(start..preview_end)
+                        .map_or_else(String::new, |source| {
+                            String::from_utf8_lossy(source).replace(['\n', '\r', '\t'], " ")
+                        });
+                    let reason = self
+                        .cfg_body_preflight_failure(body_id)
+                        .map_or_else(|| "body was not entered".to_owned(), |(_, reason)| reason);
+                    eprintln!(
+                        "[typey]   {body_id:?} {:?} at {start}..{end} ({reason}): {preview}",
+                        body.owner,
+                    );
+                }
+            }
             eprintln!(
                 "[typey] CFG transfers: {} body visits, {} unique bodies ({} source, {} RBI), {} calls, {} assignments, {} values, {} fallbacks (unsupported operations {}, unsupported edges {}, legacy bridges {})",
                 self.cfg_transfer_bodies,
