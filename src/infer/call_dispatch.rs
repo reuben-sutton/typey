@@ -284,6 +284,7 @@ impl<'src> Analyzer<'src> {
 
         let signature = self.observe_call(key, arguments, block.is_some())?;
         let signature = self.widen_overridable_noreturn(key, signature);
+        let signature = self.widen_overridable_literal_return(key, signature);
         let declared = self
             .resolve_method_key(key)
             .and_then(|resolved| self.declarations.methods.get(&resolved))
@@ -386,6 +387,48 @@ impl<'src> Analyzer<'src> {
             } else {
                 override_type
             };
+        }
+        signature
+    }
+
+    /// An inferred method may return a boolean literal on its own body, but a
+    /// subclass can override that method with the opposite value. Preserve
+    /// the literal when no override is known; once the declaration graph has
+    /// a real override, dispatch must use the Boolean contract so CFG does
+    /// not incorrectly eliminate one side of a conditional.
+    pub(super) fn widen_overridable_literal_return(
+        &self,
+        key: &MethodKey,
+        mut signature: MethodSig,
+    ) -> MethodSig {
+        if !matches!(signature.return_type, Type::True | Type::False) {
+            return signature;
+        }
+        let Some(resolved) = self.resolve_method_key(key) else {
+            return signature;
+        };
+        let Some(state) = self.declarations.methods.get(&resolved) else {
+            return signature;
+        };
+        if state.explicit {
+            return signature;
+        }
+        let Some(owner) = resolved.owner.as_deref() else {
+            return signature;
+        };
+        let overridden = self.declarations.methods.keys().any(|candidate| {
+            candidate.singleton == resolved.singleton
+                && candidate.name == resolved.name
+                && candidate.owner.as_deref().is_some_and(|candidate_owner| {
+                    candidate_owner != owner
+                        && self.nominal_subtype_names(
+                            nominal_name(candidate_owner),
+                            nominal_name(owner),
+                        )
+                })
+        });
+        if overridden {
+            signature.return_type = Type::bool();
         }
         signature
     }

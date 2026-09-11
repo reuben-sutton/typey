@@ -302,6 +302,7 @@ pub(super) fn transfer_implicit_call(
     if let Some(signature) = analyzer
         .observe_call(&key, arguments, input.block.is_some())
         .map(|signature| analyzer.widen_overridable_noreturn(&key, signature))
+        .map(|signature| analyzer.widen_overridable_literal_return(&key, signature))
     {
         let block_result = analyzer
             .cfg_block_return_type(

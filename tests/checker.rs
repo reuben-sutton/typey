@@ -542,6 +542,40 @@ fn preserves_proc_constructor_instance_dispatch_through_owned_cfg() {
 }
 
 #[test]
+fn widens_inferred_boolean_returns_when_a_subclass_overrides_them() {
+    let path = "tests/fixtures/cfg_overridable_boolean.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(path, source));
+    let result = check_workspace(
+        &files,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    let errors = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.path == Path::new(path) && diagnostic.diagnostic.severity == Severity::Error
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        errors.is_empty(),
+        "unexpected boolean diagnostics: {errors:?}"
+    );
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == Path::new(path)
+            && diagnostic
+                .diagnostic
+                .message
+                .contains("Revealed type: `String`")
+    }));
+}
+
+#[test]
 fn transfers_union_enumerable_predicates_through_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_union_enumerable_predicates.rb")
         .expect("fixture");

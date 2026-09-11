@@ -504,6 +504,7 @@ impl<'src> Analyzer<'src> {
             } else if let Some(signature) = self
                 .observe_call(&key, &arguments, block.is_some())
                 .map(|signature| self.widen_overridable_noreturn(&key, signature))
+                .map(|signature| self.widen_overridable_literal_return(&key, signature))
             {
                 let declared = self
                     .resolve_method_key(&key)
@@ -970,6 +971,7 @@ impl<'src> Analyzer<'src> {
                     } else if let Some(signature) = self
                         .observe_call(&key, &arguments, block.is_some())
                         .map(|signature| self.widen_overridable_noreturn(&key, signature))
+                        .map(|signature| self.widen_overridable_literal_return(&key, signature))
                     {
                         let declared = self
                             .resolve_method_key(&key)
