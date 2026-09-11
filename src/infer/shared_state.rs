@@ -1,5 +1,6 @@
 use super::{
-    ivar_refinement_key, Analyzer, ClassVarKey, Environment, IvarKey, MethodKey, SharedKey,
+    ivar_refinement_key, AccessorKind, Analyzer, ClassVarKey, Environment, IvarKey, MethodKey,
+    SharedKey,
 };
 use crate::prism;
 use crate::signature;
@@ -343,6 +344,7 @@ impl<'src> Analyzer<'src> {
         } else {
             vec![key.owner.clone()]
         };
+        let mut writable_type = None;
         let mut visited = BTreeSet::new();
         while let Some(owner_name) = pending.pop() {
             if !visited.insert(owner_name.clone()) {
@@ -353,9 +355,16 @@ impl<'src> Analyzer<'src> {
                 singleton: key.singleton,
                 name: key.name.clone(),
             };
+            if let Some(type_) = self.accessor_writer_type(&owner_name, name, key.singleton) {
+                writable_type = Some(
+                    writable_type
+                        .take()
+                        .map_or(type_.clone(), |current: Type| current.join(&type_)),
+                );
+            }
             if let Some(type_) = self.ivars.get(&candidate).cloned() {
                 self.record_shared_read(SharedKey::Ivar(candidate), environment);
-                return type_;
+                return writable_type.map_or(type_.clone(), |writable| type_.join(&writable));
             }
             if let Some(info) = self.declarations.classes.get(&owner_name) {
                 // A module extended into a class runs its instance methods
@@ -388,7 +397,33 @@ impl<'src> Analyzer<'src> {
         // Reading an uninitialized Ruby instance variable yields nil. Keep
         // that concrete fact instead of letting an unknown ivar poison
         // `@value ||= ...` expressions with T.untyped.
-        Type::Nil
+        writable_type.map_or(Type::Nil, |writable| Type::Nil.join(&writable))
+    }
+
+    fn accessor_writer_type(&self, owner: &str, ivar: &str, singleton: bool) -> Option<Type> {
+        let name = ivar.trim_start_matches('@');
+        let key = MethodKey {
+            owner: Some(owner.to_owned()),
+            name: format!("{name}="),
+            singleton,
+        };
+        if self.declarations.accessors.get(&key) != Some(&AccessorKind::Writer) {
+            return None;
+        }
+        let state = self.declarations.methods.get(&key)?;
+        Some(if state.explicit {
+            state
+                .params
+                .first()
+                .and_then(Clone::clone)
+                .unwrap_or(Type::Any)
+        } else {
+            // An unannotated public writer can receive any Ruby value from
+            // outside the current method. It is genuinely unknown, so use
+            // the gradual top rather than letting a constructor literal make
+            // later reads permanently truthy or falsy.
+            Type::Any
+        })
     }
 
     pub(super) fn inferred_accessor_ivar_type(
