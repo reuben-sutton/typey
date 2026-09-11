@@ -155,10 +155,30 @@ impl<'src> Analyzer<'src> {
             &state,
             &mut method_environment,
         );
+        let mut positional_index = 0;
         for parameter in &parameters.parameters {
             let Some(default_body) = parameter.default_body else {
+                if matches!(
+                    parameter.kind,
+                    hir::ParameterKind::Required
+                        | hir::ParameterKind::Optional
+                        | hir::ParameterKind::Rest
+                        | hir::ParameterKind::Post
+                ) {
+                    positional_index += 1;
+                }
                 continue;
             };
+            let parameter_positional_index = positional_index;
+            if matches!(
+                parameter.kind,
+                hir::ParameterKind::Required
+                    | hir::ParameterKind::Optional
+                    | hir::ParameterKind::Rest
+                    | hir::ParameterKind::Post
+            ) {
+                positional_index += 1;
+            }
             // A default is evaluated only on the path where its argument is
             // omitted. Analyze it in a fork so calls and shared dependencies
             // are published, while local effects join the method's normal
@@ -190,8 +210,14 @@ impl<'src> Analyzer<'src> {
                     .map(|name| name.as_str().to_owned())
                     .or_else(|| parameter.name.as_ref().map(|name| name.as_str().to_owned()));
                 if let Some(name) = name {
-                    default_environment.bind(name, default_type);
+                    default_environment.bind(name, default_type.clone());
                 }
+                self.observe_owned_default_parameter(
+                    &key,
+                    parameter,
+                    parameter_positional_index,
+                    &default_type,
+                );
             }
             method_environment = method_environment.join(&default_environment);
         }
@@ -260,6 +286,32 @@ impl<'src> Analyzer<'src> {
         }
         self.substitution_context = previous_substitution_context;
         Ok(())
+    }
+
+    fn observe_owned_default_parameter(
+        &mut self,
+        key: &MethodKey,
+        parameter: &hir::Parameter,
+        positional_index: usize,
+        default_type: &Type,
+    ) {
+        let Some(state) = self.declarations.methods.get_mut(key) else {
+            return;
+        };
+        if state.explicit {
+            return;
+        }
+        let changed = match parameter.kind {
+            hir::ParameterKind::Optional => state.observe_argument(positional_index, default_type),
+            hir::ParameterKind::OptionalKeyword => parameter
+                .name
+                .as_ref()
+                .is_some_and(|name| state.observe_keyword(name.as_str(), default_type)),
+            _ => false,
+        };
+        if changed {
+            self.fixpoint.changed_methods.insert(key.clone());
+        }
     }
 
     fn bind_owned_parameters(

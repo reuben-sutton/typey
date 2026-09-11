@@ -13,10 +13,18 @@ class CfgOptionalDefaultFlow < Hash
       @parent = {}
     end
   end
+
+  def self.convert(value, conversion: nil)
+    if value.is_a?(Array)
+      value.each { |entry| convert(entry, conversion: conversion) }
+    end
+    value
+  end
 end
 
 CfgOptionalDefaultFlow.new(CfgOptionalDefaultFlow.new)
 CfgOptionalDefaultFlow.new({})
 CfgOptionalDefaultFlow.new
+CfgOptionalDefaultFlow.convert([], conversion: :assignment)
 
 T.reveal_type(CfgOptionalDefaultFlow.new) # note: CfgOptionalDefaultFlow
