@@ -34,7 +34,7 @@ blocks and nested `&block` forwarding publish concrete return summaries. A
 body containing an unsupported operation or an unmigrated callback shape falls
 back as a whole.
 
-## Current status (2026-09-11)
+## Current status (2026-09-12)
 
 The broad transfer surface is complete enough to exercise real repositories.
 The release runs below are the current coverage and parity snapshot. Body
@@ -44,9 +44,9 @@ transfer telemetry.
 
 | Check | Executable source HIR bodies | Unique source bodies transferred | Source coverage | RBI bodies transferred | Transfer visits | Owned calls | Diagnostics |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Spoom | 2,895 | 2,895 | 100.00% | 1 | 9,236 | 35,079 | 3 |
-| Packwerk | 1,219 | 1,219 | 100.00% | 1 | 8,320 | 33,887 | 70 |
-| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,270 | 52,440 | 601 |
+| Spoom | 2,895 | 2,895 | 100.00% | 1 | 9,213 | 35,024 | 3 |
+| Packwerk | 1,219 | 1,219 | 100.00% | 1 | 8,084 | 32,959 | 70 |
+| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,142 | 51,808 | 601 |
 
 The legacy differential is retained as historical diagnostic context, not as
 the completion criterion:
@@ -434,22 +434,22 @@ The first modularization steps are now in place:
   `resolves_methods_through_absolute_rbi_superclasses`.
 
 The latest release Spoom CFG run has 2,895 executable source HIR bodies and
-transferred all 2,895 distinct source bodies plus one RBI body. It made 9,236
-body visits and 35,079 calls with zero unsupported-operation fallbacks, zero
+transferred all 2,895 distinct source bodies plus one RBI body. It made 9,213
+body visits and 35,024 calls with zero unsupported-operation fallbacks, zero
 unsupported edges, and zero legacy bridges. It reports 3 diagnostics in the
-current checkout. The current CFG analysis completes in about 7.24 seconds
-internally (8.69 seconds including the CLI repository wrapper) in an
+current checkout. The current CFG analysis completes in about 2.26 seconds
+internally (3.41 seconds including the CLI repository wrapper) in an
 uncontended debug run.
 
 The latest release Packwerk CFG run has 1,219 executable source HIR bodies and
 transferred all 1,219 distinct source bodies plus one RBI body. Six `sig` declaration
 bodies are reported separately and excluded from application coverage. It made
-8,320 body visits and 33,887 calls with zero unsupported-operation, edge, or
+8,084 body visits and 32,959 calls with zero unsupported-operation, edge, or
 legacy-bridge fallbacks. It reports 70 diagnostics in the current dirty
 checkout. The `YAML = Psych` standard-library alias remains modeled
 through the owned declaration path; runtime `Set[...]` now uses its singleton
 RBI contract, and anonymous `Class.new` blocks retain their included methods.
-The CFG analysis completes in about 21.61 seconds internally (24.29 seconds
+The CFG analysis completes in about 4.23 seconds internally (5.64 seconds
 including the CLI repository wrapper) in an uncontended debug run.
 
 ActiveSupport is the current large-component boundary. The current CFG run has
@@ -458,9 +458,9 @@ ordinary class-body self types from dynamic missing-method dispatch, preserving
 hash shape at recursive widening points, distinguishing generic type
 applications from runtime `Constant[]` sends, and evaluating optional defaults
 as part of inferred method contracts, it transfers all 4,531 distinct source
-bodies plus one RBI body. It made 17,270 body visits and 52,440 calls with zero
+bodies plus one RBI body. It made 17,142 body visits and 51,808 calls with zero
 unsupported-operation, edge, or legacy-bridge fallbacks, reports 601
-diagnostics, and completes in about 8.38 seconds internally (9.19 seconds
+diagnostics, and completes in about 5.63 seconds internally (6.49 seconds
 including the CLI repository wrapper) in an uncontended debug run.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
@@ -482,11 +482,13 @@ The CFG path remains slower in this snapshot, especially on Packwerk; these
 are end-to-end measurements, not a controlled benchmark or a reason to keep
 iterating on legacy parity indefinitely.
 
-As of 2026-09-11, the implementation is therefore not a finished Sorbet
+As of 2026-09-12, the implementation is therefore not a finished Sorbet
 replacement. The checker gate is 479/479, all three repository checks transfer
 100% of their executable source bodies with zero measured fallbacks, and
 Spoom is an exact application regression check. The full 272-test conformance
-gate and the upstream smoke gate still need a fresh complete run. Remaining
+gate passed in the latest complete run; the broader suite still has one
+workspace failure caused by a dirty fixture whose expected reveal lines were
+removed, and the upstream smoke gate still needs a fresh complete run. Remaining
 work is primarily Sorbet/upstream behavior coverage, RBI/input-scope handling,
 untyped provenance reduction, and performance of the owned transfer path—not
 more blind iteration on legacy diagnostic differences.
