@@ -343,6 +343,37 @@ impl<'src> Analyzer<'src> {
                     }
                     return;
                 }
+                if truthy && call.safe_navigation {
+                    match call.receiver {
+                        hir::Receiver::Explicit(receiver) => match self
+                            .program
+                            .hir_program
+                            .expression(receiver)
+                            .map(|expression| expression.kind.clone())
+                        {
+                            Some(hir::ExprKind::Read(Read::Local(local))) => {
+                                if let Some(name) = self
+                                    .program
+                                    .hir_program
+                                    .local_name(local)
+                                    .map(|name| name.as_str().to_owned())
+                                {
+                                    let current = environment.get(&name);
+                                    environment.bind(name, current.without(&Type::Nil));
+                                }
+                            }
+                            Some(hir::ExprKind::Read(Read::InstanceVariable(name))) => {
+                                let current = self.ivar_type(environment, name.as_str());
+                                environment.bind(
+                                    ivar_refinement_key(name.as_str()),
+                                    current.without(&Type::Nil),
+                                );
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                }
                 let argument_id = match call.arguments.first() {
                     None => None,
                     Some(hir::Argument::Positional(value)) => Some(*value),

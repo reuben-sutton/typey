@@ -1246,6 +1246,13 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             }
                             if self.context.top_level && self.probe_exit.is_none() {
                                 self.top_level_terminated = true;
+                                // Keep checking later top-level expressions so
+                                // their diagnostics and reveals are reported,
+                                // but do not let this synthetic continuation
+                                // contribute a normal path to the body's final
+                                // type or environment.
+                                next.normal_reachable = false;
+                                next.flow = next.flow.without(FlowKind::Normal);
                             }
                             // Top-level Ruby keeps checking later statements
                             // after a raising expression for reveals and
@@ -1539,24 +1546,26 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                 Ok(exception_edges)
             }
             cfg::Terminator::Return(value) => {
-                let return_type = value
-                    .and_then(|value| next.value(value))
-                    .unwrap_or(Type::Nil);
-                // The CFG's terminal `Return` is ordinary completion of the
-                // body. An explicit Ruby `return` is lowered to a pending
-                // outcome and reaches `finish_outcome` through an unreachable
-                // block, where block closures correctly preserve its
-                // non-local behavior.
-                self.normal_type = if self.normal_type.is_never() {
-                    return_type
-                } else {
-                    self.normal_type.join(&return_type)
-                };
-                self.final_environment = Some(match self.final_environment.take() {
-                    Some(environment) => environment.join(&next.environment),
-                    None => next.environment,
-                });
-                self.terminal_flow = self.terminal_flow.union(next.flow);
+                if next.normal_reachable {
+                    let return_type = value
+                        .and_then(|value| next.value(value))
+                        .unwrap_or(Type::Nil);
+                    // The CFG's terminal `Return` is ordinary completion of the
+                    // body. An explicit Ruby `return` is lowered to a pending
+                    // outcome and reaches `finish_outcome` through an unreachable
+                    // block, where block closures correctly preserve its
+                    // non-local behavior.
+                    self.normal_type = if self.normal_type.is_never() {
+                        return_type
+                    } else {
+                        self.normal_type.join(&return_type)
+                    };
+                    self.final_environment = Some(match self.final_environment.take() {
+                        Some(environment) => environment.join(&next.environment),
+                        None => next.environment,
+                    });
+                    self.terminal_flow = self.terminal_flow.union(next.flow);
+                }
                 Ok(exception_edges)
             }
             cfg::Terminator::NonLocalReturn(value) => {

@@ -3366,7 +3366,9 @@ fn preserves_generic_accessor_types_through_nested_iteration() {
 
 #[test]
 fn narrows_nilable_locals_after_safe_navigation_guards() {
-    let result = check_fixture("tests/fixtures/safe_navigation_narrowing.rb");
+    let path = "tests/fixtures/safe_navigation_narrowing.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let result = check_fixture(path);
     assert!(
         result
             .diagnostics
@@ -3375,6 +3377,30 @@ fn narrows_nilable_locals_after_safe_navigation_guards() {
         "{:?}",
         result.diagnostics
     );
+
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    let reveals = cfg
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.starts_with("Revealed type:"))
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reveals,
+        vec![
+            "Revealed type: `String`",
+            "Revealed type: `T.nilable(String)`",
+        ],
+        "{:?}",
+        cfg.diagnostics
+    );
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
 }
 
 #[test]
