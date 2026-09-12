@@ -425,12 +425,18 @@ impl<'src> Analyzer<'src> {
                     return Some(Eval::value(result));
                 }
                 let actual = values.get(value.0 as usize).cloned().flatten()?;
-                let result = optional_proc_type(&actual)
+                let local_name = self.cfg_passed_block_local_name(input);
+                let forwarded = local_name
+                    .as_deref()
+                    .is_some_and(|name| environment.is_block_parameter(name));
+                let result = (!forwarded)
+                    .then(|| optional_proc_type(&actual))
+                    .flatten()
                     .filter(|block| Self::passed_block_signature(block).is_some())
                     .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()))
                     .map(Eval::value)
                     .or_else(|| {
-                        let name = self.cfg_passed_block_local_name(input)?;
+                        let name = local_name.as_deref()?;
                         let expected_parameters = expected
                             .as_ref()
                             .and_then(|expected| proc_parts(expected))
@@ -592,8 +598,15 @@ impl<'src> Analyzer<'src> {
                     )?;
                     return Some((Eval::value(result), environment.clone()));
                 }
-                let Some(signature) = Self::passed_block_signature(&actual) else {
-                    if let Some(local_name) = self.cfg_passed_block_local_name(input) {
+                let local_name = self.cfg_passed_block_local_name(input);
+                let forwarded = local_name
+                    .as_deref()
+                    .is_some_and(|name| environment.is_block_parameter(name));
+                let Some(signature) = (!forwarded)
+                    .then(|| Self::passed_block_signature(&actual))
+                    .flatten()
+                else {
+                    if let Some(local_name) = local_name {
                         if let Some(signature) = self.forwarded_block_signature(
                             &local_name,
                             &actual,
