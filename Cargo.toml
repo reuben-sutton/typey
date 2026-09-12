@@ -11,6 +11,10 @@ ruby-prism = "1.9.0"
 
 [dev-dependencies]
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
 [[bin]]
 name = "typey"
 path = "src/main.rs"
