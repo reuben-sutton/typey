@@ -132,10 +132,16 @@ impl<'src> Analyzer<'src> {
     }
 
     pub(super) fn record_shared_read(&mut self, key: SharedKey, environment: &Environment) {
-        let Some(method) = environment.method_key.as_ref() else {
+        let Some(method) = environment
+            .dependency_key
+            .as_ref()
+            .or(environment.method_key.as_ref())
+        else {
             return;
         };
-        if !self.declarations.methods.contains_key(method) {
+        if !self.declarations.methods.contains_key(method)
+            && !self.namespace_body_key_ids.contains_key(method)
+        {
             return;
         }
         self.fixpoint

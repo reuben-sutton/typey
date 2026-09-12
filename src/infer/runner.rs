@@ -152,13 +152,6 @@ impl<'src> Analyzer<'src> {
         changed_methods: &BTreeSet<MethodKey>,
         changed_shared: &BTreeSet<SharedKey>,
     ) -> BTreeSet<hir::BodyId> {
-        // Namespace bodies can observe shared state through framework hooks
-        // and dynamic dispatch without producing a direct read edge. A
-        // shared-state change therefore invalidates every namespace body;
-        // method-only changes can use the precise call dependency graph below.
-        if !changed_shared.is_empty() {
-            return self.namespace_body_keys.keys().copied().collect();
-        }
         let mut bodies = BTreeSet::new();
         for method in changed_methods {
             if let Some(callers) = self.fixpoint.method_callers.get(method) {
