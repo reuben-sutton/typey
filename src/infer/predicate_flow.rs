@@ -564,7 +564,16 @@ impl<'src> Analyzer<'src> {
                 }
                 if let Some(local) = receiver.as_local_variable_read_node() {
                     let local_name = prism::constant_name(local.name());
-                    if environment.is_inferred(&local_name) {
+                    if environment.is_inferred(&local_name)
+                        && !matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?")
+                    {
+                        // Inferred parameter types are observations rather
+                        // than exhaustive contracts, so ordinary equality
+                        // and nilability facts must not leak from one call
+                        // into every call. A successful class predicate is
+                        // different: it proves the nominal type on this
+                        // control-flow path, including for an unresolved
+                        // generic parameter such as `V`.
                         return;
                     }
                     let current = environment.get(&local_name);
