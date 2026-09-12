@@ -16,6 +16,7 @@ pub(super) struct CfgBodyMetadata {
     pub(super) fixed_shape_array_elements: Arc<HashMap<cfg::ValueId, Vec<cfg::ValueId>>>,
     pub(super) written_locals: Arc<[hir::LocalId]>,
     pub(super) has_unsupported_operation: bool,
+    pub(super) has_known_cfg_failure: bool,
 }
 
 /// The immutable program view used by recursive evaluation and CFG transfer.
@@ -50,11 +51,23 @@ impl<'src> ProgramContext<'src> {
         let cfg_index = cfg_graphs
             .as_deref()
             .map(|graphs| cfg::CfgIndex::from_graphs(&hir_program, graphs));
+        let known_cfg_failures = cfg_graphs
+            .as_deref()
+            .map(|graphs| build_known_cfg_failures(&hir_program, graphs));
         let cfg_body_metadata = cfg_graphs.as_deref().map(|graphs| {
             Arc::<[CfgBodyMetadata]>::from(
                 graphs
                     .iter()
-                    .map(|graph| build_cfg_body_metadata(graph, rbi_ranges))
+                    .enumerate()
+                    .map(|(index, graph)| {
+                        let mut metadata = build_cfg_body_metadata(graph, rbi_ranges);
+                        metadata.has_known_cfg_failure = known_cfg_failures
+                            .as_ref()
+                            .and_then(|failures| failures.get(index))
+                            .copied()
+                            .unwrap_or(false);
+                        metadata
+                    })
                     .collect::<Vec<_>>(),
             )
         });
@@ -204,7 +217,88 @@ fn build_cfg_body_metadata(graph: &cfg::Cfg, rbi_ranges: &[(usize, usize)]) -> C
         fixed_shape_array_elements: Arc::new(fixed_shape_array_elements),
         written_locals: Arc::from(written_locals.into_iter().collect::<Vec<_>>()),
         has_unsupported_operation,
+        has_known_cfg_failure: false,
     }
+}
+
+fn build_known_cfg_failures(program: &hir::Program, graphs: &[cfg::Cfg]) -> Vec<bool> {
+    fn visit(
+        program: &hir::Program,
+        graphs: &[cfg::Cfg],
+        body_id: hir::BodyId,
+        memo: &mut [Option<bool>],
+        visiting: &mut HashSet<hir::BodyId>,
+    ) -> bool {
+        if let Some(failure) = memo.get(body_id.0 as usize).and_then(|failure| *failure) {
+            return failure;
+        }
+        if !visiting.insert(body_id) {
+            return false;
+        }
+        let failure = match (program.body(body_id), graphs.get(body_id.0 as usize)) {
+            (Some(body), Some(graph)) => {
+                let body_has_context = matches!(&body.owner, hir::BodyOwner::Method { .. });
+                graph
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.operations)
+                    .any(|operation| match &operation.kind {
+                        cfg::OperationKind::Call { receiver, .. }
+                            if matches!(
+                                receiver,
+                                cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield
+                            ) =>
+                        {
+                            !body_has_context
+                        }
+                        cfg::OperationKind::Definition { declaration, .. } => program
+                            .declaration(*declaration)
+                            .is_some_and(|declaration| match &declaration.kind {
+                                hir::DeclarationKind::Method { body, .. }
+                                | hir::DeclarationKind::Class {
+                                    body: Some(body), ..
+                                }
+                                | hir::DeclarationKind::Module {
+                                    body: Some(body), ..
+                                }
+                                | hir::DeclarationKind::SingletonClass {
+                                    body: Some(body), ..
+                                } => visit(program, graphs, *body, memo, visiting),
+                                hir::DeclarationKind::Class { body: None, .. }
+                                | hir::DeclarationKind::Module { body: None, .. }
+                                | hir::DeclarationKind::SingletonClass { body: None, .. } => false,
+                            }),
+                        cfg::OperationKind::MakeClosure { closure } => {
+                            program.closure(*closure).is_some_and(|closure| {
+                                visit(program, graphs, closure.body, memo, visiting)
+                            })
+                        }
+                        _ => false,
+                    })
+            }
+            _ => false,
+        };
+        visiting.remove(&body_id);
+        if let Some(slot) = memo.get_mut(body_id.0 as usize) {
+            *slot = Some(failure);
+        }
+        failure
+    }
+
+    let mut memo = vec![None; graphs.len()];
+    let mut visiting = HashSet::new();
+    for index in 0..graphs.len() {
+        let _ = visit(
+            program,
+            graphs,
+            hir::BodyId(index as u32),
+            &mut memo,
+            &mut visiting,
+        );
+    }
+    memo.into_iter()
+        .map(|failure| failure.unwrap_or(false))
+        .collect()
 }
 
 fn offset_in_ranges(offset: usize, ranges: &[(usize, usize)]) -> bool {

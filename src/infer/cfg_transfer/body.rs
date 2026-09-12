@@ -575,76 +575,11 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
 }
 
 impl<'src> Analyzer<'src> {
-    fn body_has_known_cfg_failure(
-        &self,
-        body_id: hir::BodyId,
-        visiting: &mut HashSet<hir::BodyId>,
-    ) -> bool {
-        if !visiting.insert(body_id) {
-            return false;
-        }
-        let Some(body) = self.program.hir_program.body(body_id) else {
-            visiting.remove(&body_id);
-            return false;
-        };
-        let Some(graph) = self
-            .program
-            .cfg_graphs
-            .as_ref()
-            .and_then(|graphs| graphs.get(body_id.0 as usize))
-        else {
-            visiting.remove(&body_id);
-            return false;
-        };
-        let body_has_context = matches!(&body.owner, hir::BodyOwner::Method { .. });
-        let failure = graph
-            .blocks
-            .iter()
-            .flat_map(|block| &block.operations)
-            .any(|operation| match &operation.kind {
-                cfg::OperationKind::Call { receiver, .. }
-                    if matches!(
-                        receiver,
-                        cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield
-                    ) =>
-                {
-                    !body_has_context
-                }
-                cfg::OperationKind::Definition { declaration, .. } => self
-                    .program
-                    .hir_program
-                    .declaration(*declaration)
-                    .is_some_and(|declaration| match &declaration.kind {
-                        hir::DeclarationKind::Method { body, .. }
-                        | hir::DeclarationKind::Class {
-                            body: Some(body), ..
-                        }
-                        | hir::DeclarationKind::Module {
-                            body: Some(body), ..
-                        }
-                        | hir::DeclarationKind::SingletonClass {
-                            body: Some(body), ..
-                        } => self.body_has_known_cfg_failure(*body, visiting),
-                        hir::DeclarationKind::Class { body: None, .. }
-                        | hir::DeclarationKind::Module { body: None, .. }
-                        | hir::DeclarationKind::SingletonClass { body: None, .. } => false,
-                    }),
-                cfg::OperationKind::MakeClosure { closure } => self
-                    .program
-                    .hir_program
-                    .closure(*closure)
-                    .is_some_and(|closure| self.body_has_known_cfg_failure(closure.body, visiting)),
-                _ => false,
-            });
-        visiting.remove(&body_id);
-        failure
-    }
-
     fn cfg_body_needs_transaction(
         &self,
         graph: &cfg::Cfg,
-        body_id: hir::BodyId,
         environment: &Environment,
+        has_known_cfg_failure: bool,
     ) -> bool {
         let direct_failure = graph.blocks.iter().flat_map(|block| &block.operations).any(
             |operation| match &operation.kind {
@@ -665,7 +600,7 @@ impl<'src> Analyzer<'src> {
                 _ => false,
             },
         );
-        direct_failure || self.body_has_known_cfg_failure(body_id, &mut HashSet::new())
+        direct_failure || has_known_cfg_failure
     }
 
     fn transfer_unvisited_inline_blocks(
@@ -744,7 +679,13 @@ impl<'src> Analyzer<'src> {
         // passes instead of rebuilding the same body for every method visit.
         let graph_store = self.program.cfg_graphs.as_ref()?.clone();
         let graph = graph_store.get(body_id.0 as usize)?;
-        let (fixed_array_elements, fixed_shape_array_elements, written_locals, has_unsupported) = {
+        let (
+            fixed_array_elements,
+            fixed_shape_array_elements,
+            written_locals,
+            has_unsupported,
+            has_known_cfg_failure,
+        ) = {
             let metadata: &CfgBodyMetadata = self
                 .program
                 .cfg_body_metadata
@@ -755,6 +696,7 @@ impl<'src> Analyzer<'src> {
                 metadata.fixed_shape_array_elements.clone(),
                 metadata.written_locals.clone(),
                 metadata.has_unsupported_operation,
+                metadata.has_known_cfg_failure,
             )
         };
         if has_unsupported {
@@ -806,7 +748,7 @@ impl<'src> Analyzer<'src> {
         }
         let fallback_environment = initial_environment.clone();
         let snapshot = self
-            .cfg_body_needs_transaction(&graph, body_id, &initial_environment)
+            .cfg_body_needs_transaction(&graph, &initial_environment, has_known_cfg_failure)
             .then(|| self.cfg_transfer_snapshot());
         let initial = BlockState::with_values(initial_environment, Vec::new(), Flow::normal());
         let mut transfer = BodyTransfer {
