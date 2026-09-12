@@ -28,7 +28,7 @@ end
 class DynamicMethods
   def self.install
     define_method(:value) do |options|
-      T.reveal_type(self) # note: Revealed type: `T.untyped`
+      T.reveal_type(self) # note: Revealed type: `DynamicMethods`
       T.reveal_type(options) # note: Revealed type: `T.untyped`
       options.key?(:value)
     end

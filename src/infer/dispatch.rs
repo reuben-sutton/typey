@@ -36,6 +36,16 @@ impl<'src> Analyzer<'src> {
                 if class_body_context {
                     return Self::class_object_instance_type(&environment.self_type);
                 }
+                // A singleton method declared directly on a class or module
+                // still has a statically known owner. `define_method` adds an
+                // instance method to that owner, so its block runs with an
+                // instance of the owner's type as `self`.
+                if current.singleton {
+                    return current
+                        .owner
+                        .as_deref()
+                        .map(|owner| Type::named(owner.to_owned()));
+                }
                 None
             } else {
                 // `define_singleton_method` executes with the receiver as
