@@ -407,12 +407,9 @@ impl<'src> Analyzer<'src> {
         let Some(resolved) = self.resolve_method_key(key) else {
             return signature;
         };
-        let Some(state) = self.declarations.methods.get(&resolved) else {
+        let Some(_state) = self.declarations.methods.get(&resolved) else {
             return signature;
         };
-        if state.explicit {
-            return signature;
-        }
         let Some(owner) = resolved.owner.as_deref() else {
             return signature;
         };

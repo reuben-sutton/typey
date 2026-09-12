@@ -618,7 +618,8 @@ impl<'src> Analyzer<'src> {
             }
             return;
         }
-        if environment.is_inferred(&local_name) {
+        let inferred = environment.is_inferred(&local_name);
+        if inferred && !matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?") {
             return;
         }
         let current = environment.get(&local_name);
@@ -668,7 +669,13 @@ impl<'src> Analyzer<'src> {
             }
             _ => return,
         };
-        environment.bind(local_name, narrowed);
+        environment.bind(local_name.clone(), narrowed);
+        if inferred && matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?") {
+            // A successful class predicate proves the generic value on this
+            // path, but the observed parameter type remains open for
+            // reachability purposes after the branch joins.
+            environment.mark_inferred(local_name);
+        }
     }
 
     fn narrow_cfg_ivar_call_target(

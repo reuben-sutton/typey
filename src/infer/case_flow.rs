@@ -40,13 +40,15 @@ impl<'src> Analyzer<'src> {
                 condition_type = condition_type.join(&value_type);
             }
             covered_type = covered_type.join(&condition_type);
-            if let Some(predicate) = predicate.as_ref() {
-                self.narrow_case_target(predicate, &mut when_environment, &condition_type);
-                self.narrow_discriminated_case_target(
-                    predicate,
-                    &conditions,
-                    &mut when_environment,
-                );
+            if condition_is_type_test {
+                if let Some(predicate) = predicate.as_ref() {
+                    self.narrow_case_target(predicate, &mut when_environment, &condition_type);
+                    self.narrow_discriminated_case_target(
+                        predicate,
+                        &conditions,
+                        &mut when_environment,
+                    );
+                }
             }
             let when_result = if let Some(statements) = when_node.statements() {
                 self.eval_statements(&statements, &mut when_environment)

@@ -608,6 +608,12 @@ fn transfer_array_builtin(
         "[]" => {
             if arguments.argument_types.first() == Some(&Type::Integer) {
                 Some(Type::union([Type::Nil, element.clone()]))
+            } else if owned_range_starts_at_zero(analyzer, input) {
+                // `Array#[]` is nilable for an arbitrary range, but a range
+                // beginning at zero always returns an array (possibly
+                // empty). This is the contract used by Active Support's
+                // `Array#to` implementation.
+                Some(Type::Array(Box::new(element.clone())))
             } else {
                 Some(Type::union([
                     Type::Nil,
@@ -774,4 +780,32 @@ fn transfer_array_builtin(
         "==" | "!=" => Some(Type::bool()),
         _ => None,
     }
+}
+
+fn owned_range_starts_at_zero(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> bool {
+    let Some(expression) = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+    else {
+        return false;
+    };
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return false;
+    };
+    let Some(hir::Argument::Positional(argument)) = call.arguments.first() else {
+        return false;
+    };
+    let Some(expression) = analyzer.program.hir_program.expression(*argument) else {
+        return false;
+    };
+    let hir::ExprKind::Range {
+        left: Some(left), ..
+    } = expression.kind
+    else {
+        return false;
+    };
+    matches!(
+        analyzer.program.hir_program.expression(left).map(|expression| &expression.kind),
+        Some(hir::ExprKind::Literal(hir::Literal::Integer(value))) if value == "0"
+    )
 }

@@ -467,7 +467,11 @@ impl Type {
     #[must_use]
     pub fn falsy_part(&self) -> Self {
         match self {
-            Self::Any => Self::Any,
+            // Both gradual tops may contain `nil` or `false`.  Treating
+            // `T.anything` as unconditionally truthy makes a lookup such as
+            // `options[:separator]` erase its `else` branch when the hash
+            // value is otherwise unknown.
+            Self::Any | Self::Anything => self.clone(),
             Self::Union(members) => Self::union(members.iter().filter_map(|member| {
                 if member.is_falsy() {
                     Some(member.clone())

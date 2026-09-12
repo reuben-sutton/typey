@@ -278,6 +278,14 @@ fn transfer_receiver_call_with_substitution(
             missing_method: false,
         });
     }
+    if name == "binding" && matches!(receiver, Type::Proc(_, _) | Type::BoundProc { .. }) {
+        return Ok(ReceiverTransfer {
+            type_: Type::named("Binding"),
+            block_result: None,
+            untyped_origin: UntypedOrigin::FallbackCall,
+            missing_method: false,
+        });
+    }
     if let Type::Tuple(elements) = receiver {
         if arguments.argument_types.is_empty() {
             let type_ = match name {
@@ -1175,7 +1183,9 @@ fn structural_collection_receiver(receiver: &Type) -> Option<Type> {
         name_matches(name, "Hash"),
         arguments.as_slice(),
     ) {
+        (true, false, []) => Some(Type::Array(Box::new(Type::Any))),
         (true, false, [element]) => Some(Type::Array(Box::new(element.clone()))),
+        (false, true, []) => Some(Type::Hash(Box::new(Type::Any), Box::new(Type::Any))),
         (false, true, [key, value]) => {
             Some(Type::Hash(Box::new(key.clone()), Box::new(value.clone())))
         }

@@ -719,7 +719,13 @@ impl<'src> Analyzer<'src> {
                     .map(|member| self.meet_predicate_type(member, expected)),
             );
         }
-        if self.is_assignable(expected, current) {
+        if matches!(current, Type::TypeVar(_) | Type::Anything) {
+            // A successful runtime class predicate resolves an unsolved
+            // generic value for the current path. Intersecting `V` with
+            // `Hash` leaves an opaque type variable that cannot dispatch
+            // `Hash` methods such as `to_hash` or `map`.
+            expected.clone()
+        } else if self.is_assignable(expected, current) {
             expected.clone()
         } else if self.is_assignable(current, expected) {
             // The current type may be a more precise structural form of the

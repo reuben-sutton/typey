@@ -668,6 +668,11 @@ impl<'src> Analyzer<'src> {
             {
                 true
             }
+            (Type::Hash(_, _), Type::Named(name, arguments))
+                if arguments.is_empty() && name_matches(name, "Hash") =>
+            {
+                true
+            }
             (Type::Tuple(actual), Type::Named(name, arguments))
                 if arguments.len() == 1 && name_matches(name, "Array") =>
             {
