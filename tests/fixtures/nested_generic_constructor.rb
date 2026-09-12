@@ -25,3 +25,5 @@ module Spoom
     end
   end
 end
+
+T.reveal_type(Spoom::Poset[String].new.add_element("value")) # note: Revealed type: `Spoom::Poset::Element[String]`

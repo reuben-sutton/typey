@@ -22,9 +22,12 @@ end
 class ExampleHost
   include ExampleConcern
 
-  class_only
+  T.reveal_type(class_only) # note: Revealed type: `String`
 
   def use_instance_method
-    instance_only
+    T.reveal_type(instance_only) # note: Revealed type: `String`
   end
 end
+
+T.reveal_type(ExampleHost.class_only) # note: Revealed type: `String`
+T.reveal_type(ExampleHost.new.use_instance_method) # note: Revealed type: `String`

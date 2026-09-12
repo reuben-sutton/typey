@@ -30,14 +30,17 @@ ActiveSupport::TestCase.extend(ActiveSupport::Testing::SetupAndTeardown::ClassMe
 
 class ExampleTest < ActiveSupport::TestCase
   test "runs against an instance" do
+    T.reveal_type(self) # note: Revealed type: `ExampleTest`
     assert_equal 1, 1
   end
 
   setup do
+    T.reveal_type(self) # note: Revealed type: `ExampleTest`
     assert_equal 1, 1
   end
 
   teardown do
+    T.reveal_type(self) # note: Revealed type: `ExampleTest`
     assert_equal 1, 1
   end
 end

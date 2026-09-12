@@ -10,4 +10,4 @@ module NullableBlockFactory
   end
 end
 
-NullableBlockFactory.call("value")
+T.reveal_type(NullableBlockFactory.call("value")) # note: Revealed type: `String`

@@ -23,6 +23,7 @@ end
 
 class ExampleEngine < EngineBase
   initializer "example" do |app|
+    T.reveal_type(self) # note: Revealed type: `ExampleEngine`
     instance_only
   end
 end

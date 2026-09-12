@@ -21,6 +21,7 @@ TestBase.extend(TestDsl)
 
 class ExampleTest < TestBase
   test "runs against an instance" do
+    T.reveal_type(self) # note: Revealed type: `ExampleTest`
     assert_equal 1, 1
   end
 end

@@ -31,12 +31,14 @@ end
 
 class FirstEngine < FirstEngineBase
   initializer "first" do
+    T.reveal_type(self) # note: Revealed type: `FirstEngine`
     first_only
   end
 end
 
 class SecondEngine < SecondEngineBase
   initializer "second" do
+    T.reveal_type(self) # note: Revealed type: `SecondEngine`
     second_only
   end
 end

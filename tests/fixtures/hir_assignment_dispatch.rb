@@ -33,4 +33,4 @@ class HIRAssignmentDispatch
   end
 end
 
-HIRAssignmentDispatch.new.run
+T.reveal_type(HIRAssignmentDispatch.new.run) # note: Revealed type: `Integer`

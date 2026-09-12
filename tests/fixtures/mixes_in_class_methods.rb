@@ -14,4 +14,4 @@ class Host
   include Extension
 end
 
-Host.class_api
+T.reveal_type(Host.class_api) # note: Revealed type: `String`

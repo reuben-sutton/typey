@@ -6,8 +6,9 @@ def validate_names(*names)
       raise TypeError
     end
 
+    T.reveal_type(name) # note: Revealed type: `Symbol`
     name
   end
 end
 
-validate_names(:name)
+T.reveal_type(validate_names(:name)) # note: Revealed type: `T::Array[Symbol]`
