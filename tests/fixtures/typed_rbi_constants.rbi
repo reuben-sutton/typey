@@ -8,3 +8,4 @@ end
 def accept_encoding(value); end
 
 accept_encoding(Encoding::ASCII_8BIT)
+T.reveal_type(Encoding::ASCII_8BIT) # note: Encoding

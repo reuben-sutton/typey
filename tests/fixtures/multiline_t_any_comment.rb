@@ -9,6 +9,8 @@ sig do
     )
   ).void
 end
-def accepts_string_or_number(value); end
+def accepts_string_or_number(value)
+  T.reveal_type(value) # note: T.any(Float, Integer, String)
+end
 
-accepts_string_or_number("version")
+T.reveal_type(accepts_string_or_number("version")) # note: NilClass
