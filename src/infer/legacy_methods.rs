@@ -260,6 +260,7 @@ impl<'src> Analyzer<'src> {
                 argument_nodes: Vec::new(),
                 argument_sites: Vec::new(),
                 argument_types: types,
+                literal_tuple_arguments: Vec::new(),
                 argument_indices: Vec::new(),
                 positional_indices: Vec::new(),
                 positional_types,

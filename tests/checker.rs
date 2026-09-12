@@ -7562,6 +7562,14 @@ end
     files.push(WorkspaceFile::new("tuple_argument.rb", source));
     let result = check_workspace(&files, CheckerConfig::default());
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let cfg = check_workspace(
+        &files,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
 }
 
 #[test]

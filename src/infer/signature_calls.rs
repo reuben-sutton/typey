@@ -305,6 +305,38 @@ impl<'src> Analyzer<'src> {
         }
     }
 
+    fn owned_literal_tuple_argument<'a>(
+        arguments: &'a CallArguments<'_>,
+        index: usize,
+        keyword_mode: bool,
+        actual: &'a Type,
+        expected: &Type,
+    ) -> &'a Type {
+        let Type::Tuple(expected_elements) = expected else {
+            return actual;
+        };
+        let source_index = if keyword_mode {
+            arguments.positional_indices.get(index)
+        } else {
+            arguments.argument_indices.get(index)
+        };
+        let Some(source_index) = source_index else {
+            return actual;
+        };
+        arguments
+            .argument_indices
+            .iter()
+            .zip(&arguments.literal_tuple_arguments)
+            .find_map(|(candidate_index, candidate)| {
+                (candidate_index == source_index).then_some(candidate.as_ref())
+            })
+            .flatten()
+            .filter(|candidate| {
+                matches!(candidate, Type::Tuple(elements) if elements.len() == expected_elements.len())
+            })
+            .unwrap_or(actual)
+    }
+
     fn invoke_signature_at_site<'node>(
         &mut self,
         diagnostic_site: SignatureDiagnosticSite<'_, 'node>,
@@ -495,6 +527,9 @@ impl<'src> Analyzer<'src> {
                                     .unwrap_or(source_site),
                             )
                         });
+                    let actual = Self::owned_literal_tuple_argument(
+                        arguments, index, true, actual, &expected,
+                    );
                     self.signature_check_assignable(site, actual, &expected);
                 }
             }
@@ -533,6 +568,9 @@ impl<'src> Analyzer<'src> {
                                     .unwrap_or(source_site),
                             )
                         });
+                    let actual = Self::owned_literal_tuple_argument(
+                        arguments, index, false, actual, &expected,
+                    );
                     self.signature_check_assignable(site, actual, &expected);
                 }
             }

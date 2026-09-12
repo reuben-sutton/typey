@@ -732,6 +732,11 @@ pub(super) struct CallArguments<'node> {
     pub(super) argument_nodes: Vec<Node<'node>>,
     pub(super) argument_sites: Vec<SourceSite>,
     pub(super) argument_types: Vec<Type>,
+    /// Owned CFG calls retain the precise tuple shape of fixed literal-array
+    /// arguments separately from their ordinary array type.  Signature
+    /// checking can use it when the callee expects a tuple without making
+    /// every array literal globally tuple-shaped.
+    pub(super) literal_tuple_arguments: Vec<Option<Type>>,
     pub(super) argument_indices: Vec<usize>,
     pub(super) positional_indices: Vec<usize>,
     pub(super) positional_types: Vec<Type>,
