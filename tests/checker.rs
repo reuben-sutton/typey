@@ -3493,6 +3493,14 @@ end
         notes.iter().any(|message| message.contains("Integer")),
         "{notes:?}"
     );
+    let cfg_result = check_workspace(
+        &files,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg_result.has_errors(), "{:?}", cfg_result.diagnostics);
 }
 
 #[test]

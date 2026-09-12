@@ -31,6 +31,28 @@ pub(super) fn transfer_receiver_call(
     environment: &mut Environment,
     hash_shape: Option<&HashShape>,
 ) -> Result<ReceiverTransfer, String> {
+    transfer_receiver_call_with_substitution(
+        analyzer,
+        input,
+        receiver,
+        receiver,
+        arguments,
+        values,
+        environment,
+        hash_shape,
+    )
+}
+
+fn transfer_receiver_call_with_substitution(
+    analyzer: &mut Analyzer<'_>,
+    input: &OwnedCallInput,
+    receiver: &Type,
+    substitution_receiver: &Type,
+    arguments: &CallArguments<'_>,
+    values: &[Option<Type>],
+    environment: &mut Environment,
+    hash_shape: Option<&HashShape>,
+) -> Result<ReceiverTransfer, String> {
     let name = input.name.as_str();
     if let Some(type_) = analyzer.owned_framework_call_type(receiver, name) {
         return Ok(ReceiverTransfer {
@@ -175,6 +197,56 @@ pub(super) fn transfer_receiver_call(
             environment,
             hash_shape,
         );
+    }
+
+    // Intersections represent one value satisfying several contracts. Search
+    // each member for a method, ignoring members which do not contribute that
+    // method, and retain the original receiver for attached-class substitution.
+    if let Type::Intersection(members) = receiver {
+        if let Some(result) = transfer_intersection_members(
+            analyzer,
+            input,
+            members.iter().cloned(),
+            substitution_receiver,
+            arguments,
+            values,
+            environment,
+            hash_shape,
+        )? {
+            return Ok(result);
+        }
+    }
+
+    // An intersection inside a class object represents one runtime class
+    // satisfying several interfaces, not a union of unrelated class objects.
+    // Look up the singleton method on each intersected instance while
+    // retaining the original class-object type for attached-class substitution.
+    if let Type::Named(class, type_arguments) = receiver {
+        if (name_matches(class, "Class") || name_matches(class, "Module"))
+            && type_arguments
+                .first()
+                .is_some_and(|argument| matches!(argument, Type::Intersection(_)))
+        {
+            let Some(Type::Intersection(members)) = type_arguments.first() else {
+                unreachable!("checked class-object intersection");
+            };
+            let candidates = members
+                .iter()
+                .cloned()
+                .map(|member| Type::Named(class.clone(), vec![member]));
+            if let Some(result) = transfer_intersection_members(
+                analyzer,
+                input,
+                candidates,
+                substitution_receiver,
+                arguments,
+                values,
+                environment,
+                hash_shape,
+            )? {
+                return Ok(result);
+            }
+        }
     }
 
     let callable_type = if matches!(name, "call" | "[]") {
@@ -740,7 +812,7 @@ pub(super) fn transfer_receiver_call(
                 &key,
                 &signature,
                 arguments,
-                receiver,
+                substitution_receiver,
                 values,
                 environment,
             );
@@ -750,13 +822,13 @@ pub(super) fn transfer_receiver_call(
                 name,
                 &signature,
                 arguments,
-                Some(receiver),
+                Some(substitution_receiver),
                 block_return_type.as_ref(),
             );
             let type_ = analyzer.widen_recursive_call_return(&key, type_, environment);
             let type_ = if name == "new" {
                 let type_ = analyzer.instantiate_generic_class(type_);
-                analyzer.default_class_constructor_type(receiver, type_)
+                analyzer.default_class_constructor_type(substitution_receiver, type_)
             } else {
                 type_
             };
@@ -1013,6 +1085,69 @@ fn hash_constructor_pair_types(type_: &Type) -> Option<(Type, Type)> {
         }
     }
     Analyzer::pair_types(type_)
+}
+
+fn transfer_intersection_members<I>(
+    analyzer: &mut Analyzer<'_>,
+    input: &OwnedCallInput,
+    candidates: I,
+    substitution_receiver: &Type,
+    arguments: &CallArguments<'_>,
+    values: &[Option<Type>],
+    environment: &mut Environment,
+    hash_shape: Option<&HashShape>,
+) -> Result<Option<ReceiverTransfer>, String>
+where
+    I: IntoIterator<Item = Type>,
+{
+    let initial_environment = environment.clone();
+    let mut result_type = Type::Never;
+    let mut block_result = None;
+    let mut untyped_origin = UntypedOrigin::Propagated;
+    let mut joined_environment: Option<Environment> = None;
+    let mut resolved = false;
+
+    for candidate in candidates {
+        let mut member_environment = initial_environment.clone();
+        let result = transfer_receiver_call_with_substitution(
+            analyzer,
+            input,
+            &candidate,
+            substitution_receiver,
+            arguments,
+            values,
+            &mut member_environment,
+            hash_shape,
+        )?;
+        if result.missing_method {
+            continue;
+        }
+        resolved = true;
+        result_type = result_type.join(&result.type_);
+        block_result = match (block_result, result.block_result) {
+            (Some(left), Some(right)) => Some(Eval::combine(&left, &right)),
+            (left @ Some(_), None) | (None, left @ Some(_)) => left,
+            (None, None) => None,
+        };
+        joined_environment = Some(match joined_environment {
+            Some(joined) => joined.join(&member_environment),
+            None => member_environment,
+        });
+        untyped_origin = join_untyped_origin(untyped_origin, result.untyped_origin);
+    }
+
+    if !resolved {
+        return Ok(None);
+    }
+    if let Some(joined_environment) = joined_environment {
+        *environment = joined_environment;
+    }
+    Ok(Some(ReceiverTransfer {
+        type_: result_type,
+        block_result,
+        untyped_origin,
+        missing_method: false,
+    }))
 }
 
 fn structural_collection_receiver(receiver: &Type) -> Option<Type> {
