@@ -3442,8 +3442,18 @@ fn rolls_back_owned_cfg_state_before_legacy_fallback() {
 
 #[test]
 fn narrows_unions_for_equality_predicates() {
-    let result = check_fixture("tests/fixtures/equality_predicate_narrowing.rb");
+    let path = "tests/fixtures/equality_predicate_narrowing.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let result = check_fixture(path);
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:?}", cfg.diagnostics);
 }
 
 #[test]

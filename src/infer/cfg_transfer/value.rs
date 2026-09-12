@@ -532,6 +532,26 @@ impl<'src> Analyzer<'src> {
         else {
             return;
         };
+        if let Some(alias) = environment.predicate_alias(name).cloned() {
+            let source_current = environment.get(&alias.source);
+            let source_truthy = if alias.negated { !truthy } else { truthy };
+            let narrowed = if let Some(expected) = alias.expected.as_ref() {
+                if source_truthy {
+                    source_current.meet(&expected)
+                } else {
+                    source_current.without(&expected)
+                }
+            } else if source_truthy {
+                source_current.truthy_part()
+            } else {
+                source_current.falsy_part()
+            };
+            environment.bind(alias.source.clone(), source_current.meet(&narrowed));
+            if alias.expected.is_none() {
+                environment.set_known_truthiness(alias.source, source_truthy);
+            }
+            return;
+        }
         if environment.is_open(name) {
             let current = environment.get(name);
             let narrowed = if truthy {
@@ -626,6 +646,8 @@ impl<'src> Analyzer<'src> {
             "==" | "equal?" | "eql?" if argument.is_some() => {
                 if truthy {
                     current.meet(&argument_type)
+                } else if matches!(argument_type, Type::Nil | Type::True | Type::False) {
+                    current.without(&argument_type)
                 } else {
                     current.clone()
                 }
@@ -712,6 +734,7 @@ impl<'src> Analyzer<'src> {
             return Type::Any;
         };
         match kind {
+            hir::ExprKind::Nil => Type::Nil,
             hir::ExprKind::Literal(literal) => Self::cfg_literal_type(&literal),
             hir::ExprKind::Read(Read::Constant(path)) => {
                 let type_ = self.constant_type(environment, path.as_str());

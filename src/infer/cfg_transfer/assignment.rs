@@ -1,7 +1,7 @@
 //! Owned CFG transfer for writes and iteration bindings.
 
 use super::super::hash_shape::HashShape;
-use super::super::{ivar_refinement_key, Analyzer, Environment, SourceSite};
+use super::super::{ivar_refinement_key, Analyzer, Environment, PredicateAlias, SourceSite};
 use super::globals::cfg_global_refinement_key;
 use crate::cfg;
 use crate::hir;
@@ -88,6 +88,16 @@ fn transfer_write_inner<'src>(
                 .hir_program
                 .local_name(*local)
                 .map_or_else(String::new, |name| name.as_str().to_owned());
+            let assigned_expression = expression.and_then(|expression| {
+                analyzer
+                    .program
+                    .hir_program
+                    .expression(expression)
+                    .and_then(|expression| match &expression.kind {
+                        hir::ExprKind::Assign { value, .. } => Some(*value),
+                        _ => None,
+                    })
+            });
             let block_parameter_source = expression
                 .and_then(|expression| analyzer.program.hir_program.expression(expression))
                 .and_then(|expression| match &expression.kind {
@@ -115,6 +125,11 @@ fn transfer_write_inner<'src>(
                 type_
             };
             environment.bind_block_alias(&name, type_.clone(), block_parameter_source.as_deref());
+            if let Some(alias) = assigned_expression
+                .and_then(|expression| owned_predicate_alias(analyzer, expression, environment))
+            {
+                environment.bind_predicate_alias(name.clone(), type_.clone(), alias);
+            }
             let empty_array = expression
                 .and_then(|id| analyzer.program.hir_program.expression(id))
                 .and_then(|expression| match &expression.kind {
@@ -196,6 +211,72 @@ fn transfer_write_inner<'src>(
             environment.set_hash_shape(format!("\u{1}constant:{}", path.as_str()), hash_shape);
             type_
         }
+    }
+}
+
+fn owned_predicate_alias(
+    analyzer: &mut Analyzer<'_>,
+    expression: hir::ExprId,
+    environment: &Environment,
+) -> Option<PredicateAlias> {
+    let expression = analyzer.program.hir_program.expression(expression)?;
+    match &expression.kind {
+        hir::ExprKind::Read(hir::Read::Local(local)) => {
+            let name = analyzer.program.hir_program.local_name(*local)?.as_str();
+            environment.predicate_alias(name).cloned().or_else(|| {
+                Some(PredicateAlias {
+                    source: name.to_owned(),
+                    negated: false,
+                    expected: None,
+                })
+            })
+        }
+        hir::ExprKind::Call(call) if call.name.as_str() == "!" => {
+            let hir::Receiver::Explicit(receiver) = call.receiver else {
+                return None;
+            };
+            let mut alias = owned_predicate_alias(analyzer, receiver, environment)?;
+            alias.negated = !alias.negated;
+            Some(alias)
+        }
+        hir::ExprKind::Call(call)
+            if matches!(
+                call.name.as_str(),
+                "nil?" | "is_a?" | "kind_of?" | "instance_of?"
+            ) =>
+        {
+            let hir::Receiver::Explicit(receiver) = call.receiver else {
+                return None;
+            };
+            let hir::ExprKind::Read(hir::Read::Local(local)) = analyzer
+                .program
+                .hir_program
+                .expression(receiver)
+                .map(|expression| &expression.kind)?
+            else {
+                return None;
+            };
+            let source = analyzer
+                .program
+                .hir_program
+                .local_name(*local)?
+                .as_str()
+                .to_owned();
+            let expected = if call.name.as_str() == "nil?" {
+                Type::Nil
+            } else {
+                let hir::Argument::Positional(argument) = call.arguments.first()? else {
+                    return None;
+                };
+                analyzer.cfg_predicate_argument_type(*argument, environment)
+            };
+            Some(PredicateAlias {
+                source,
+                negated: false,
+                expected: Some(expected),
+            })
+        }
+        _ => None,
     }
 }
 
