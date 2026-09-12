@@ -277,6 +277,7 @@ pub(crate) fn check_with_policies(
         instance_self_type_cache: RefCell::new(CowState::new(HashMap::new())),
         ivars: CowState::new(BTreeMap::new()),
         initialized_ivars: CowState::new(BTreeSet::new()),
+        instance_state_initializers: CowState::new(BTreeSet::new()),
         provisional_ivars: CowState::new(BTreeSet::new()),
         class_vars: CowState::new(BTreeMap::new()),
         globals: CowState::new(BTreeMap::new()),
@@ -343,6 +344,10 @@ struct Analyzer<'src> {
     instance_self_type_cache: RefCell<CowState<HashMap<String, Type>>>,
     ivars: CowState<BTreeMap<IvarKey, Type>>,
     initialized_ivars: CowState<BTreeSet<IvarKey>>,
+    /// Methods reached from a test setup callback.  Their instance-variable
+    /// writes are part of the setup lifecycle even when the write lives in a
+    /// helper method rather than in the callback body itself.
+    instance_state_initializers: CowState<BTreeSet<MethodKey>>,
     provisional_ivars: CowState<BTreeSet<IvarKey>>,
     class_vars: CowState<BTreeMap<ClassVarKey, Type>>,
     globals: CowState<BTreeMap<String, Type>>,
@@ -434,6 +439,7 @@ pub(super) struct CfgTransferSnapshot {
     instance_self_type_cache: CowState<HashMap<String, Type>>,
     ivars: CowState<BTreeMap<IvarKey, Type>>,
     initialized_ivars: CowState<BTreeSet<IvarKey>>,
+    instance_state_initializers: CowState<BTreeSet<MethodKey>>,
     provisional_ivars: CowState<BTreeSet<IvarKey>>,
     class_vars: CowState<BTreeMap<ClassVarKey, Type>>,
     globals: CowState<BTreeMap<String, Type>>,
@@ -478,6 +484,7 @@ impl<'src> Analyzer<'src> {
             instance_self_type_cache: self.instance_self_type_cache.borrow().clone(),
             ivars: self.ivars.clone(),
             initialized_ivars: self.initialized_ivars.clone(),
+            instance_state_initializers: self.instance_state_initializers.clone(),
             provisional_ivars: self.provisional_ivars.clone(),
             class_vars: self.class_vars.clone(),
             globals: self.globals.clone(),
@@ -521,6 +528,7 @@ impl<'src> Analyzer<'src> {
         *self.instance_self_type_cache.borrow_mut() = snapshot.instance_self_type_cache;
         self.ivars = snapshot.ivars;
         self.initialized_ivars = snapshot.initialized_ivars;
+        self.instance_state_initializers = snapshot.instance_state_initializers;
         self.provisional_ivars = snapshot.provisional_ivars;
         self.class_vars = snapshot.class_vars;
         self.globals = snapshot.globals;

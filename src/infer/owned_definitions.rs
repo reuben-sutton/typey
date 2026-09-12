@@ -151,6 +151,8 @@ impl<'src> Analyzer<'src> {
         let mut method_environment = Environment {
             self_type,
             method_key: Some(key.clone()),
+            initializes_instance_state: self.test_setup_method_initializes_instance_state(&key)
+                || self.instance_state_initializers.contains(&key),
             ..Environment::default()
         };
         let body_signature = self.substitute_method_signature(

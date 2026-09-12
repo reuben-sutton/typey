@@ -13,17 +13,28 @@ impl<'src> Analyzer<'src> {
         else {
             return;
         };
-        if !self.declarations.methods.contains_key(caller)
-            && !self.namespace_body_key_ids.contains_key(caller)
-        {
-            return;
-        }
-
         // Keep the requested lookup key as a dependency even when it is
         // currently unresolved. A later include/extend/alias can make that
         // lookup resolve; dropping the edge would force the worklist to
         // conservatively reevaluate every method after a method-table change.
         let resolved = self.resolve_method_key(key);
+        if environment.initializes_instance_state {
+            for initializer in std::iter::once(key).chain(resolved.as_ref()) {
+                if self.instance_state_initializers.insert(initializer.clone()) {
+                    // The callee may have been evaluated before this setup
+                    // path was discovered. Its instance-variable writes now
+                    // have a different lifecycle meaning, so put it back on
+                    // the normal worklist instead of relying on a later
+                    // unrelated change.
+                    self.fixpoint.changed_methods.insert(initializer.clone());
+                }
+            }
+        }
+        if !self.declarations.methods.contains_key(caller)
+            && !self.namespace_body_key_ids.contains_key(caller)
+        {
+            return;
+        }
         self.fixpoint
             .method_callers
             .entry(key.clone())

@@ -240,6 +240,31 @@ impl<'src> Analyzer<'src> {
         .flatten()
     }
 
+    /// A test framework runs `setup` before every test and teardown callback
+    /// on the same instance.  This is an execution-order fact, not a type
+    /// declaration: instance variables written by setup are initialized for
+    /// the later callbacks, including writes made by helper methods called by
+    /// setup.
+    pub(super) fn test_setup_callback_initializes_instance_state(
+        &self,
+        key: &MethodKey,
+        receiver_type: Option<&Type>,
+    ) -> bool {
+        key.name == "setup"
+            && self
+                .active_support_test_block_receiver(key, receiver_type)
+                .is_some()
+    }
+
+    pub(super) fn test_setup_method_initializes_instance_state(&self, key: &MethodKey) -> bool {
+        !key.singleton
+            && key.name == "setup"
+            && key.owner.as_deref().is_some_and(|owner| {
+                self.nominal_subtype_names(owner, "Minitest::Test")
+                    || self.nominal_subtype_names(owner, "ActiveSupport::TestCase")
+            })
+    }
+
     pub(super) fn observe_extend_hook<'node>(
         &mut self,
         node: &Node<'node>,

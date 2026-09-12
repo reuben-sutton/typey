@@ -390,6 +390,9 @@ impl<'src> Analyzer<'src> {
             .or_else(|| self.rails_application_configure_block_receiver(&key, Some(receiver_type)))
             .or_else(|| self.rails_route_draw_block_receiver(&key, Some(receiver_type)))
             .or_else(|| self.active_support_ci_block_receiver(&key, Some(receiver_type)));
+        let previous_initializes_instance_state = environment.initializes_instance_state;
+        environment.initializes_instance_state |=
+            self.test_setup_callback_initializes_instance_state(&key, Some(receiver_type));
 
         let block_result = match self.transfer_owned_closure_body(
             closure_id,
@@ -399,8 +402,12 @@ impl<'src> Analyzer<'src> {
             environment,
         ) {
             Some(block_type) => block_type,
-            None => return None,
+            None => {
+                environment.initializes_instance_state = previous_initializes_instance_state;
+                return None;
+            }
         };
+        environment.initializes_instance_state = previous_initializes_instance_state;
         let block_type = Self::block_value_type(&block_result);
         let closure_site = self
             .program

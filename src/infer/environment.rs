@@ -43,6 +43,13 @@ pub struct Environment {
     pub(super) hash_shapes: CowState<BTreeMap<String, HashShape>>,
     pub(super) self_type: Type,
     pub(super) method_key: Option<MethodKey>,
+    /// The current body is executed as part of a test setup callback.  An
+    /// instance variable written in this context is available to the test
+    /// and teardown methods that run afterward.  Keep this as execution
+    /// context rather than a type refinement: the variable still has its
+    /// ordinary inferred type, but no longer gets the default uninitialized
+    /// `nil` member on later instance reads.
+    pub(super) initializes_instance_state: bool,
     /// A namespace body keeps its runtime method context (`<class-body>` or
     /// `<singleton-body>`) for dispatch, but uses a distinct dependency key
     /// so repeated reopenings of the same class do not share invalidation
@@ -65,6 +72,7 @@ impl Default for Environment {
             hash_shapes: CowState::new(BTreeMap::new()),
             self_type: Type::Object,
             method_key: None,
+            initializes_instance_state: false,
             dependency_key: None,
         }
     }
@@ -444,6 +452,8 @@ impl Environment {
                 lattice.join(&self.self_type, &other.self_type)
             },
             method_key: self.method_key.clone(),
+            initializes_instance_state: self.initializes_instance_state
+                && other.initializes_instance_state,
             dependency_key: if self.dependency_key == other.dependency_key {
                 self.dependency_key.clone()
             } else {

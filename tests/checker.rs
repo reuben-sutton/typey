@@ -2269,6 +2269,11 @@ fn binds_minitest_test_dsl_blocks_to_test_instances() {
 }
 
 #[test]
+fn propagates_minitest_setup_instance_state_to_tests_and_teardown() {
+    check_fixture("tests/fixtures/test_setup_instance_state.rb");
+}
+
+#[test]
 fn applies_active_support_concern_class_methods_to_including_classes() {
     check_fixture("tests/fixtures/active_support_concern_class_methods.rb");
 }

@@ -142,12 +142,13 @@ impl<'src> Analyzer<'src> {
         )
     }
 
-    pub(super) fn eval_bound_block_node_result<'node>(
+    fn eval_bound_block_node_result_with_context<'node>(
         &mut self,
         node: &Node<'node>,
         expected: &[Type],
         receiver: &Type,
         outer: &mut Environment,
+        initializes_instance_state: bool,
     ) -> (Eval, Environment) {
         let Some(block) = node.as_block_node() else {
             return (Eval::value(Type::Any), outer.clone());
@@ -158,6 +159,7 @@ impl<'src> Analyzer<'src> {
             Type::AttachedClassOf(owner) => Type::named(owner.clone()),
             _ => receiver.clone(),
         };
+        bound_outer.initializes_instance_state |= initializes_instance_state;
         let class_object_owner = Self::class_object_owner(receiver);
         bound_outer.method_key = Some(MethodKey {
             owner: class_object_owner
@@ -171,6 +173,16 @@ impl<'src> Analyzer<'src> {
             self.eval_block_with_environment(&block, expected, &bound_outer);
         self.propagate_block_locals(outer, &captured, &block_environment);
         (result, block_environment)
+    }
+
+    pub(super) fn eval_bound_block_node_result<'node>(
+        &mut self,
+        node: &Node<'node>,
+        expected: &[Type],
+        receiver: &Type,
+        outer: &mut Environment,
+    ) -> (Eval, Environment) {
+        self.eval_bound_block_node_result_with_context(node, expected, receiver, outer, false)
     }
 
     pub(super) fn passed_block_expression_type<'node>(
@@ -851,8 +863,16 @@ impl<'src> Analyzer<'src> {
             (Eval::value(Type::Any), None)
         } else {
             let block_result = if let Some(receiver) = bound_receiver.as_ref() {
-                self.eval_bound_block_node_result(block, &expected, receiver, environment)
-                    .0
+                let initializes_instance_state =
+                    self.test_setup_callback_initializes_instance_state(&key, receiver_type);
+                self.eval_bound_block_node_result_with_context(
+                    block,
+                    &expected,
+                    receiver,
+                    environment,
+                    initializes_instance_state,
+                )
+                .0
             } else {
                 self.eval_block_node_result_with_environment(block, &expected, environment)
                     .0

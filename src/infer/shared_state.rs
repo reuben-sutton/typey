@@ -166,10 +166,10 @@ impl<'src> Analyzer<'src> {
         let Some(key) = self.ivar_key(environment, &name) else {
             return;
         };
-        let initialized = environment
-            .method_key
-            .as_ref()
-            .is_some_and(|method| !method.singleton && method.name == "initialize");
+        let initialized = environment.method_key.as_ref().is_some_and(|method| {
+            !method.singleton
+                && (method.name == "initialize" || environment.initializes_instance_state)
+        });
         if initialized && self.initialized_ivars.insert(key.clone()) {
             self.fixpoint
                 .changed_shared
