@@ -28,15 +28,22 @@ impl<'src> Analyzer<'src> {
             .iter()
             .filter_map(|(declaration_id, _)| {
                 let declaration = self.program.hir_program.declaration(*declaration_id)?;
+                let method_body = match declaration.kind {
+                    hir::DeclarationKind::Method { body, .. } => body,
+                    _ => return None,
+                };
                 let parent = self
                     .program
                     .hir_program
                     .bodies
                     .iter()
-                    .filter(|body| {
-                        body.span.start <= declaration.span.start
+                    .enumerate()
+                    .filter(|(candidate_id, body)| {
+                        hir::BodyId(*candidate_id as u32) != method_body
+                            && body.span.start <= declaration.span.start
                             && body.span.end >= declaration.span.end
                     })
+                    .map(|(_, body)| body)
                     .min_by_key(|body| body.span.len())?;
                 matches!(
                     parent.owner,
