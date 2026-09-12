@@ -239,6 +239,31 @@ impl Type {
     /// Least upper bound of two types.
     #[must_use]
     pub fn join(&self, other: &Self) -> Self {
+        if self == other {
+            return self.clone();
+        }
+        if self.is_never() {
+            return other.clone();
+        }
+        if other.is_never() {
+            return self.clone();
+        }
+        // Preserve the existing union order for the two gradual tops: the
+        // canonicalizer intentionally returns the last-seen top when they
+        // are mixed, while all ordinary inputs have a single absorbing top.
+        if self.is_any() {
+            return if matches!(other, Self::Anything) {
+                Self::Anything
+            } else {
+                Self::Any
+            };
+        }
+        if other.is_any() {
+            return Self::Any;
+        }
+        if matches!(self, Self::Anything) || matches!(other, Self::Anything) {
+            return Self::Anything;
+        }
         Self::union([self.clone(), other.clone()])
     }
 
