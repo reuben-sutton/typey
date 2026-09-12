@@ -1,5 +1,5 @@
 use super::hash_shape::HashShape;
-use super::{Environment, Flow, FlowKind, MethodKey, OutcomeTypes, Strictness};
+use super::{CowState, Environment, Flow, FlowKind, MethodKey, OutcomeTypes, Strictness};
 use crate::cfg;
 use crate::hir;
 use crate::types::Type;
@@ -11,8 +11,8 @@ use crate::types::Type;
 /// that can be joined by the generic CFG worklist.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct BlockState {
-    pub(super) values: Vec<Option<Type>>,
-    pub(super) hash_shapes: Vec<Option<HashShape>>,
+    pub(super) values: CowState<Vec<Option<Type>>>,
+    pub(super) hash_shapes: CowState<Vec<Option<HashShape>>>,
     pub(super) environment: Environment,
     pub(super) flow: Flow,
     /// Whether at least one normal path reaches this state.  An exceptional
@@ -37,8 +37,8 @@ impl BlockState {
         flow: Flow,
     ) -> Self {
         Self {
-            values,
-            hash_shapes: Vec::new(),
+            values: CowState::new(values),
+            hash_shapes: CowState::new(Vec::new()),
             environment,
             flow,
             normal_reachable: flow.contains(FlowKind::Normal),
@@ -79,8 +79,8 @@ impl BlockState {
         };
         let pending_outcomes = self.pending_outcomes.join(&other.pending_outcomes);
         Self {
-            values,
-            hash_shapes,
+            values: CowState::new(values),
+            hash_shapes: CowState::new(hash_shapes),
             environment,
             flow: self.flow.union(other.flow),
             normal_reachable: self.normal_reachable || other.normal_reachable,
