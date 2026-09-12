@@ -1882,7 +1882,21 @@ fn narrows_proc_arity_in_zero_arity_branch() {
 
 #[test]
 fn keeps_unannotated_optional_parameters_untyped() {
-    check_fixture("tests/fixtures/default_parameter_flow.rb");
+    let path = "tests/fixtures/default_parameter_flow.rb";
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let result = check_fixture(path);
+    let send = "limit.to_i";
+    let start = source.find(send).expect("default parameter send");
+    assert!(
+        result.types.iter().any(|inferred| {
+            inferred.is_send
+                && inferred.start == start
+                && inferred.end == start + send.len()
+                && inferred.type_ == Type::Any
+        }),
+        "default parameter send was not preserved as untyped: {:?}",
+        result.types
+    );
 }
 
 #[test]
