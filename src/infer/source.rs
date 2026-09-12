@@ -364,6 +364,13 @@ impl<'src> Analyzer<'src> {
         is_send: bool,
         untyped_origin: Option<UntypedOrigin>,
     ) -> Type {
+        // Seed and fixpoint passes only need the type as an evaluator result.
+        // Per-expression products are consumed after the final reporting pass;
+        // publishing them during every intermediate pass needlessly walks
+        // nested types and allocates a transient entry for every operation.
+        if !self.reporting.report {
+            return type_;
+        }
         let untyped_origin = if type_.contains_any() {
             self.reporting
                 .untyped_origins
