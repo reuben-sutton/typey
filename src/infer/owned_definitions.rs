@@ -27,6 +27,14 @@ impl<'src> Analyzer<'src> {
                 singleton,
                 body,
             } => {
+                if self.collect_method_definitions {
+                    self.reachable_method_definitions.insert(declaration_id);
+                }
+                if self.skip_root_method_definitions
+                    && self.root_method_definitions.contains(&declaration_id)
+                {
+                    return Ok(Type::Nil);
+                }
                 self.eval_owned_method_definition(declaration.span, name, singleton, body, outer)?;
             }
             hir::DeclarationKind::Class {
@@ -50,7 +58,7 @@ impl<'src> Analyzer<'src> {
         Ok(Type::Nil)
     }
 
-    fn eval_owned_method_definition(
+    pub(super) fn eval_owned_method_definition(
         &mut self,
         span: hir::Span,
         name: hir::Name,

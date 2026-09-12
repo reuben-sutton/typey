@@ -3,6 +3,99 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
+    fn index_owned_method_definitions(&mut self) {
+        let definitions = self
+            .program
+            .hir_program
+            .declarations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, declaration)| {
+                let hir::DeclarationKind::Method { .. } = declaration.kind else {
+                    return None;
+                };
+                let declaration_id = hir::DeclId(index as u32);
+                let key = self
+                    .declarations
+                    .definitions
+                    .get(&(declaration.span.start as usize))
+                    .cloned()?;
+                (!self.is_rbi_offset(declaration.span.start as usize))
+                    .then_some((declaration_id, key))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let root_definitions = definitions
+            .iter()
+            .filter_map(|(declaration_id, _)| {
+                let declaration = self.program.hir_program.declaration(*declaration_id)?;
+                let parent = self
+                    .program
+                    .hir_program
+                    .bodies
+                    .iter()
+                    .filter(|body| {
+                        body.span.start <= declaration.span.start
+                            && body.span.end >= declaration.span.end
+                    })
+                    .min_by_key(|body| body.span.len())?;
+                matches!(
+                    parent.owner,
+                    hir::BodyOwner::TopLevel
+                        | hir::BodyOwner::Class(_)
+                        | hir::BodyOwner::Module(_)
+                        | hir::BodyOwner::SingletonClass
+                )
+                .then_some(*declaration_id)
+            })
+            .collect();
+        self.owned_method_definitions = definitions;
+        self.root_method_definitions = root_definitions;
+    }
+
+    fn eval_scheduled_method_definitions(
+        &mut self,
+        methods: &BTreeSet<MethodKey>,
+    ) -> Result<(), String> {
+        let scheduled = self
+            .owned_method_definitions
+            .iter()
+            .filter(|(declaration_id, key)| {
+                self.root_method_definitions.contains(declaration_id)
+                    && self.reachable_method_definitions.contains(declaration_id)
+                    && methods.contains(*key)
+            })
+            .map(|(declaration_id, _)| *declaration_id)
+            .collect::<Vec<_>>();
+
+        for declaration_id in scheduled {
+            let Some(declaration) = self
+                .program
+                .hir_program
+                .declaration(declaration_id)
+                .cloned()
+            else {
+                continue;
+            };
+            let hir::DeclarationKind::Method {
+                name,
+                singleton,
+                body,
+            } = declaration.kind
+            else {
+                continue;
+            };
+            let mut environment = Environment::default();
+            self.eval_owned_method_definition(
+                declaration.span,
+                name,
+                singleton,
+                body,
+                &mut environment,
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn record_inferred_return(
         &mut self,
         key: MethodKey,
@@ -73,6 +166,7 @@ impl<'src> Analyzer<'src> {
             eprintln!("[typey] registering declarations");
         }
         self.register_methods(root);
+        self.index_owned_method_definitions();
         let parse_diagnostics = std::mem::take(&mut self.reporting.diagnostics);
         if self.config.debug {
             eprintln!(
@@ -174,8 +268,30 @@ impl<'src> Analyzer<'src> {
             self.fixpoint.pending_returns.clear();
             self.fixpoint.pending_raises.clear();
             self.fixpoint.collecting_returns = true;
+            // Replay the root for top-level and namespace effects, but do not
+            // recursively enter ordinary statically rooted method definitions
+            // from each class body. Those definitions are evaluated directly
+            // below in source order. Dynamic and nested definitions remain in
+            // the root pass because their runtime reachability is contextual.
+            self.reachable_method_definitions.clear();
+            self.collect_method_definitions = true;
+            self.skip_root_method_definitions = true;
             let mut environment = Environment::default();
             self.eval_node(root, &mut environment);
+            self.collect_method_definitions = false;
+            self.skip_root_method_definitions = false;
+            self.fixpoint.active_methods = pending_methods.clone();
+            if let Err(reason) = self.eval_scheduled_method_definitions(&pending_methods) {
+                // A body which cannot be transferred through owned CFG still
+                // gets the established root-replay fallback for this round.
+                // The owned transfer normally reports the failure before
+                // publishing any body result, so this path remains rare.
+                if self.config.debug {
+                    eprintln!("[typey] direct method worklist fallback: {reason}");
+                }
+                let mut fallback_environment = Environment::default();
+                self.eval_node(root, &mut fallback_environment);
+            }
             self.fixpoint.collecting_returns = false;
             self.commit_inferred_returns();
 

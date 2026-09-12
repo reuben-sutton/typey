@@ -257,6 +257,11 @@ pub(crate) fn check_with_policies(
         config,
         signature_declaration_bodies,
         declarations: DeclarationState::default(),
+        owned_method_definitions: BTreeMap::new(),
+        root_method_definitions: BTreeSet::new(),
+        reachable_method_definitions: BTreeSet::new(),
+        collect_method_definitions: false,
+        skip_root_method_definitions: false,
         method_resolution_cache: RefCell::new(BTreeMap::new()),
         global_name_cache: RefCell::new(HashMap::new()),
         instance_self_type_cache: RefCell::new(HashMap::new()),
@@ -308,6 +313,11 @@ struct Analyzer<'src> {
     config: CheckerConfig,
     signature_declaration_bodies: BTreeSet<hir::BodyId>,
     declarations: DeclarationState,
+    owned_method_definitions: BTreeMap<hir::DeclId, MethodKey>,
+    root_method_definitions: BTreeSet<hir::DeclId>,
+    reachable_method_definitions: BTreeSet<hir::DeclId>,
+    collect_method_definitions: bool,
+    skip_root_method_definitions: bool,
     method_resolution_cache: RefCell<BTreeMap<MethodKey, Option<MethodKey>>>,
     global_name_cache: RefCell<HashMap<String, String>>,
     instance_self_type_cache: RefCell<HashMap<String, Type>>,
@@ -349,6 +359,9 @@ struct Analyzer<'src> {
 /// the caller after rollback.
 pub(super) struct CfgTransferSnapshot {
     declarations: DeclarationState,
+    reachable_method_definitions: BTreeSet<hir::DeclId>,
+    collect_method_definitions: bool,
+    skip_root_method_definitions: bool,
     method_resolution_cache: BTreeMap<MethodKey, Option<MethodKey>>,
     global_name_cache: HashMap<String, String>,
     instance_self_type_cache: HashMap<String, Type>,
@@ -383,6 +396,9 @@ impl<'src> Analyzer<'src> {
     pub(super) fn cfg_transfer_snapshot(&self) -> CfgTransferSnapshot {
         CfgTransferSnapshot {
             declarations: self.declarations.clone(),
+            reachable_method_definitions: self.reachable_method_definitions.clone(),
+            collect_method_definitions: self.collect_method_definitions,
+            skip_root_method_definitions: self.skip_root_method_definitions,
             method_resolution_cache: self.method_resolution_cache.borrow().clone(),
             global_name_cache: self.global_name_cache.borrow().clone(),
             instance_self_type_cache: self.instance_self_type_cache.borrow().clone(),
@@ -416,6 +432,9 @@ impl<'src> Analyzer<'src> {
 
     pub(super) fn restore_cfg_transfer_snapshot(&mut self, snapshot: CfgTransferSnapshot) {
         self.declarations = snapshot.declarations;
+        self.reachable_method_definitions = snapshot.reachable_method_definitions;
+        self.collect_method_definitions = snapshot.collect_method_definitions;
+        self.skip_root_method_definitions = snapshot.skip_root_method_definitions;
         *self.method_resolution_cache.borrow_mut() = snapshot.method_resolution_cache;
         *self.global_name_cache.borrow_mut() = snapshot.global_name_cache;
         *self.instance_self_type_cache.borrow_mut() = snapshot.instance_self_type_cache;
