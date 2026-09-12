@@ -74,6 +74,7 @@ impl<'src> Analyzer<'src> {
         self.declarations.type_aliases = self.program.annotations.type_aliases.clone();
         let mut registrar = MethodRegistrar::new(
             self.program.source,
+            &self.program.line_map,
             &mut self.reporting.diagnostics,
             &mut self.declarations,
             &self.program.annotations.attribute_annotations,

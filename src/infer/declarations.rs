@@ -81,6 +81,7 @@ pub(super) struct DeclarationState {
 }
 pub(super) struct MethodRegistrar<'a> {
     source: &'a [u8],
+    line_map: &'a prism::LineMap,
     diagnostics: &'a mut Vec<Diagnostic>,
     declarations: &'a mut DeclarationState,
     attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
@@ -97,6 +98,7 @@ pub(super) struct MethodRegistrar<'a> {
 impl<'a> MethodRegistrar<'a> {
     pub(super) fn new(
         source: &'a [u8],
+        line_map: &'a prism::LineMap,
         diagnostics: &'a mut Vec<Diagnostic>,
         declarations: &'a mut DeclarationState,
         attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
@@ -105,6 +107,7 @@ impl<'a> MethodRegistrar<'a> {
     ) -> Self {
         Self {
             source,
+            line_map,
             diagnostics,
             declarations,
             attribute_annotations,
@@ -135,10 +138,7 @@ fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
 impl MethodRegistrar<'_> {
     fn inline_constant_type<'node>(&self, node: &Node<'node>) -> Option<Type> {
         let (_, end) = prism::span(node);
-        let line = self.source[..end]
-            .iter()
-            .filter(|byte| **byte == b'\n')
-            .count();
+        let line = self.line_map.line_number(end);
         let assertion = self.assertions.get(&line)?;
         if assertion.kind != AssertionKind::Let || assertion.offset < end {
             return None;
