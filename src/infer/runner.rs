@@ -50,6 +50,36 @@ impl<'src> Analyzer<'src> {
             .collect();
         self.owned_method_definitions = definitions;
         self.root_method_definitions = root_definitions;
+        let mut method_bodies = BTreeMap::new();
+        for (declaration_id, key) in &self.owned_method_definitions {
+            let Some(hir::DeclarationKind::Method { body, .. }) = self
+                .program
+                .hir_program
+                .declaration(*declaration_id)
+                .map(|declaration| &declaration.kind)
+            else {
+                continue;
+            };
+            // Keep the first body for a reopened method, matching the legacy
+            // declaration scan used by callback-yield analysis.
+            method_bodies.entry(key.clone()).or_insert(*body);
+        }
+        self.owned_method_bodies = method_bodies;
+        let body_ids = self
+            .owned_method_bodies
+            .values()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        self.cfg_yield_guarantees = body_ids
+            .into_iter()
+            .filter_map(|body_id| {
+                self.program
+                    .cfg_graphs
+                    .as_ref()
+                    .and_then(|graphs| graphs.get(body_id.0 as usize))
+                    .map(|graph| (body_id, graph.guarantees_yield()))
+            })
+            .collect();
 
         let namespace_bodies = self
             .program

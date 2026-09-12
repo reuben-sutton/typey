@@ -116,29 +116,13 @@ impl<'src> Analyzer<'src> {
         let Some(key) = key.and_then(|key| self.resolve_method_key(&key)) else {
             return false;
         };
-        let body = self
-            .program
-            .hir_program
-            .declarations
-            .iter()
-            .find_map(|declaration| {
-                let hir::DeclarationKind::Method { body, .. } = &declaration.kind else {
-                    return None;
-                };
-                let registered = self
-                    .declarations
-                    .definitions
-                    .get(&(declaration.span.start as usize))?;
-                (registered == &key).then_some(*body)
-            });
-        let Some(body) = body else {
+        let Some(body) = self.owned_method_bodies.get(&key).copied() else {
             return false;
         };
-        self.program
-            .cfg_graphs
-            .as_ref()
-            .and_then(|graphs| graphs.get(body.0 as usize))
-            .is_some_and(cfg::Cfg::guarantees_yield)
+        self.cfg_yield_guarantees
+            .get(&body)
+            .copied()
+            .unwrap_or(false)
     }
 
     fn is_recursive_inferred_call(
