@@ -173,6 +173,17 @@ impl<'src> Analyzer<'src> {
 
         if let Some(key) = self.receiver_method_key(receiver_node, receiver_type, name, environment)
         {
+            if name == "filter_map" && matches!(receiver_type, Type::Array(_) | Type::Tuple(_)) {
+                // Enumerable#filter_map removes nil results from its block.
+                // The generic RBI signature exposes that result as `U`, but
+                // the structural collection model can retain the truthy
+                // part of the callback result (for example, the required
+                // parameter names returned by Method#parameters).
+                return (
+                    self.eval_method_call(receiver_type, name, site, environment),
+                    UntypedOrigin::InferredMethod,
+                );
+            }
             if let Some((type_, declared)) = self.eval_resolved_receiver_call(
                 node,
                 name,
