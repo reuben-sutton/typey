@@ -522,7 +522,10 @@ impl<'src> Analyzer<'src> {
                     let callback_outcomes = block_result.callback_outcomes();
                     abrupt = abrupt.join(&callback_outcomes);
                     abrupt_flow = abrupt_flow.union(callback_outcomes.flow());
-                    all_normal &= block_result.callback_has_normal_path();
+                    // Kernel#catch can resume normally when its callback
+                    // exits with `throw`, even if the particular callback
+                    // path we evaluated ends in a non-local return.
+                    all_normal &= name == "catch" || block_result.callback_has_normal_path();
                 }
                 let block_return_type = block_result.as_ref().map(Self::block_value_type);
                 let type_ = self.invoke_signature(
@@ -878,7 +881,8 @@ impl<'src> Analyzer<'src> {
                         let callback_outcomes = block_result.callback_outcomes();
                         abrupt = abrupt.join(&callback_outcomes);
                         abrupt_flow = abrupt_flow.union(callback_outcomes.flow());
-                        all_normal &= block_result.callback_has_normal_path();
+                        all_normal = all_normal
+                            && (name == "catch" || block_result.callback_has_normal_path());
                     }
                     dispatch_receiver_type.clone()
                 } else if let Some(type_) = tsort_type {
@@ -989,7 +993,8 @@ impl<'src> Analyzer<'src> {
                             let callback_outcomes = block_result.callback_outcomes();
                             abrupt = abrupt.join(&callback_outcomes);
                             abrupt_flow = abrupt_flow.union(callback_outcomes.flow());
-                            all_normal &= block_result.callback_has_normal_path();
+                            all_normal = all_normal
+                                && (name == "catch" || block_result.callback_has_normal_path());
                         }
                         let block_return_type = block_result.as_ref().map(Self::block_value_type);
                         let helper_type = (!self.common_method_helper_shadowed(

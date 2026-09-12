@@ -29,6 +29,7 @@ pub(super) fn finish_call(
     // callback so its body is checked, while keeping its control outcomes in
     // the callback's execution context.
     let deferred_callback = callback_is_deferred(input, receiver_type);
+    let catches_nonlocal_control = input.name.as_str() == "catch";
     // An inferred method starts with `T.noreturn` as its provisional summary.
     // That summary is a bottom element for recursive inference, but a direct
     // recursive call still has a normal runtime path: otherwise a body such
@@ -39,7 +40,8 @@ pub(super) fn finish_call(
     if input.safe_navigation && !receiver_type.is_any() {
         type_ = Type::union([Type::Nil, type_]);
     }
-    let call_can_return = !type_.is_never() || provisional_recursive_return;
+    let call_can_return =
+        !type_.is_never() || provisional_recursive_return || catches_nonlocal_control;
     let raise_type = if call_can_return {
         Type::Never
     } else {
@@ -55,6 +57,7 @@ pub(super) fn finish_call(
         !deferred_callback && analyzer.cfg_call_guarantees_yield(input, receiver_type, environment);
     let has_normal_path = call_can_return
         && (!callback_must_run
+            || catches_nonlocal_control
             || block_result
                 .as_ref()
                 .is_none_or(Eval::callback_has_normal_path));
