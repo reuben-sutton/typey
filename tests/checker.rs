@@ -1830,7 +1830,21 @@ fn does_not_treat_runtime_proc_type_objects_as_callables() {
 
 #[test]
 fn narrows_proc_arity_in_zero_arity_branch() {
-    check_fixture("tests/fixtures/proc_arity_narrowing.rb");
+    let path = "tests/fixtures/proc_arity_narrowing.rb";
+    check_fixture(path);
+    let source = std::fs::read_to_string(path).expect("fixture");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(
+        !cfg.has_errors(),
+        "unexpected CFG diagnostics: {:?}",
+        cfg.diagnostics
+    );
 }
 
 #[test]
