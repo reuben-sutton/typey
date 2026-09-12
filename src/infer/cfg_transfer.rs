@@ -210,7 +210,10 @@ mod tests {
         let joined = normal.join(&returned);
 
         assert_eq!(joined.environment.get("value"), Type::String);
-        assert_eq!(joined.values, vec![Some(Type::String.join(&Type::Integer))]);
+        assert_eq!(
+            joined.values.as_slice(),
+            &[Some(Type::String.join(&Type::Integer))]
+        );
         assert!(joined.flow.contains(FlowKind::Normal));
         assert!(joined.flow.contains(FlowKind::Return));
     }
@@ -232,7 +235,7 @@ mod tests {
 
         let expected = Type::String.join(&Type::Integer);
         assert_eq!(joined.environment.get("value"), expected);
-        assert_eq!(joined.values, vec![Some(expected)]);
+        assert_eq!(joined.values.as_slice(), &[Some(expected)]);
     }
 
     #[test]
@@ -244,6 +247,6 @@ mod tests {
         );
         let right = BlockState::with_values(Environment::default(), vec![None], Flow::normal());
 
-        assert_eq!(left.join(&right).values, vec![None]);
+        assert_eq!(left.join(&right).values.as_slice(), &[None]);
     }
 }
