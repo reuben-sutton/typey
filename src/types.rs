@@ -135,14 +135,24 @@ impl Type {
             1 => members.pop().expect("one member exists"),
             _ => {
                 // Stable output matters for Sorbet-style fixture tests.
-                members.sort_by(|left, right| {
-                    left.to_string()
-                        .cmp(&right.to_string())
-                        .then_with(|| left.cmp(right))
-                });
+                Self::sort_canonical_members(&mut members);
                 Self::Union(members)
             }
         }
+    }
+
+    fn sort_canonical_members(members: &mut Vec<Self>) {
+        let mut keyed = members
+            .drain(..)
+            .map(|member| {
+                let key = member.to_string();
+                (key, member)
+            })
+            .collect::<Vec<_>>();
+        keyed.sort_unstable_by(|(left_key, left), (right_key, right)| {
+            left_key.cmp(right_key).then_with(|| left.cmp(right))
+        });
+        members.extend(keyed.into_iter().map(|(_, member)| member));
     }
 
     fn preserves_nilability(left: &Self, right: &Self) -> bool {
@@ -341,11 +351,7 @@ impl Type {
             0 => Self::Any,
             1 => members.pop().expect("one member exists"),
             _ => {
-                members.sort_by(|left, right| {
-                    left.to_string()
-                        .cmp(&right.to_string())
-                        .then_with(|| left.cmp(right))
-                });
+                Self::sort_canonical_members(&mut members);
                 Self::Intersection(members)
             }
         }
