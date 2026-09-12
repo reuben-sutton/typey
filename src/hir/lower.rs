@@ -957,7 +957,9 @@ impl<'src> Lowerer<'src> {
         if let Some(string) = node.as_string_node() {
             return self.push_expr(
                 node,
-                ExprKind::Literal(Literal::String(self.text(&string.as_node()))),
+                ExprKind::Literal(Literal::String(
+                    String::from_utf8_lossy(string.unescaped()).into_owned(),
+                )),
             );
         }
         if let Some(symbol) = node.as_symbol_node() {

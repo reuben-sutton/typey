@@ -121,8 +121,13 @@ pub(super) fn transfer_call(
         cfg::ReceiverOperand::Value(value) => Some(*value),
         _ => None,
     };
-    let receiver_hash_shape =
-        receiver_value.and_then(|value| hash_shapes.get(value.0 as usize).cloned().flatten());
+    let receiver_hash_shape = receiver_value
+        .and_then(|value| hash_shapes.get(value.0 as usize).cloned().flatten())
+        .or_else(|| {
+            let read = hash_receiver_read(analyzer, &input)?;
+            let storage_key = super::assignment::hash_shape_key_for_read(analyzer, &read)?;
+            environment.hash_shape(&storage_key).cloned()
+        });
     let mut block_result = None;
     let dynamic_instance_variable_type = if matches!(
         input.name.as_str(),
