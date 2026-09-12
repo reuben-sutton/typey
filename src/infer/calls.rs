@@ -255,6 +255,9 @@ impl<'src> Analyzer<'src> {
             && !receiver_type.is_never()
             && !matches!(receiver_type, Type::Anything)
             && receiver_type.without(&Type::Nil) == receiver_type
+            && !receiver_node.as_ref().is_some_and(|receiver| {
+                self.safe_navigation_receiver_is_mutable_accessor(receiver, environment)
+            })
         {
             self.error(
                 node,

@@ -1,7 +1,7 @@
 use super::method_types::proc_arity_narrowing;
 use super::{
-    ivar_refinement_key, name_matches, Analyzer, CallSite, Environment, Eval, Flow, FlowKind,
-    PredicateAlias,
+    ivar_refinement_key, name_matches, AccessorKind, Analyzer, CallSite, Environment, Eval, Flow,
+    FlowKind, MethodKey, PredicateAlias,
 };
 use crate::prism;
 use crate::signature;
@@ -1105,6 +1105,38 @@ impl<'src> Analyzer<'src> {
         };
         let return_type = self.eval_method_call(&receiver_type, name, &site, environment);
         !return_type.is_any() && return_type.without(&Type::Nil) == return_type
+    }
+
+    /// A reader generated alongside a writer is a mutable observation, even
+    /// when the current fixpoint sample inferred a non-nil value for it. Ruby
+    /// code is allowed to reset that backing value later, so safe navigation
+    /// must not be diagnosed as redundant merely because the present sample
+    /// is concrete.
+    pub(super) fn safe_navigation_receiver_is_mutable_accessor(
+        &self,
+        receiver: &Node<'_>,
+        environment: &Environment,
+    ) -> bool {
+        let Some(call) = receiver.as_call_node() else {
+            return false;
+        };
+        if call.receiver().is_some() || call.arguments().is_some() || call.block().is_some() {
+            return false;
+        }
+        let name = prism::constant_name(call.name());
+        let key = self.implicit_method_key(&name, environment);
+        let Some(resolved) = self.resolve_method_key(&key) else {
+            return false;
+        };
+        if self.declarations.accessors.get(&resolved) != Some(&AccessorKind::Reader) {
+            return false;
+        }
+        let writer = MethodKey {
+            owner: resolved.owner,
+            name: format!("{name}="),
+            singleton: resolved.singleton,
+        };
+        self.declarations.accessors.get(&writer) == Some(&AccessorKind::Writer)
     }
 
     pub(super) fn refine_local_array_write(
