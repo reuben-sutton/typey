@@ -12,7 +12,7 @@ use super::patterns::{
 use crate::cfg;
 use crate::hir::{self, Read};
 use crate::types::Type;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub(super) struct BodyTransfer<'analyzer, 'src> {
@@ -577,56 +577,33 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
 impl<'src> Analyzer<'src> {
     fn cfg_body_needs_transaction(
         &self,
-        graph: &cfg::Cfg,
         environment: &Environment,
+        has_super_or_yield: bool,
         has_known_cfg_failure: bool,
     ) -> bool {
-        let direct_failure = graph.blocks.iter().flat_map(|block| &block.operations).any(
-            |operation| match &operation.kind {
-                // These operations can enter a context-sensitive contract
-                // which may fail after earlier operations have published
-                // state. Ordinary method bodies have registered method keys,
-                // so they do not need a deep snapshot for their normal
-                // `yield`/`super` calls.
-                cfg::OperationKind::Call { receiver, .. } => {
-                    matches!(
-                        receiver,
-                        cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield
-                    ) && environment
-                        .method_key
-                        .as_ref()
-                        .is_none_or(|key| !self.declarations.methods.contains_key(key))
-                }
-                _ => false,
-            },
-        );
+        // These operations can enter a context-sensitive contract which may
+        // fail after earlier operations have published state. Ordinary method
+        // bodies have registered method keys, so they do not need a deep
+        // snapshot for their normal `yield`/`super` calls.
+        let direct_failure = has_super_or_yield
+            && environment
+                .method_key
+                .as_ref()
+                .is_none_or(|key| !self.declarations.methods.contains_key(key));
         direct_failure || has_known_cfg_failure
     }
 
     fn transfer_unvisited_inline_blocks(
         &mut self,
-        graph: &cfg::Cfg,
+        closures: &[hir::ClosureId],
         environment: &Environment,
         closure_environments: &HashMap<hir::ClosureId, Environment>,
     ) {
-        let closures = graph
-            .blocks
-            .iter()
-            .flat_map(|block| block.operations.iter())
-            .filter_map(|operation| match &operation.kind {
-                cfg::OperationKind::Call {
-                    block: Some(cfg::BlockOperand::Inline(closure)),
-                    ..
-                } => Some(*closure),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-
         for closure_id in closures {
             let Some((body_id, parameter_count)) = self
                 .program
                 .hir_program
-                .closure(closure_id)
+                .closure(*closure_id)
                 .map(|closure| (closure.body, closure.parameters.parameters.len()))
             else {
                 continue;
@@ -643,11 +620,11 @@ impl<'src> Analyzer<'src> {
             }
             let expected = vec![Type::Any; parameter_count];
             let mut closure_environment = closure_environments
-                .get(&closure_id)
+                .get(closure_id)
                 .cloned()
                 .unwrap_or_else(|| environment.clone());
             let _ = self.transfer_owned_closure_body(
-                closure_id,
+                *closure_id,
                 &expected,
                 None,
                 None,
@@ -682,8 +659,10 @@ impl<'src> Analyzer<'src> {
         let (
             fixed_array_elements,
             fixed_shape_array_elements,
+            inline_closures,
             written_locals,
             has_unsupported,
+            has_super_or_yield,
             has_known_cfg_failure,
         ) = {
             let metadata: &CfgBodyMetadata = self
@@ -694,8 +673,10 @@ impl<'src> Analyzer<'src> {
             (
                 metadata.fixed_array_elements.clone(),
                 metadata.fixed_shape_array_elements.clone(),
+                metadata.inline_closures.clone(),
                 metadata.written_locals.clone(),
                 metadata.has_unsupported_operation,
+                metadata.has_super_or_yield,
                 metadata.has_known_cfg_failure,
             )
         };
@@ -721,7 +702,6 @@ impl<'src> Analyzer<'src> {
             top_level: matches!(body.owner, hir::BodyOwner::TopLevel),
             method: environment.method_key.clone(),
             self_type: environment.self_type.clone(),
-            parameters: body.parameters.clone(),
             strictness: self.strictness_at(body.span.start as usize),
             closure_kind,
         };
@@ -748,7 +728,11 @@ impl<'src> Analyzer<'src> {
         }
         let fallback_environment = initial_environment.clone();
         let snapshot = self
-            .cfg_body_needs_transaction(&graph, &initial_environment, has_known_cfg_failure)
+            .cfg_body_needs_transaction(
+                &initial_environment,
+                has_super_or_yield,
+                has_known_cfg_failure,
+            )
             .then(|| self.cfg_transfer_snapshot());
         let initial = BlockState::with_values(initial_environment, Vec::new(), Flow::normal());
         let mut transfer = BodyTransfer {
@@ -916,7 +900,11 @@ impl<'src> Analyzer<'src> {
         self.cfg_transfer_bodies = self.cfg_transfer_bodies.saturating_add(1);
         self.cfg_transferred_bodies.insert(body_id);
         self.cfg_transferred_bodies_this_pass.insert(body_id);
-        self.transfer_unvisited_inline_blocks(&graph, &final_environment, &closure_environments);
+        self.transfer_unvisited_inline_blocks(
+            &inline_closures,
+            &final_environment,
+            &closure_environments,
+        );
         commit_cfg_global_state(self, &graph, &final_environment);
         clear_cfg_global_state(&graph, &mut final_environment);
         *environment = final_environment;

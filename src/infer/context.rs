@@ -14,8 +14,10 @@ use std::sync::Arc;
 pub(super) struct CfgBodyMetadata {
     pub(super) fixed_array_elements: Arc<HashMap<cfg::ValueId, Vec<cfg::ValueId>>>,
     pub(super) fixed_shape_array_elements: Arc<HashMap<cfg::ValueId, Vec<cfg::ValueId>>>,
+    pub(super) inline_closures: Arc<[hir::ClosureId]>,
     pub(super) written_locals: Arc<[hir::LocalId]>,
     pub(super) has_unsupported_operation: bool,
+    pub(super) has_super_or_yield: bool,
     pub(super) has_known_cfg_failure: bool,
 }
 
@@ -127,8 +129,10 @@ impl<'src> ProgramContext<'src> {
 fn build_cfg_body_metadata(graph: &cfg::Cfg, rbi_ranges: &[(usize, usize)]) -> CfgBodyMetadata {
     let mut fixed_array_elements = HashMap::new();
     let mut splatted_values = HashSet::new();
+    let mut inline_closures = BTreeSet::new();
     let mut written_locals = BTreeSet::new();
     let mut has_unsupported_operation = false;
+    let mut has_super_or_yield = false;
 
     for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
         if !offset_in_ranges(operation.span.start as usize, rbi_ranges)
@@ -173,11 +177,23 @@ fn build_cfg_body_metadata(graph: &cfg::Cfg, rbi_ranges: &[(usize, usize)]) -> C
                     }
                 }
             }
-            cfg::OperationKind::Call { arguments, .. } => {
+            cfg::OperationKind::Call {
+                arguments,
+                receiver,
+                block,
+                ..
+            } => {
                 splatted_values.extend(arguments.iter().filter_map(|argument| match argument {
                     cfg::ArgumentOperand::Splat(value) => Some(*value),
                     _ => None,
                 }));
+                has_super_or_yield |= matches!(
+                    receiver,
+                    cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield
+                );
+                if let Some(cfg::BlockOperand::Inline(closure)) = block {
+                    inline_closures.insert(*closure);
+                }
             }
             cfg::OperationKind::Write {
                 place: cfg::Place::Local(local),
@@ -215,8 +231,10 @@ fn build_cfg_body_metadata(graph: &cfg::Cfg, rbi_ranges: &[(usize, usize)]) -> C
     CfgBodyMetadata {
         fixed_array_elements: Arc::new(fixed_array_elements),
         fixed_shape_array_elements: Arc::new(fixed_shape_array_elements),
+        inline_closures: Arc::from(inline_closures.into_iter().collect::<Vec<_>>()),
         written_locals: Arc::from(written_locals.into_iter().collect::<Vec<_>>()),
         has_unsupported_operation,
+        has_super_or_yield,
         has_known_cfg_failure: false,
     }
 }

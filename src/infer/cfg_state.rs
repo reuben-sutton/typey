@@ -141,7 +141,6 @@ pub(super) struct BodyContext {
     pub(super) top_level: bool,
     pub(super) method: Option<MethodKey>,
     pub(super) self_type: Type,
-    pub(super) parameters: hir::Parameters,
     pub(super) strictness: Strictness,
     pub(super) closure_kind: Option<hir::ClosureKind>,
 }
