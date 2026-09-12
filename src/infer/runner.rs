@@ -399,10 +399,14 @@ impl<'src> Analyzer<'src> {
         self.fixpoint.changed_methods.clear();
         self.fixpoint.changed_shared.clear();
 
+        // Only source-owned definitions can be evaluated by the direct method
+        // worklist. RBI declarations still participate in lookup and calls,
+        // but have no application body to schedule; carrying their keys here
+        // needlessly enlarges every active-method snapshot and membership
+        // check in the root replay.
         let mut pending_methods = self
-            .declarations
-            .methods
-            .keys()
+            .owned_method_definitions
+            .values()
             .cloned()
             .collect::<BTreeSet<_>>();
         let mut pending_namespace_bodies = None;
