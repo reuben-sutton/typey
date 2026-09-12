@@ -14,6 +14,13 @@ struct ControlContext<'a> {
     ignored_ranges: &'a [(usize, usize)],
 }
 
+fn offset_in_ignored_range(offset: usize, ranges: &[(usize, usize)]) -> bool {
+    let index = ranges.partition_point(|(_, end)| *end <= offset);
+    ranges
+        .get(index)
+        .is_some_and(|(start, end)| *start <= offset && offset < *end)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PreflightFailure {
     pub(super) span: hir::Span,
@@ -91,11 +98,7 @@ fn expr_transfer_failure(
         visiting.remove(&expression);
         return Err(failure(program, expression, "missing HIR expression"));
     };
-    if context
-        .ignored_ranges
-        .iter()
-        .any(|(start, end)| expr.span.start as usize >= *start && (expr.span.start as usize) < *end)
-    {
+    if offset_in_ignored_range(expr.span.start as usize, context.ignored_ranges) {
         visiting.remove(&expression);
         return Ok(());
     }

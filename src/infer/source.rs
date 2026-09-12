@@ -8,6 +8,14 @@ use crate::types::Type;
 use ruby_prism::Node;
 use std::collections::BTreeMap;
 
+fn range_containing(ranges: &[(usize, usize)], offset: usize) -> Option<(usize, usize)> {
+    let index = ranges.partition_point(|(_, end)| *end <= offset);
+    ranges
+        .get(index)
+        .copied()
+        .filter(|(start, end)| *start <= offset && offset < *end)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SourceSite {
     pub(super) start: usize,
@@ -231,15 +239,11 @@ impl<'src> Analyzer<'src> {
 
     pub(super) fn is_rbi_definition(&self, node: &Node<'_>) -> bool {
         let (start, end) = prism::span(node);
-        self.rbi_ranges
-            .iter()
-            .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
+        range_containing(&self.rbi_ranges, start).is_some_and(|(_, range_end)| end <= range_end)
     }
 
     pub(super) fn is_rbi_offset(&self, offset: usize) -> bool {
-        self.rbi_ranges
-            .iter()
-            .any(|(range_start, range_end)| offset >= *range_start && offset < *range_end)
+        range_containing(&self.rbi_ranges, offset).is_some()
     }
 
     pub(super) fn record<'node>(&mut self, node: &Node<'node>, type_: Type) -> Type {
