@@ -56,10 +56,30 @@ impl CfgFallbackCounters {
 }
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn cfg_body_preflight_failure_cached(
+        &mut self,
+        body_id: hir::BodyId,
+    ) -> Option<(hir::Span, String)> {
+        if let Some(failure) = self.cfg_preflight_failures.get(&body_id) {
+            return failure.clone();
+        }
+        let failure = preflight::body_transfer_failure_ignoring_ranges(
+            &self.program.hir_program,
+            body_id,
+            &self.rbi_ranges,
+        )
+        .map(|failure| (failure.span, failure.reason));
+        self.cfg_preflight_failures.insert(body_id, failure.clone());
+        failure
+    }
+
     pub(super) fn cfg_body_preflight_failure(
         &self,
         body_id: hir::BodyId,
     ) -> Option<(hir::Span, String)> {
+        if let Some(failure) = self.cfg_preflight_failures.get(&body_id) {
+            return failure.clone();
+        }
         preflight::body_transfer_failure_ignoring_ranges(
             &self.program.hir_program,
             body_id,

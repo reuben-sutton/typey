@@ -9,7 +9,6 @@ use super::globals::{clear_cfg_global_state, commit_cfg_global_state, seed_cfg_g
 use super::patterns::{
     case_match_reachability, narrow_pattern_value, pattern_source, pattern_source_place,
 };
-use super::preflight;
 use crate::cfg;
 use crate::hir::{self, Read};
 use crate::types::Type;
@@ -729,17 +728,14 @@ impl<'src> Analyzer<'src> {
         environment: &mut Environment,
         record_result: bool,
     ) -> Option<Eval> {
+        let preflight_failure = self.cfg_body_preflight_failure_cached(body_id);
         let body = self.program.hir_program.body(body_id)?;
-        if let Some(failure) = preflight::body_transfer_failure_ignoring_ranges(
-            &self.program.hir_program,
-            body_id,
-            &self.rbi_ranges,
-        ) {
+        if let Some(failure) = preflight_failure {
             self.record_cfg_fallback_detail_at(
-                SourceSite::from_span(failure.span, None),
+                SourceSite::from_span(failure.0, None),
                 "body",
                 super::CfgFallbackKind::UnsupportedOperation,
-                Some(failure.reason.as_str()),
+                Some(failure.1.as_str()),
             );
             return None;
         }

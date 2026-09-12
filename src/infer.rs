@@ -303,6 +303,7 @@ pub(crate) fn check_with_policies(
         cfg_transfer_assignments: 0,
         cfg_transfer_values: 0,
         cfg_transfer_fallbacks: CfgFallbackCounters::default(),
+        cfg_preflight_failures: HashMap::new(),
     };
     let result = analyzer.run(&root);
     (result, diagnostics)
@@ -368,6 +369,7 @@ struct Analyzer<'src> {
     cfg_transfer_assignments: usize,
     cfg_transfer_values: usize,
     cfg_transfer_fallbacks: CfgFallbackCounters,
+    cfg_preflight_failures: HashMap<hir::BodyId, Option<(hir::Span, String)>>,
 }
 
 /// Cloneable copy-on-write storage for analyzer state which is snapshotted
