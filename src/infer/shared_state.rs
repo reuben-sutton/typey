@@ -605,10 +605,8 @@ impl<'src> Analyzer<'src> {
             })
             .unwrap_or_default();
         if !fields.is_empty() {
-            self.declarations
-                .struct_fields
-                .entry(self.constant_key(environment, constant_name))
-                .or_insert(fields);
+            let key = self.constant_key(environment, constant_name);
+            self.declarations.struct_fields.entry(key).or_insert(fields);
         }
         Some(Type::named(self.constant_key(environment, constant_name)))
     }

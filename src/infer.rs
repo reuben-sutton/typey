@@ -8,6 +8,7 @@ use crate::types::Type;
 use ruby_prism::{ArgumentsNode, CallNode, Node, Visit};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 mod arguments;
@@ -251,40 +252,40 @@ pub(crate) fn check_with_policies(
             annotations.assertions.len()
         );
     }
-    let program = ProgramContext::new(bytes, hir_program, cfg_graphs, annotations);
+    let program = ProgramContext::new(bytes, hir_program, cfg_graphs, rbi_ranges, annotations);
     let analyzer = Analyzer {
         program,
         config,
         signature_declaration_bodies,
-        declarations: DeclarationState::default(),
+        declarations: CowState::new(DeclarationState::default()),
         owned_method_definitions: BTreeMap::new(),
         owned_method_bodies: BTreeMap::new(),
         root_method_definitions: BTreeSet::new(),
         cfg_yield_guarantees: BTreeMap::new(),
-        reachable_method_definitions: BTreeSet::new(),
-        namespace_body_keys: BTreeMap::new(),
-        namespace_body_key_ids: BTreeMap::new(),
-        namespace_body_parents: BTreeMap::new(),
-        namespace_body_method_definitions: BTreeMap::new(),
-        namespace_body_stack: Vec::new(),
-        namespace_body_always_replay: BTreeSet::new(),
+        reachable_method_definitions: CowState::new(BTreeSet::new()),
+        namespace_body_keys: CowState::new(BTreeMap::new()),
+        namespace_body_key_ids: CowState::new(BTreeMap::new()),
+        namespace_body_parents: CowState::new(BTreeMap::new()),
+        namespace_body_method_definitions: CowState::new(BTreeMap::new()),
+        namespace_body_stack: CowState::new(Vec::new()),
+        namespace_body_always_replay: CowState::new(BTreeSet::new()),
         active_namespace_bodies: None,
         collect_method_definitions: false,
         skip_root_method_definitions: false,
-        method_resolution_cache: RefCell::new(BTreeMap::new()),
-        global_name_cache: RefCell::new(HashMap::new()),
-        instance_self_type_cache: RefCell::new(HashMap::new()),
-        ivars: BTreeMap::new(),
-        initialized_ivars: BTreeSet::new(),
-        provisional_ivars: BTreeSet::new(),
-        class_vars: BTreeMap::new(),
-        globals: BTreeMap::new(),
+        method_resolution_cache: RefCell::new(CowState::new(BTreeMap::new())),
+        global_name_cache: RefCell::new(CowState::new(HashMap::new())),
+        instance_self_type_cache: RefCell::new(CowState::new(HashMap::new())),
+        ivars: CowState::new(BTreeMap::new()),
+        initialized_ivars: CowState::new(BTreeSet::new()),
+        provisional_ivars: CowState::new(BTreeSet::new()),
+        class_vars: CowState::new(BTreeMap::new()),
+        globals: CowState::new(BTreeMap::new()),
         seed_calls: false,
         rbi_ranges: rbi_ranges.to_vec(),
         builtin_rbi_ranges: builtin_rbi_ranges.to_vec(),
         strictness_ranges: strictness_ranges.to_vec(),
         filter_method_bodies: false,
-        fixpoint: FixpointState::default(),
+        fixpoint: CowState::new(FixpointState::default()),
         defer_inline_assertions: false,
         preserve_literal_tuples: false,
         preserve_nested_literal_tuples: false,
@@ -294,10 +295,10 @@ pub(crate) fn check_with_policies(
         checking_initializer: false,
         initializer_has_block: false,
         initializer_requires_block: false,
-        reporting: ReportingState::new(diagnostics.clone()),
+        reporting: CowState::new(ReportingState::new(diagnostics.clone())),
         cfg_transfer_bodies: 0,
-        cfg_transferred_bodies: BTreeSet::new(),
-        cfg_transferred_bodies_this_pass: BTreeSet::new(),
+        cfg_transferred_bodies: CowState::new(BTreeSet::new()),
+        cfg_transferred_bodies_this_pass: CowState::new(BTreeSet::new()),
         cfg_transfer_calls: 0,
         cfg_transfer_assignments: 0,
         cfg_transfer_values: 0,
@@ -321,35 +322,35 @@ struct Analyzer<'src> {
     program: ProgramContext<'src>,
     config: CheckerConfig,
     signature_declaration_bodies: BTreeSet<hir::BodyId>,
-    declarations: DeclarationState,
+    declarations: CowState<DeclarationState>,
     owned_method_definitions: BTreeMap<hir::DeclId, MethodKey>,
     owned_method_bodies: BTreeMap<MethodKey, hir::BodyId>,
     root_method_definitions: BTreeSet<hir::DeclId>,
     cfg_yield_guarantees: BTreeMap<hir::BodyId, bool>,
-    reachable_method_definitions: BTreeSet<hir::DeclId>,
-    namespace_body_keys: BTreeMap<hir::BodyId, MethodKey>,
-    namespace_body_key_ids: BTreeMap<MethodKey, hir::BodyId>,
-    namespace_body_parents: BTreeMap<hir::BodyId, hir::BodyId>,
-    namespace_body_method_definitions: BTreeMap<hir::BodyId, BTreeSet<hir::DeclId>>,
-    namespace_body_stack: Vec<hir::BodyId>,
-    namespace_body_always_replay: BTreeSet<hir::BodyId>,
+    reachable_method_definitions: CowState<BTreeSet<hir::DeclId>>,
+    namespace_body_keys: CowState<BTreeMap<hir::BodyId, MethodKey>>,
+    namespace_body_key_ids: CowState<BTreeMap<MethodKey, hir::BodyId>>,
+    namespace_body_parents: CowState<BTreeMap<hir::BodyId, hir::BodyId>>,
+    namespace_body_method_definitions: CowState<BTreeMap<hir::BodyId, BTreeSet<hir::DeclId>>>,
+    namespace_body_stack: CowState<Vec<hir::BodyId>>,
+    namespace_body_always_replay: CowState<BTreeSet<hir::BodyId>>,
     active_namespace_bodies: Option<BTreeSet<hir::BodyId>>,
     collect_method_definitions: bool,
     skip_root_method_definitions: bool,
-    method_resolution_cache: RefCell<BTreeMap<MethodKey, Option<MethodKey>>>,
-    global_name_cache: RefCell<HashMap<String, String>>,
-    instance_self_type_cache: RefCell<HashMap<String, Type>>,
-    ivars: BTreeMap<IvarKey, Type>,
-    initialized_ivars: BTreeSet<IvarKey>,
-    provisional_ivars: BTreeSet<IvarKey>,
-    class_vars: BTreeMap<ClassVarKey, Type>,
-    globals: BTreeMap<String, Type>,
+    method_resolution_cache: RefCell<CowState<BTreeMap<MethodKey, Option<MethodKey>>>>,
+    global_name_cache: RefCell<CowState<HashMap<String, String>>>,
+    instance_self_type_cache: RefCell<CowState<HashMap<String, Type>>>,
+    ivars: CowState<BTreeMap<IvarKey, Type>>,
+    initialized_ivars: CowState<BTreeSet<IvarKey>>,
+    provisional_ivars: CowState<BTreeSet<IvarKey>>,
+    class_vars: CowState<BTreeMap<ClassVarKey, Type>>,
+    globals: CowState<BTreeMap<String, Type>>,
     seed_calls: bool,
     rbi_ranges: Vec<(usize, usize)>,
     builtin_rbi_ranges: Vec<(usize, usize)>,
     strictness_ranges: Vec<(usize, usize, Strictness)>,
     filter_method_bodies: bool,
-    fixpoint: FixpointState,
+    fixpoint: CowState<FixpointState>,
     defer_inline_assertions: bool,
     preserve_literal_tuples: bool,
     preserve_nested_literal_tuples: bool,
@@ -359,14 +360,49 @@ struct Analyzer<'src> {
     checking_initializer: bool,
     initializer_has_block: bool,
     initializer_requires_block: bool,
-    reporting: ReportingState,
+    reporting: CowState<ReportingState>,
     cfg_transfer_bodies: usize,
-    cfg_transferred_bodies: BTreeSet<hir::BodyId>,
-    cfg_transferred_bodies_this_pass: BTreeSet<hir::BodyId>,
+    cfg_transferred_bodies: CowState<BTreeSet<hir::BodyId>>,
+    cfg_transferred_bodies_this_pass: CowState<BTreeSet<hir::BodyId>>,
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
     cfg_transfer_values: usize,
     cfg_transfer_fallbacks: CfgFallbackCounters,
+}
+
+/// Cloneable copy-on-write storage for analyzer state which is snapshotted
+/// around a potentially failing CFG transfer. A snapshot shares the current
+/// value; the first mutation of either side detaches only that value.
+#[derive(Clone)]
+struct CowState<T: Clone>(Arc<T>);
+
+impl<T: Clone> CowState<T> {
+    fn new(value: T) -> Self {
+        Self(Arc::new(value))
+    }
+}
+
+impl<T: Clone> Deref for CowState<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: Clone> DerefMut for CowState<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+impl<T, I> FromIterator<I> for CowState<T>
+where
+    T: Clone + FromIterator<I>,
+{
+    fn from_iter<U: IntoIterator<Item = I>>(iter: U) -> Self {
+        Self::new(iter.into_iter().collect())
+    }
 }
 
 /// Mutable analyzer state that an owned CFG body is allowed to touch while it
@@ -376,28 +412,28 @@ struct Analyzer<'src> {
 /// attempts are not successful owned transfers and are counted separately by
 /// the caller after rollback.
 pub(super) struct CfgTransferSnapshot {
-    declarations: DeclarationState,
-    reachable_method_definitions: BTreeSet<hir::DeclId>,
-    namespace_body_keys: BTreeMap<hir::BodyId, MethodKey>,
-    namespace_body_key_ids: BTreeMap<MethodKey, hir::BodyId>,
-    namespace_body_parents: BTreeMap<hir::BodyId, hir::BodyId>,
-    namespace_body_method_definitions: BTreeMap<hir::BodyId, BTreeSet<hir::DeclId>>,
-    namespace_body_stack: Vec<hir::BodyId>,
-    namespace_body_always_replay: BTreeSet<hir::BodyId>,
+    declarations: CowState<DeclarationState>,
+    reachable_method_definitions: CowState<BTreeSet<hir::DeclId>>,
+    namespace_body_keys: CowState<BTreeMap<hir::BodyId, MethodKey>>,
+    namespace_body_key_ids: CowState<BTreeMap<MethodKey, hir::BodyId>>,
+    namespace_body_parents: CowState<BTreeMap<hir::BodyId, hir::BodyId>>,
+    namespace_body_method_definitions: CowState<BTreeMap<hir::BodyId, BTreeSet<hir::DeclId>>>,
+    namespace_body_stack: CowState<Vec<hir::BodyId>>,
+    namespace_body_always_replay: CowState<BTreeSet<hir::BodyId>>,
     active_namespace_bodies: Option<BTreeSet<hir::BodyId>>,
     collect_method_definitions: bool,
     skip_root_method_definitions: bool,
-    method_resolution_cache: BTreeMap<MethodKey, Option<MethodKey>>,
-    global_name_cache: HashMap<String, String>,
-    instance_self_type_cache: HashMap<String, Type>,
-    ivars: BTreeMap<IvarKey, Type>,
-    initialized_ivars: BTreeSet<IvarKey>,
-    provisional_ivars: BTreeSet<IvarKey>,
-    class_vars: BTreeMap<ClassVarKey, Type>,
-    globals: BTreeMap<String, Type>,
+    method_resolution_cache: CowState<BTreeMap<MethodKey, Option<MethodKey>>>,
+    global_name_cache: CowState<HashMap<String, String>>,
+    instance_self_type_cache: CowState<HashMap<String, Type>>,
+    ivars: CowState<BTreeMap<IvarKey, Type>>,
+    initialized_ivars: CowState<BTreeSet<IvarKey>>,
+    provisional_ivars: CowState<BTreeSet<IvarKey>>,
+    class_vars: CowState<BTreeMap<ClassVarKey, Type>>,
+    globals: CowState<BTreeMap<String, Type>>,
     seed_calls: bool,
     filter_method_bodies: bool,
-    fixpoint: FixpointState,
+    fixpoint: CowState<FixpointState>,
     defer_inline_assertions: bool,
     preserve_literal_tuples: bool,
     preserve_nested_literal_tuples: bool,
@@ -407,10 +443,10 @@ pub(super) struct CfgTransferSnapshot {
     checking_initializer: bool,
     initializer_has_block: bool,
     initializer_requires_block: bool,
-    reporting: ReportingState,
+    reporting: CowState<ReportingState>,
     cfg_transfer_bodies: usize,
-    cfg_transferred_bodies: BTreeSet<hir::BodyId>,
-    cfg_transferred_bodies_this_pass: BTreeSet<hir::BodyId>,
+    cfg_transferred_bodies: CowState<BTreeSet<hir::BodyId>>,
+    cfg_transferred_bodies_this_pass: CowState<BTreeSet<hir::BodyId>>,
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
     cfg_transfer_values: usize,

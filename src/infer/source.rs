@@ -375,12 +375,13 @@ impl<'src> Analyzer<'src> {
             None
         };
         let published_type = Self::published_type(&type_);
+        let report = self.reporting.report;
         self.reporting.types.push(InferredType {
             start: site.start,
             end: site.end,
             type_: published_type,
             untyped_origin,
-            is_send: self.reporting.report && is_send,
+            is_send: report && is_send,
         });
         type_
     }

@@ -8,6 +8,7 @@ use crate::signature::{self, MethodSig};
 use crate::types::Type;
 use ruby_prism::ParametersNode;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BlockReceiverBinding {
@@ -33,13 +34,13 @@ impl BlockReceiverBinding {
 pub(super) struct MethodState {
     pub(super) params: Vec<Option<Type>>,
     pub(super) rest_index: Option<usize>,
-    pub(super) keywords: BTreeMap<String, Option<Type>>,
+    pub(super) keywords: Arc<BTreeMap<String, Option<Type>>>,
     pub(super) yield_params: Vec<Option<Type>>,
     pub(super) block_return_type: Option<Type>,
     pub(super) block_return_provisional: bool,
     pub(super) block: Option<Type>,
     pub(super) block_receiver_binding: Option<BlockReceiverBinding>,
-    pub(super) required_keywords: BTreeSet<String>,
+    pub(super) required_keywords: Arc<BTreeSet<String>>,
     pub(super) return_type: Option<Type>,
     pub(super) return_terminates: bool,
     /// The concrete exception type observed on an abrupt raise path. This is
@@ -89,21 +90,25 @@ impl MethodState {
         Self {
             params: signature.params.iter().cloned().map(Some).collect(),
             rest_index: signature.rest_index,
-            keywords: signature
-                .keywords
-                .iter()
-                .map(|(name, parameter)| (name.clone(), Some(parameter.type_.clone())))
-                .collect(),
+            keywords: Arc::new(
+                signature
+                    .keywords
+                    .iter()
+                    .map(|(name, parameter)| (name.clone(), Some(parameter.type_.clone())))
+                    .collect(),
+            ),
             yield_params,
             block_return_type,
             block_return_provisional: false,
             block: signature.block.clone(),
             block_receiver_binding: None,
-            required_keywords: signature
-                .keywords
-                .iter()
-                .filter_map(|(name, parameter)| parameter.required.then_some(name.clone()))
-                .collect(),
+            required_keywords: Arc::new(
+                signature
+                    .keywords
+                    .iter()
+                    .filter_map(|(name, parameter)| parameter.required.then_some(name.clone()))
+                    .collect(),
+            ),
             return_type: Some(signature.return_type.clone()),
             return_terminates: signature.return_type.is_never(),
             raise_type: None,
@@ -157,13 +162,13 @@ impl MethodState {
             return Self {
                 params,
                 rest_index,
-                keywords,
+                keywords: Arc::new(keywords),
                 yield_params: Vec::new(),
                 block_return_type: None,
                 block_return_provisional: false,
                 block: None,
                 block_receiver_binding: None,
-                required_keywords,
+                required_keywords: Arc::new(required_keywords),
                 return_type: None,
                 return_terminates: false,
                 raise_type: None,
@@ -184,13 +189,13 @@ impl MethodState {
         Self {
             params,
             rest_index,
-            keywords,
+            keywords: Arc::new(keywords),
             yield_params: Vec::new(),
             block_return_type: None,
             block_return_provisional: false,
             block: None,
             block_receiver_binding: None,
-            required_keywords,
+            required_keywords: Arc::new(required_keywords),
             return_type: None,
             return_terminates: false,
             raise_type: None,
@@ -242,13 +247,14 @@ impl MethodState {
                 }
                 hir::ParameterKind::RequiredKeyword => {
                     if let Some(name) = &parameter.name {
-                        state.required_keywords.insert(name.as_str().to_owned());
-                        state.keywords.insert(name.as_str().to_owned(), None);
+                        Arc::make_mut(&mut state.required_keywords)
+                            .insert(name.as_str().to_owned());
+                        Arc::make_mut(&mut state.keywords).insert(name.as_str().to_owned(), None);
                     }
                 }
                 hir::ParameterKind::OptionalKeyword => {
                     if let Some(name) = &parameter.name {
-                        state.keywords.insert(name.as_str().to_owned(), None);
+                        Arc::make_mut(&mut state.keywords).insert(name.as_str().to_owned(), None);
                     }
                 }
                 hir::ParameterKind::KeywordRest => {
@@ -402,7 +408,7 @@ impl MethodState {
         if self.explicit {
             return false;
         }
-        let Some(slot) = self.keywords.get_mut(name) else {
+        let Some(slot) = Arc::make_mut(&mut self.keywords).get_mut(name) else {
             return false;
         };
         let next = slot

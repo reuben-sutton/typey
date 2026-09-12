@@ -1,6 +1,7 @@
 //! Owned CFG transfer for complete HIR bodies.
 
 use super::super::cfg_state::{BlockState, BodyContext};
+use super::super::context::CfgBodyMetadata;
 use super::super::{
     Analyzer, Environment, Eval, Flow, FlowKind, OutcomeTypes, OwnedCallInput, SourceSite,
 };
@@ -13,12 +14,13 @@ use crate::cfg;
 use crate::hir::{self, Read};
 use crate::types::Type;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 pub(super) struct BodyTransfer<'analyzer, 'src> {
     pub(super) analyzer: &'analyzer mut Analyzer<'src>,
     pub(super) context: BodyContext,
-    pub(super) fixed_array_elements: HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
-    pub(super) fixed_shape_array_elements: HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
+    pub(super) fixed_array_elements: Arc<HashMap<cfg::ValueId, Vec<cfg::ValueId>>>,
+    pub(super) fixed_shape_array_elements: Arc<HashMap<cfg::ValueId, Vec<cfg::ValueId>>>,
     pub(super) normal_type: Type,
     pub(super) abrupt: OutcomeTypes,
     pub(super) terminal_flow: Flow,
@@ -746,73 +748,20 @@ impl<'src> Analyzer<'src> {
         // passes instead of rebuilding the same body for every method visit.
         let graph_store = self.program.cfg_graphs.as_ref()?.clone();
         let graph = graph_store.get(body_id.0 as usize)?;
-        let fixed_array_candidates = graph
-            .blocks
-            .iter()
-            .flat_map(|block| block.operations.iter())
-            .filter_map(|operation| {
-                let result = operation.result?;
-                let cfg::OperationKind::BuildArray { elements, .. } = &operation.kind else {
-                    return None;
-                };
-                let elements = elements
-                    .iter()
-                    .map(|element| match element {
-                        cfg::ArrayOperand::Value(value) => Some(*value),
-                        cfg::ArrayOperand::Splat { .. } => None,
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                Some((result, elements))
-            })
-            .collect::<HashMap<_, _>>();
-        let fixed_array_elements = fixed_array_candidates.clone();
-        let splatted_values = graph
-            .blocks
-            .iter()
-            .flat_map(|block| block.operations.iter())
-            .filter_map(|operation| match &operation.kind {
-                cfg::OperationKind::Call { arguments, .. } => Some(arguments),
-                _ => None,
-            })
-            .flat_map(|arguments| arguments.iter())
-            .filter_map(|argument| match argument {
-                cfg::ArgumentOperand::Splat(value) => Some(*value),
-                _ => None,
-            })
-            .collect::<std::collections::HashSet<_>>();
-        let fixed_shape_array_elements = fixed_array_candidates
-            .into_iter()
-            .filter(|(value, _)| splatted_values.contains(value))
-            .collect::<HashMap<_, _>>();
-        if graph.blocks.iter().any(|block| {
-            block.operations.iter().any(|operation| {
-                if self.is_rbi_offset(operation.span.start as usize) {
-                    return false;
-                }
-                !matches!(
-                    operation.kind,
-                    cfg::OperationKind::Const { .. }
-                        | cfg::OperationKind::Read { .. }
-                        | cfg::OperationKind::ReadSpecial { .. }
-                        | cfg::OperationKind::Write { .. }
-                        | cfg::OperationKind::MultiWrite { .. }
-                        | cfg::OperationKind::MultiWriteElement { .. }
-                        | cfg::OperationKind::Defined { .. }
-                        | cfg::OperationKind::Call { .. }
-                        | cfg::OperationKind::MakeClosure { .. }
-                        | cfg::OperationKind::BuildArray { .. }
-                        | cfg::OperationKind::BuildHash { .. }
-                        | cfg::OperationKind::BuildInterpolated { .. }
-                        | cfg::OperationKind::BuildRange { .. }
-                        | cfg::OperationKind::Definition { .. }
-                        | cfg::OperationKind::Record { .. }
-                        | cfg::OperationKind::ApplyAssertion { .. }
-                        | cfg::OperationKind::SetOutcome { .. }
-                        | cfg::OperationKind::PatternTest { .. }
-                        | cfg::OperationKind::BindForTarget { .. }
-                )
-            })
-        }) {
+        let (fixed_array_elements, fixed_shape_array_elements, written_locals, has_unsupported) = {
+            let metadata: &CfgBodyMetadata = self
+                .program
+                .cfg_body_metadata
+                .as_ref()?
+                .get(body_id.0 as usize)?;
+            (
+                metadata.fixed_array_elements.clone(),
+                metadata.fixed_shape_array_elements.clone(),
+                metadata.written_locals.clone(),
+                metadata.has_unsupported_operation,
+            )
+        };
+        if has_unsupported {
             self.record_cfg_fallback_at(
                 body_site,
                 "operation",
@@ -852,37 +801,7 @@ impl<'src> Analyzer<'src> {
             }
         }
         seed_cfg_global_state(self, &graph, &mut initial_environment);
-        let mut written_locals = HashSet::new();
-        for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
-            let mut collect_target = |target: &hir::AssignTarget| {
-                if let hir::AssignTarget::Local(local) = target {
-                    written_locals.insert(*local);
-                }
-            };
-            match &operation.kind {
-                cfg::OperationKind::Write {
-                    place: cfg::Place::Local(local),
-                    ..
-                } => {
-                    written_locals.insert(*local);
-                }
-                cfg::OperationKind::MultiWrite {
-                    lefts,
-                    rest,
-                    rights,
-                    ..
-                } => {
-                    lefts.iter().for_each(&mut collect_target);
-                    if let Some(rest) = rest {
-                        collect_target(rest);
-                    }
-                    rights.iter().for_each(&mut collect_target);
-                }
-                cfg::OperationKind::BindForTarget { target, .. } => collect_target(target),
-                _ => {}
-            }
-        }
-        for local in written_locals {
+        for local in written_locals.iter().copied() {
             if let Some(name) = self.program.hir_program.local_name(local) {
                 if !initial_environment.contains(name.as_str()) {
                     initial_environment.bind(name.as_str().to_owned(), Type::Nil);

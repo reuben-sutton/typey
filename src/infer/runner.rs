@@ -137,7 +137,16 @@ impl<'src> Analyzer<'src> {
                                 | "module_eval"
                                 | "module_exec"
                         ),
-                        cfg::OperationKind::Definition { .. } => true,
+                        // Ordinary methods declared directly in a namespace
+                        // are collected during the first root replay and are
+                        // evaluated from the method worklist afterward.
+                        // Keep replaying definitions which are not rooted in
+                        // a namespace (for example definitions nested in a
+                        // method or dynamic evaluation), because their
+                        // runtime reachability remains contextual.
+                        cfg::OperationKind::Definition { declaration, .. } => {
+                            !self.root_method_definitions.contains(declaration)
+                        }
 
                         _ => false,
                     })
@@ -652,7 +661,7 @@ impl<'src> Analyzer<'src> {
             );
         }
         CheckResult {
-            diagnostics: self.reporting.diagnostics,
+            diagnostics: self.reporting.diagnostics.clone(),
             types,
         }
     }
