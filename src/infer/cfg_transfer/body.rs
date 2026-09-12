@@ -1751,6 +1751,9 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
         let Some(current) = current else {
             return (incoming, true);
         };
+        if current == &incoming {
+            return (incoming, false);
+        }
         let joined = current.join(&incoming);
         let changed = joined != *current;
         (joined, changed)
