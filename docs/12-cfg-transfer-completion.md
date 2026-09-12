@@ -20,7 +20,7 @@ transfer spec described. Typey now has:
   routing and owned join-value recording.
 
 The current local gate includes 479 checker tests. The local conformance suite
-currently contains 272 generated tests, and the full conformance gate and
+currently contains 273 generated tests, and the full conformance gate and
 upstream fixture suite are green after the latest transfer changes. The suite
 reloads the bundled RBI set per fixture and is correspondingly expensive.
 The CFG path is still opt-in because the transfer host retains semantic
@@ -44,7 +44,7 @@ transfer telemetry.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Spoom | 2,895 | 2,895 | 100.00% | 1 | 8,538 | 34,081 | 3 |
 | Packwerk | 1,219 | 1,219 | 100.00% | 1 | 6,607 | 28,383 | 70 |
-| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 15,628 | 49,644 | 599 |
+| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 15,628 | 49,644 | 600 |
 
 The legacy differential is retained as historical diagnostic context, not as
 the completion criterion:
@@ -439,7 +439,7 @@ The latest source-aligned release Spoom CFG run has 2,895 executable source
 HIR bodies and transferred all 2,895 distinct source bodies plus one RBI body.
 It made 8,538 body visits and 34,081 calls with zero unsupported-operation
 fallbacks, zero unsupported edges, and zero legacy bridges. It reports 3
-diagnostics in the current checkout and took about 2.01 seconds of analysis
+diagnostics in the current checkout and took about 2.17 seconds of analysis
 time in the latest release/debug phase report.
 
 The latest source-aligned release Packwerk CFG run has 1,219 executable source
@@ -451,7 +451,7 @@ diagnostics in the current dirty checkout. The `YAML = Psych` standard-library
 alias remains modeled through the owned declaration path; runtime `Set[...]` now
 uses its singleton RBI contract, and anonymous `Class.new` blocks retain their
 included methods.
-The CFG analysis took about 3.24 seconds of analysis time in the latest
+The CFG analysis took about 3.59 seconds of analysis time in the latest
 release/debug phase report.
 
 ActiveSupport is the current large-component boundary. The current CFG run has
@@ -461,12 +461,13 @@ hash shape at recursive widening points, distinguishing generic type
 applications from runtime `Constant[]` sends, and evaluating optional defaults
 as part of inferred method contracts, it transfers all 4,531 distinct source
 bodies plus one RBI body. It made 15,628 body visits and 49,644 calls with zero
-unsupported-operation, edge, or legacy-bridge fallbacks, reports 599
-diagnostics, and took about 4.70 seconds of analysis time in the latest
+unsupported-operation, edge, or legacy-bridge fallbacks, reports 600
+diagnostics, and took about 4.85 seconds of analysis time in the latest
 release/debug phase report. A macOS sample profile identified
 environment and CFG-state cloning as an allocation hotspot; commit
 `66025e5` now shares flow environments copy-on-write and reuses unchanged
-environment components during joins. Comparable five-second samples reduced
+environment components during joins, and `cfd1a5b` shares CFG block state
+vectors across propagation. Comparable five-second samples reduced
 top-stack frees from 414 to 364 and `memmove` samples from 370 to 317.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
@@ -490,7 +491,7 @@ latest rooted-method change supersedes the old CFG timing comparison.
 As of 2026-09-12, the implementation is therefore not a finished Sorbet
 replacement. The checker gate is 479/479, all three repository checks transfer
 100% of their executable source bodies with zero measured fallbacks, and
-Spoom is an exact application regression check. The full 272-test conformance
+Spoom is an exact application regression check. The full 273-test conformance
 gate and upstream fixture suite are green. Remaining work is primarily
 Sorbet/upstream behavior coverage, RBI/input-scope handling, untyped provenance
 reduction, and performance of the owned transfer path—not more blind iteration
