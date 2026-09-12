@@ -8,6 +8,7 @@
 use crate::cfg;
 use crate::hir::{self, ExprKind, HashElement, Literal};
 use crate::types::Type;
+use ruby_prism::Node;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -74,6 +75,13 @@ impl HashShape {
         self.insert(key, value);
     }
 
+    pub(super) fn write_unknown(&mut self, value: Type) {
+        self.unknown_value = Some(match self.unknown_value.take() {
+            Some(current) => current.join(&value),
+            None => value,
+        });
+    }
+
     fn merge(&mut self, other: &Self) {
         for (key, value) in &other.entries {
             self.insert(key.clone(), value.clone());
@@ -85,6 +93,16 @@ impl HashShape {
             });
         }
     }
+}
+
+pub(super) fn prism_literal_key(node: &Node<'_>) -> Option<HashKey> {
+    if let Some(symbol) = node.as_symbol_node() {
+        return Some(HashKey::Symbol(
+            String::from_utf8_lossy(symbol.unescaped()).into_owned(),
+        ));
+    }
+    node.as_string_node()
+        .map(|string| HashKey::String(String::from_utf8_lossy(string.unescaped()).into_owned()))
 }
 
 pub(super) fn from_cfg_hash(

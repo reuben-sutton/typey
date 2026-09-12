@@ -1,3 +1,4 @@
+use super::hash_shape::HashShape;
 use super::{
     ivar_refinement_key, AccessorKind, Analyzer, ClassVarKey, Environment, IvarKey, MethodKey,
     SharedKey,
@@ -9,6 +10,47 @@ use ruby_prism::Node;
 use std::collections::BTreeSet;
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn literal_hash_shape_key(&self, node: &Node<'_>) -> String {
+        let (start, end) = prism::span(node);
+        format!("\u{1}literal-hash:{start}:{end}")
+    }
+
+    pub(super) fn hash_shape_for_node(
+        &self,
+        node: &Node<'_>,
+        environment: &Environment,
+    ) -> Option<HashShape> {
+        let key = if node.as_hash_node().is_some() || node.as_keyword_hash_node().is_some() {
+            Some(self.literal_hash_shape_key(node))
+        } else if let Some(local) = node.as_local_variable_read_node() {
+            Some(format!("\u{1}local:{}", prism::constant_name(local.name())))
+        } else if let Some(instance) = node.as_instance_variable_read_node() {
+            Some(ivar_refinement_key(&prism::constant_name(instance.name())))
+        } else if let Some(class) = node.as_class_variable_read_node() {
+            Some(format!(
+                "\u{1}classvar:{}",
+                prism::constant_name(class.name())
+            ))
+        } else if let Some(global) = node.as_global_variable_read_node() {
+            Some(format!(
+                "\u{1}global:${}",
+                prism::constant_name(global.name())
+            ))
+        } else if let Some(name) = self.constant_reference_name(node) {
+            Some(format!(
+                "\u{1}constant:{}",
+                self.constant_key(environment, &name)
+            ))
+        } else if let Some(parentheses) = node.as_parentheses_node() {
+            return parentheses
+                .body()
+                .and_then(|body| self.hash_shape_for_node(&body, environment));
+        } else {
+            None
+        }?;
+        environment.hash_shape(&key).cloned()
+    }
+
     pub(super) fn ivar_key(&self, environment: &Environment, name: &str) -> Option<IvarKey> {
         if let Some(method) = &environment.method_key {
             return method.owner.as_ref().map(|owner| IvarKey {

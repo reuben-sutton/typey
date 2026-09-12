@@ -1,3 +1,4 @@
+use super::hash_shape::HashShape;
 use super::*;
 
 impl<'src> Analyzer<'src> {
@@ -814,12 +815,18 @@ impl<'src> Analyzer<'src> {
         if let Some(hash) = node.as_hash_node() {
             let mut key = Type::Never;
             let mut value = Type::Never;
+            let mut shape = HashShape::new();
             for child in &hash.elements() {
                 if let Some(assoc) = child.as_assoc_node() {
                     let key_type = self.eval_node(&assoc.key(), environment).type_;
                     let value_type = self.eval_node(&assoc.value(), environment).type_;
                     key = key.join(&key_type);
                     value = value.join(&value_type);
+                    if let Some(key) = hash_shape::prism_literal_key(&assoc.key()) {
+                        shape.write(key, value_type);
+                    } else {
+                        shape.write_unknown(value_type);
+                    }
                 } else if let Some(splat) = child.as_assoc_splat_node() {
                     if let Some(expression) = splat.value() {
                         match self.eval_node(&expression, environment).type_ {
@@ -838,6 +845,7 @@ impl<'src> Analyzer<'src> {
                     self.eval_node(&child, environment);
                 }
             }
+            environment.set_hash_shape(self.literal_hash_shape_key(node), Some(shape));
             let key = if key.is_never() { Type::Any } else { key };
             let value = if value.is_never() { Type::Any } else { value };
             let type_ = self.apply_inline_assertion_in_environment(

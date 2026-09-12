@@ -6,6 +6,16 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn set_hash_shape_for_key(
+        &self,
+        key: String,
+        value_node: &Node<'_>,
+        environment: &mut Environment,
+    ) {
+        let shape = self.hash_shape_for_node(value_node, environment);
+        environment.set_hash_shape(key, shape);
+    }
+
     pub(super) fn eval_call_result<'node>(
         &mut self,
         node: &Node<'node>,
@@ -259,8 +269,9 @@ impl<'src> Analyzer<'src> {
                     .is_some_and(|array| array.elements().is_empty())
                     && matches!(&type_, Type::Array(element) if element.is_any())
                 {
-                    environment.open_array_locals.insert(name);
+                    environment.open_array_locals.insert(name.clone());
                 }
+                self.set_hash_shape_for_key(format!("\u{1}local:{name}"), &value_node, environment);
                 Eval::value(self.record(node, type_))
             }
             hir::AssignOperator::Binary(operator) => {
@@ -343,6 +354,7 @@ impl<'src> Analyzer<'src> {
                     });
                 self.observe_ivar(environment, name.to_owned(), &type_, provisional);
                 environment.bind(ivar_refinement_key(name), type_.clone());
+                self.set_hash_shape_for_key(ivar_refinement_key(name), &value_node, environment);
                 Eval::value(self.record(node, type_))
             }
             hir::AssignOperator::Binary(operator) => {
@@ -414,6 +426,11 @@ impl<'src> Analyzer<'src> {
                 let actual = self.eval_node(&value_node, environment).normal_type();
                 let type_ = self.apply_inline_assertion(node, actual);
                 self.observe_class_var(environment, name.to_owned(), &type_);
+                self.set_hash_shape_for_key(
+                    format!("\u{1}classvar:{name}"),
+                    &value_node,
+                    environment,
+                );
                 Eval::value(self.record(node, type_))
             }
             hir::AssignOperator::Binary(operator) => {
@@ -479,6 +496,11 @@ impl<'src> Analyzer<'src> {
                 let actual = self.eval_node(&value_node, environment).normal_type();
                 let type_ = self.apply_inline_assertion(node, actual);
                 self.observe_global(name.to_owned(), &type_);
+                self.set_hash_shape_for_key(
+                    format!("\u{1}global:${name}"),
+                    &value_node,
+                    environment,
+                );
                 Eval::value(self.record(node, type_))
             }
             hir::AssignOperator::Binary(operator) => {
@@ -553,6 +575,11 @@ impl<'src> Analyzer<'src> {
                 }
                 let type_ = self.apply_inline_assertion(node, struct_type.unwrap_or(actual));
                 self.observe_constant(environment, name.to_owned(), &type_);
+                self.set_hash_shape_for_key(
+                    format!("\u{1}constant:{}", self.constant_key(environment, name)),
+                    &value_node,
+                    environment,
+                );
                 Eval::value(self.record(node, type_))
             }
             hir::AssignOperator::Binary(operator) => {

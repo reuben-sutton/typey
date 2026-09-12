@@ -1,6 +1,6 @@
 use super::{
-    name_matches, prism, Analyzer, CallSite, Environment, Eval, Flow, FlowKind, HirCallView, Node,
-    OutcomeTypes, UntypedOrigin, Visibility,
+    hash_shape, name_matches, prism, Analyzer, CallSite, Environment, Eval, Flow, FlowKind,
+    HirCallView, Node, OutcomeTypes, UntypedOrigin, Visibility,
 };
 use crate::types::Type;
 
@@ -1091,6 +1091,21 @@ impl<'src> Analyzer<'src> {
                 }
                 type_
             };
+            if name == "[]" {
+                let known = receiver_node
+                    .as_ref()
+                    .and_then(|receiver| self.hash_shape_for_node(receiver, environment))
+                    .and_then(|shape| {
+                        arguments
+                            .argument_nodes
+                            .first()
+                            .and_then(hash_shape::prism_literal_key)
+                            .map(|key| shape.value_for(&key))
+                    });
+                if let Some(type_) = known {
+                    result = type_;
+                }
+            }
             if nonempty_literal_extremum || nonempty_array_access {
                 result = result.without(&Type::Nil);
             }

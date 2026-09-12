@@ -83,8 +83,13 @@ impl<'src> Analyzer<'src> {
                     .is_some_and(|array| array.elements().is_empty())
                     && matches!(&type_, Type::Array(element) if element.is_any())
                 {
-                    environment.open_array_locals.insert(name);
+                    environment.open_array_locals.insert(name.clone());
                 }
+                self.set_hash_shape_for_key(
+                    format!("\u{1}local:{}", name),
+                    &value_node,
+                    environment,
+                );
                 Some(Eval::value(self.record(node, type_)))
             }
             hir::AssignTarget::InstanceVariable(name) => {
@@ -100,18 +105,29 @@ impl<'src> Analyzer<'src> {
                     });
                 self.observe_ivar(environment, name.clone(), &type_, provisional);
                 environment.bind(ivar_refinement_key(&name), type_.clone());
+                self.set_hash_shape_for_key(ivar_refinement_key(&name), &value_node, environment);
                 Some(Eval::value(self.record(node, type_)))
             }
             hir::AssignTarget::ClassVariable(name) => {
                 let actual = self.eval_cfg_assignment_value(value_id, environment)?;
                 let type_ = self.apply_inline_assertion(node, actual);
                 self.observe_class_var(environment, name.as_str().to_owned(), &type_);
+                self.set_hash_shape_for_key(
+                    format!("\u{1}classvar:{}", name.as_str()),
+                    &value_node,
+                    environment,
+                );
                 Some(Eval::value(self.record(node, type_)))
             }
             hir::AssignTarget::Global(name) => {
                 let actual = self.eval_cfg_assignment_value(value_id, environment)?;
                 let type_ = self.apply_inline_assertion(node, actual);
                 self.observe_global(name.as_str().to_owned(), &type_);
+                self.set_hash_shape_for_key(
+                    format!("\u{1}global:${}", name.as_str()),
+                    &value_node,
+                    environment,
+                );
                 Some(Eval::value(self.record(node, type_)))
             }
             hir::AssignTarget::Constant(name) => {
@@ -122,7 +138,13 @@ impl<'src> Analyzer<'src> {
                     self.eval_dynamic_struct_block(&value_node, struct_type, environment);
                 }
                 let type_ = self.apply_inline_assertion(node, struct_type.unwrap_or(actual));
-                self.observe_constant(environment, name, &type_);
+                self.observe_constant(environment, name.clone(), &type_);
+                let constant_key = self.constant_key(environment, name.as_str());
+                self.set_hash_shape_for_key(
+                    format!("\u{1}constant:{constant_key}"),
+                    &value_node,
+                    environment,
+                );
                 Some(Eval::value(self.record(node, type_)))
             }
             hir::AssignTarget::Attribute { .. } | hir::AssignTarget::Index { .. } => None,
