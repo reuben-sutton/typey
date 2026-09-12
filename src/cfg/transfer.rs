@@ -78,6 +78,9 @@ where
 {
     let entry = cfg.block(start).ok_or(WorklistError::InvalidBlock(start))?;
     let _ = entry;
+    if let Some(path) = straight_line_path(cfg, start) {
+        return run_straight_line(cfg, transfer, initial, path);
+    }
     let mut states = vec![None; cfg.blocks.len()];
     let mut pending = BinaryHeap::new();
     let mut queued = vec![false; cfg.blocks.len()];
@@ -114,6 +117,88 @@ where
                     queued[edge.target.0 as usize] = true;
                 }
             }
+        }
+    }
+
+    Ok(WorklistResult {
+        states,
+        visit_order,
+    })
+}
+
+/// Return the statically single path through a body when no transfer-time
+/// operation can add another successor.  Inference still owns operation
+/// effects, so this only recognizes CFG shapes whose terminators and unwind
+/// edges guarantee at most one edge per block.
+fn straight_line_path(cfg: &Cfg, start: BlockId) -> Option<Vec<BlockId>> {
+    let mut path = Vec::new();
+    let mut current = start;
+    loop {
+        if path.contains(&current) {
+            return None;
+        }
+        let block = cfg.block(current)?;
+        if block.unwind.is_some() {
+            return None;
+        }
+        path.push(current);
+        current = match block.terminator {
+            super::Terminator::Jump { target, .. } => target,
+            super::Terminator::Return(_)
+            | super::Terminator::NonLocalReturn(_)
+            | super::Terminator::Raise(_)
+            | super::Terminator::Unreachable => return Some(path),
+            super::Terminator::Branch { .. } | super::Terminator::EnsureComplete { .. } => {
+                return None;
+            }
+        };
+    }
+}
+
+fn run_straight_line<T>(
+    cfg: &Cfg,
+    transfer: &mut T,
+    initial: T::State,
+    path: Vec<BlockId>,
+) -> Result<WorklistResult<T::State>, WorklistError<T::Error>>
+where
+    T: BlockTransfer,
+{
+    let mut states = vec![None; cfg.blocks.len()];
+    let mut visit_order = Vec::with_capacity(path.len());
+    let (state, changed) = transfer.join_state(None, initial);
+    if !changed {
+        states[path[0].0 as usize] = Some(state);
+        return Ok(WorklistResult {
+            states,
+            visit_order,
+        });
+    }
+
+    let mut state = Some(state);
+    for (index, block_id) in path.iter().copied().enumerate() {
+        visit_order.push(block_id);
+        let current = state.take().expect("straight-line state is present");
+        let block = cfg
+            .block(block_id)
+            .ok_or(WorklistError::InvalidBlock(block_id))?;
+        let edges = transfer
+            .transfer_block(cfg, block, &current)
+            .map_err(WorklistError::Transfer)?;
+        states[block_id.0 as usize] = Some(current);
+        if let Some(next) = path.get(index + 1).copied() {
+            let Some(edge) = edges.into_iter().next() else {
+                break;
+            };
+            if edge.target != next {
+                return Err(WorklistError::InvalidBlock(edge.target));
+            }
+            let (joined, changed) =
+                transfer.join_state(states[next.0 as usize].as_ref(), edge.state);
+            if !changed {
+                break;
+            }
+            state = Some(joined);
         }
     }
 
@@ -231,6 +316,38 @@ mod tests {
         }
     }
 
+    fn linear_graph() -> Cfg {
+        Cfg {
+            body: BodyId(0),
+            entry: BlockId(0),
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    parameters: Vec::new(),
+                    operations: Vec::new(),
+                    terminator: super::super::Terminator::Jump {
+                        target: BlockId(1),
+                        arguments: Vec::new(),
+                    },
+                    unwind: None,
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    parameters: Vec::new(),
+                    operations: Vec::new(),
+                    terminator: super::super::Terminator::Return(None),
+                    unwind: None,
+                },
+            ],
+            conditionals: Vec::new(),
+            ensure_entries: Vec::new(),
+            rescue_regions: Vec::new(),
+            unsupported_spans: Vec::new(),
+            unreachable_expressions: Vec::new(),
+            expression_values: Vec::new(),
+        }
+    }
+
     #[test]
     fn visits_branches_in_stable_block_order_and_joins_at_merge() {
         let mut transfer = TestTransfer;
@@ -240,6 +357,14 @@ mod tests {
             [BlockId(0), BlockId(1), BlockId(2), BlockId(3)]
         );
         assert_eq!(result.states[3], Some(2));
+    }
+
+    #[test]
+    fn visits_straight_line_graphs_without_changing_states() {
+        let mut transfer = TestTransfer;
+        let result = run(&linear_graph(), &mut transfer, 0).expect("worklist succeeds");
+        assert_eq!(result.visit_order, [BlockId(0), BlockId(1)]);
+        assert_eq!(result.states, [Some(0), Some(0)]);
     }
 
     #[test]
