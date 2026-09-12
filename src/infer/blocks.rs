@@ -1164,16 +1164,19 @@ impl<'src> Analyzer<'src> {
                 None
             };
         let arguments = Self::symbol_method_arguments(parameters, initial_signature.as_ref(), site);
-        let input = OwnedCallInput {
+        let receiver_operand = cfg::ReceiverOperand::Implicit;
+        let call_name = hir::Name::new(name);
+        let call_arguments = Vec::new();
+        let input = OwnedCallInput::new(
             site,
-            expression: None,
-            receiver: cfg::ReceiverOperand::Implicit,
-            name: hir::Name::new(name),
-            arguments: Vec::new(),
-            block: None,
-            safe_navigation: false,
-            defer_inline_assertion: false,
-        };
+            None,
+            &receiver_operand,
+            &call_name,
+            &call_arguments,
+            None,
+            false,
+            false,
+        );
         self.transfer_owned_symbol_call(&input, receiver, &arguments, environment)
             .ok()
     }

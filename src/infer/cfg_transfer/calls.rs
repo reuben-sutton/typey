@@ -77,7 +77,7 @@ fn compound_assignment_receiver(
 
 pub(super) fn transfer_call(
     analyzer: &mut Analyzer<'_>,
-    input: OwnedCallInput,
+    input: OwnedCallInput<'_>,
     values: &[Option<Type>],
     fixed_array_elements: &HashMap<cfg::ValueId, Vec<cfg::ValueId>>,
     hash_shapes: &mut [Option<HashShape>],
@@ -118,7 +118,7 @@ pub(super) fn transfer_call(
     }
     let receiver_type = compound_assignment_receiver(analyzer, &input, receiver_type);
     let receiver_value = match input.receiver {
-        cfg::ReceiverOperand::Value(value) => Some(value),
+        cfg::ReceiverOperand::Value(value) => Some(*value),
         _ => None,
     };
     let receiver_hash_shape =

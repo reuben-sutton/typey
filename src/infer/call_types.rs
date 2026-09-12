@@ -23,20 +23,20 @@ pub(super) struct CallSite<'a, 'node> {
 /// The owned semantic input consumed by CFG call transfer. Parser nodes are
 /// deliberately absent; source nodes remain a separate compatibility adapter
 /// for legacy diagnostic and builtin APIs.
-#[derive(Clone, Debug)]
-pub(super) struct OwnedCallInput {
+#[derive(Clone, Copy, Debug)]
+pub(super) struct OwnedCallInput<'a> {
     pub(super) site: SourceSite,
     pub(super) expression: Option<hir::ExprId>,
-    pub(super) receiver: cfg::ReceiverOperand,
-    pub(super) name: hir::Name,
-    pub(super) arguments: Vec<cfg::ArgumentOperand>,
-    pub(super) block: Option<cfg::BlockOperand>,
+    pub(super) receiver: &'a cfg::ReceiverOperand,
+    pub(super) name: &'a hir::Name,
+    pub(super) arguments: &'a [cfg::ArgumentOperand],
+    pub(super) block: Option<&'a cfg::BlockOperand>,
     pub(super) safe_navigation: bool,
     pub(super) defer_inline_assertion: bool,
 }
 
-impl OwnedCallInput {
-    pub(super) fn from_operation(operation: &cfg::Operation) -> Option<Self> {
+impl<'a> OwnedCallInput<'a> {
+    pub(super) fn from_operation(operation: &'a cfg::Operation) -> Option<Self> {
         let cfg::OperationKind::Call {
             receiver,
             name,
@@ -50,13 +50,35 @@ impl OwnedCallInput {
         Some(Self {
             site: SourceSite::from_span(operation.span, operation.expression),
             expression: operation.expression,
-            receiver: receiver.clone(),
-            name: name.clone(),
-            arguments: arguments.clone(),
-            block: block.clone(),
+            receiver,
+            name,
+            arguments,
+            block: block.as_ref(),
             safe_navigation: *safe_navigation,
             defer_inline_assertion: operation.defer_inline_assertion,
         })
+    }
+
+    pub(super) fn new(
+        site: SourceSite,
+        expression: Option<hir::ExprId>,
+        receiver: &'a cfg::ReceiverOperand,
+        name: &'a hir::Name,
+        arguments: &'a [cfg::ArgumentOperand],
+        block: Option<&'a cfg::BlockOperand>,
+        safe_navigation: bool,
+        defer_inline_assertion: bool,
+    ) -> Self {
+        Self {
+            site,
+            expression,
+            receiver,
+            name,
+            arguments,
+            block,
+            safe_navigation,
+            defer_inline_assertion,
+        }
     }
 }
 
