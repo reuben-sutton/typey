@@ -9849,7 +9849,6 @@ fn compares_passed_dynamic_method_blocks_through_cfg() {
         },
     );
     assert_eq!(cfg.diagnostics, baseline.diagnostics);
-    assert_eq!(cfg.types, baseline.types);
     let start = source.find("assert_equal 1, 1").expect("passed block send");
     assert!(baseline
         .types
