@@ -5,7 +5,7 @@
 //! fixpoint scheduling, environments, and shared storage agree on identity
 //! without making `infer.rs` own their representation.
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) struct MethodKey {
     pub(super) owner: Option<String>,
     pub(super) name: String,
