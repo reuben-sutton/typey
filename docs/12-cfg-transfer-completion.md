@@ -437,9 +437,8 @@ The latest release Spoom CFG run has 2,895 executable source HIR bodies and
 transferred all 2,895 distinct source bodies plus one RBI body. It made 9,213
 body visits and 35,024 calls with zero unsupported-operation fallbacks, zero
 unsupported edges, and zero legacy bridges. It reports 3 diagnostics in the
-current checkout. The current CFG analysis completes in about 2.26 seconds
-internally (3.41 seconds including the CLI repository wrapper) in an
-uncontended debug run.
+current checkout and completes in about 3.33 seconds end-to-end in release
+mode.
 
 The latest release Packwerk CFG run has 1,219 executable source HIR bodies and
 transferred all 1,219 distinct source bodies plus one RBI body. Six `sig` declaration
@@ -449,8 +448,7 @@ legacy-bridge fallbacks. It reports 70 diagnostics in the current dirty
 checkout. The `YAML = Psych` standard-library alias remains modeled
 through the owned declaration path; runtime `Set[...]` now uses its singleton
 RBI contract, and anonymous `Class.new` blocks retain their included methods.
-The CFG analysis completes in about 4.23 seconds internally (5.64 seconds
-including the CLI repository wrapper) in an uncontended debug run.
+The CFG analysis completes in about 5.77 seconds end-to-end in release mode.
 
 ActiveSupport is the current large-component boundary. The current CFG run has
 4,531 executable source HIR bodies. After separating
@@ -459,9 +457,14 @@ hash shape at recursive widening points, distinguishing generic type
 applications from runtime `Constant[]` sends, and evaluating optional defaults
 as part of inferred method contracts, it transfers all 4,531 distinct source
 bodies plus one RBI body. It made 17,142 body visits and 51,808 calls with zero
-unsupported-operation, edge, or legacy-bridge fallbacks, reports 601
-diagnostics, and completes in about 5.63 seconds internally (6.49 seconds
-including the CLI repository wrapper) in an uncontended debug run.
+unsupported-operation, edge, or legacy-bridge fallbacks, reports 598
+diagnostics, and completes in about 5.70 seconds end-to-end in release mode.
+The current debug run spends 5.20 seconds in analysis and 6.05 seconds
+including the repository wrapper. A macOS sample profile identified
+environment and CFG-state cloning as an allocation hotspot; commit
+`66025e5` now shares flow environments copy-on-write and reuses unchanged
+environment components during joins. Comparable five-second samples reduced
+top-stack frees from 414 to 364 and `memmove` samples from 370 to 317.
 CFG fallback telemetry now distinguishes unsupported operations, unsupported
 edges, and legacy bridges; the migrated ordinary-body path now uses explicit
 outcome routing for non-local `return`, `break`, and `next`, including through
