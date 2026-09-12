@@ -260,6 +260,13 @@ pub(crate) fn check_with_policies(
         owned_method_definitions: BTreeMap::new(),
         root_method_definitions: BTreeSet::new(),
         reachable_method_definitions: BTreeSet::new(),
+        namespace_body_keys: BTreeMap::new(),
+        namespace_body_key_ids: BTreeMap::new(),
+        namespace_body_parents: BTreeMap::new(),
+        namespace_body_method_definitions: BTreeMap::new(),
+        namespace_body_stack: Vec::new(),
+        namespace_body_always_replay: BTreeSet::new(),
+        active_namespace_bodies: None,
         collect_method_definitions: false,
         skip_root_method_definitions: false,
         method_resolution_cache: RefCell::new(BTreeMap::new()),
@@ -316,6 +323,13 @@ struct Analyzer<'src> {
     owned_method_definitions: BTreeMap<hir::DeclId, MethodKey>,
     root_method_definitions: BTreeSet<hir::DeclId>,
     reachable_method_definitions: BTreeSet<hir::DeclId>,
+    namespace_body_keys: BTreeMap<hir::BodyId, MethodKey>,
+    namespace_body_key_ids: BTreeMap<MethodKey, hir::BodyId>,
+    namespace_body_parents: BTreeMap<hir::BodyId, hir::BodyId>,
+    namespace_body_method_definitions: BTreeMap<hir::BodyId, BTreeSet<hir::DeclId>>,
+    namespace_body_stack: Vec<hir::BodyId>,
+    namespace_body_always_replay: BTreeSet<hir::BodyId>,
+    active_namespace_bodies: Option<BTreeSet<hir::BodyId>>,
     collect_method_definitions: bool,
     skip_root_method_definitions: bool,
     method_resolution_cache: RefCell<BTreeMap<MethodKey, Option<MethodKey>>>,
@@ -360,6 +374,13 @@ struct Analyzer<'src> {
 pub(super) struct CfgTransferSnapshot {
     declarations: DeclarationState,
     reachable_method_definitions: BTreeSet<hir::DeclId>,
+    namespace_body_keys: BTreeMap<hir::BodyId, MethodKey>,
+    namespace_body_key_ids: BTreeMap<MethodKey, hir::BodyId>,
+    namespace_body_parents: BTreeMap<hir::BodyId, hir::BodyId>,
+    namespace_body_method_definitions: BTreeMap<hir::BodyId, BTreeSet<hir::DeclId>>,
+    namespace_body_stack: Vec<hir::BodyId>,
+    namespace_body_always_replay: BTreeSet<hir::BodyId>,
+    active_namespace_bodies: Option<BTreeSet<hir::BodyId>>,
     collect_method_definitions: bool,
     skip_root_method_definitions: bool,
     method_resolution_cache: BTreeMap<MethodKey, Option<MethodKey>>,
@@ -397,6 +418,13 @@ impl<'src> Analyzer<'src> {
         CfgTransferSnapshot {
             declarations: self.declarations.clone(),
             reachable_method_definitions: self.reachable_method_definitions.clone(),
+            namespace_body_keys: self.namespace_body_keys.clone(),
+            namespace_body_key_ids: self.namespace_body_key_ids.clone(),
+            namespace_body_parents: self.namespace_body_parents.clone(),
+            namespace_body_method_definitions: self.namespace_body_method_definitions.clone(),
+            namespace_body_stack: self.namespace_body_stack.clone(),
+            namespace_body_always_replay: self.namespace_body_always_replay.clone(),
+            active_namespace_bodies: self.active_namespace_bodies.clone(),
             collect_method_definitions: self.collect_method_definitions,
             skip_root_method_definitions: self.skip_root_method_definitions,
             method_resolution_cache: self.method_resolution_cache.borrow().clone(),
@@ -433,6 +461,13 @@ impl<'src> Analyzer<'src> {
     pub(super) fn restore_cfg_transfer_snapshot(&mut self, snapshot: CfgTransferSnapshot) {
         self.declarations = snapshot.declarations;
         self.reachable_method_definitions = snapshot.reachable_method_definitions;
+        self.namespace_body_keys = snapshot.namespace_body_keys;
+        self.namespace_body_key_ids = snapshot.namespace_body_key_ids;
+        self.namespace_body_parents = snapshot.namespace_body_parents;
+        self.namespace_body_method_definitions = snapshot.namespace_body_method_definitions;
+        self.namespace_body_stack = snapshot.namespace_body_stack;
+        self.namespace_body_always_replay = snapshot.namespace_body_always_replay;
+        self.active_namespace_bodies = snapshot.active_namespace_bodies;
         self.collect_method_definitions = snapshot.collect_method_definitions;
         self.skip_root_method_definitions = snapshot.skip_root_method_definitions;
         *self.method_resolution_cache.borrow_mut() = snapshot.method_resolution_cache;

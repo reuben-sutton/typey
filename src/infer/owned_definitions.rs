@@ -29,6 +29,12 @@ impl<'src> Analyzer<'src> {
             } => {
                 if self.collect_method_definitions {
                     self.reachable_method_definitions.insert(declaration_id);
+                    if let Some(body_id) = self.namespace_body_stack.last().copied() {
+                        self.namespace_body_method_definitions
+                            .entry(body_id)
+                            .or_default()
+                            .insert(declaration_id);
+                    }
                 }
                 if self.skip_root_method_definitions
                     && self.root_method_definitions.contains(&declaration_id)
@@ -453,16 +459,38 @@ impl<'src> Analyzer<'src> {
         let Some(body) = body else {
             return Ok(());
         };
+        if !self.namespace_body_is_active(body) {
+            return Ok(());
+        }
         let name = self.scoped_constant_name(outer, raw_name);
+        let dependency_key = Self::namespace_dependency_key(body);
+        self.namespace_body_keys
+            .insert(body, dependency_key.clone());
+        self.namespace_body_key_ids
+            .insert(dependency_key.clone(), body);
+        if self.collect_method_definitions {
+            if let Some(previous) = self.namespace_body_method_definitions.remove(&body) {
+                for declaration_id in previous {
+                    self.reachable_method_definitions.remove(&declaration_id);
+                }
+            }
+            self.namespace_body_stack.push(body);
+        }
+        self.begin_method_evaluation(&dependency_key);
         let mut namespace_environment = outer.clone();
         namespace_environment.self_type = Self::class_object_type(&name);
-        let key = MethodKey {
+        namespace_environment.method_key = Some(MethodKey {
             owner: Some(name),
             name: "<class-body>".to_owned(),
             singleton: true,
-        };
-        namespace_environment.method_key = Some(key.clone());
-        let previous_substitution_context = self.substitution_context.replace(key);
+        });
+        namespace_environment.dependency_key = Some(dependency_key);
+        let previous_substitution_context = self.substitution_context.replace(
+            namespace_environment
+                .method_key
+                .clone()
+                .expect("namespace body method context"),
+        );
         let result = self
             .eval_cfg_body_owned(
                 self.owned_body_site(body),
@@ -472,6 +500,9 @@ impl<'src> Analyzer<'src> {
             )
             .is_some();
         self.substitution_context = previous_substitution_context;
+        if self.collect_method_definitions {
+            self.namespace_body_stack.pop();
+        }
         result
             .then_some(())
             .ok_or_else(|| "namespace body requires a legacy transfer".to_owned())
@@ -490,7 +521,24 @@ impl<'src> Analyzer<'src> {
         let Some(body) = body else {
             return Ok(());
         };
+        if !self.namespace_body_is_active(body) {
+            return Ok(());
+        }
         let owner = Self::class_object_owner(&expression_type);
+        let dependency_key = Self::namespace_dependency_key(body);
+        self.namespace_body_keys
+            .insert(body, dependency_key.clone());
+        self.namespace_body_key_ids
+            .insert(dependency_key.clone(), body);
+        if self.collect_method_definitions {
+            if let Some(previous) = self.namespace_body_method_definitions.remove(&body) {
+                for declaration_id in previous {
+                    self.reachable_method_definitions.remove(&declaration_id);
+                }
+            }
+            self.namespace_body_stack.push(body);
+        }
+        self.begin_method_evaluation(&dependency_key);
         let mut singleton_environment = outer.clone();
         singleton_environment.self_type = expression_type;
         singleton_environment.method_key = Some(MethodKey {
@@ -498,6 +546,13 @@ impl<'src> Analyzer<'src> {
             name: "<singleton-body>".to_owned(),
             singleton: true,
         });
+        singleton_environment.dependency_key = Some(dependency_key);
+        let previous_substitution_context = self.substitution_context.replace(
+            singleton_environment
+                .method_key
+                .clone()
+                .expect("singleton body method context"),
+        );
         let result = self
             .eval_cfg_body_owned(
                 self.owned_body_site(body),
@@ -506,6 +561,10 @@ impl<'src> Analyzer<'src> {
                 true,
             )
             .is_some();
+        self.substitution_context = previous_substitution_context;
+        if self.collect_method_definitions {
+            self.namespace_body_stack.pop();
+        }
         result
             .then_some(())
             .ok_or_else(|| "singleton body requires a legacy transfer".to_owned())

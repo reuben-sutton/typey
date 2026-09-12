@@ -6,10 +6,16 @@ use std::collections::BTreeSet;
 
 impl<'src> Analyzer<'src> {
     pub(super) fn record_method_dependency(&mut self, key: &MethodKey, environment: &Environment) {
-        let Some(caller) = environment.method_key.as_ref() else {
+        let Some(caller) = environment
+            .dependency_key
+            .as_ref()
+            .or(environment.method_key.as_ref())
+        else {
             return;
         };
-        if !self.declarations.methods.contains_key(caller) {
+        if !self.declarations.methods.contains_key(caller)
+            && !self.namespace_body_key_ids.contains_key(caller)
+        {
             return;
         }
 

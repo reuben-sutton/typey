@@ -50,6 +50,146 @@ impl<'src> Analyzer<'src> {
             .collect();
         self.owned_method_definitions = definitions;
         self.root_method_definitions = root_definitions;
+
+        let namespace_bodies = self
+            .program
+            .hir_program
+            .bodies
+            .iter()
+            .enumerate()
+            .filter_map(|(index, body)| {
+                matches!(
+                    body.owner,
+                    hir::BodyOwner::Class(_)
+                        | hir::BodyOwner::Module(_)
+                        | hir::BodyOwner::SingletonClass
+                )
+                .then_some((hir::BodyId(index as u32), body))
+            })
+            .collect::<Vec<_>>();
+        self.namespace_body_parents = namespace_bodies
+            .iter()
+            .filter_map(|(body_id, body)| {
+                namespace_bodies
+                    .iter()
+                    .filter(|(candidate_id, candidate)| {
+                        candidate_id != body_id
+                            && candidate.span.start <= body.span.start
+                            && candidate.span.end >= body.span.end
+                    })
+                    .min_by_key(|(_, candidate)| candidate.span.len())
+                    .map(|(parent_id, _)| (*body_id, *parent_id))
+            })
+            .collect();
+        self.namespace_body_always_replay = namespace_bodies
+            .iter()
+            .filter_map(|(body_id, _)| {
+                let graph = self
+                    .program
+                    .cfg_graphs
+                    .as_ref()
+                    .and_then(|graphs| graphs.get(body_id.0 as usize))?;
+                graph
+                    .blocks
+                    .iter()
+                    .flat_map(|block| block.operations.iter())
+                    .any(|operation| match &operation.kind {
+                        cfg::OperationKind::Call { name, .. } => matches!(
+                            name.as_str(),
+                            "alias_method"
+                                | "class_eval"
+                                | "class_exec"
+                                | "define_method"
+                                | "define_singleton_method"
+                                | "eval"
+                                | "instance_eval"
+                                | "instance_exec"
+                                | "module_eval"
+                                | "module_exec"
+                        ),
+                        cfg::OperationKind::Definition { .. } => true,
+
+                        _ => false,
+                    })
+                    .then_some(*body_id)
+            })
+            .collect();
+    }
+
+    pub(super) fn namespace_dependency_key(body_id: hir::BodyId) -> MethodKey {
+        MethodKey {
+            owner: None,
+            name: format!("<namespace-body:{}>", body_id.0),
+            singleton: true,
+        }
+    }
+
+    pub(super) fn namespace_body_is_active(&self, body_id: hir::BodyId) -> bool {
+        self.namespace_body_always_replay.contains(&body_id)
+            || self
+                .active_namespace_bodies
+                .as_ref()
+                .is_none_or(|active| active.contains(&body_id))
+    }
+
+    fn retain_inactive_namespace_method_definitions(&mut self) {
+        let Some(active) = self.active_namespace_bodies.as_ref() else {
+            return;
+        };
+        let retained = self
+            .namespace_body_method_definitions
+            .iter()
+            .filter(|(body_id, _)| {
+                !active.contains(body_id) && !self.namespace_body_always_replay.contains(body_id)
+            })
+            .flat_map(|(_, definitions)| definitions.iter().copied())
+            .collect::<BTreeSet<_>>();
+        self.reachable_method_definitions.extend(retained);
+    }
+
+    fn changed_namespace_bodies(
+        &self,
+        changed_methods: &BTreeSet<MethodKey>,
+        changed_shared: &BTreeSet<SharedKey>,
+    ) -> BTreeSet<hir::BodyId> {
+        // Namespace bodies can observe shared state through framework hooks
+        // and dynamic dispatch without producing a direct read edge. A
+        // shared-state change therefore invalidates every namespace body;
+        // method-only changes can use the precise call dependency graph below.
+        if !changed_shared.is_empty() {
+            return self.namespace_body_keys.keys().copied().collect();
+        }
+        let mut bodies = BTreeSet::new();
+        for method in changed_methods {
+            if let Some(callers) = self.fixpoint.method_callers.get(method) {
+                bodies.extend(
+                    callers
+                        .iter()
+                        .filter_map(|caller| self.namespace_body_key_ids.get(caller).copied()),
+                );
+            }
+        }
+        for shared_key in changed_shared {
+            if let Some(readers) = self.fixpoint.shared_readers.get(shared_key) {
+                bodies.extend(
+                    readers
+                        .iter()
+                        .filter_map(|reader| self.namespace_body_key_ids.get(reader).copied()),
+                );
+            }
+        }
+
+        let mut ancestors = bodies.clone();
+        for body_id in bodies {
+            let mut current = body_id;
+            while let Some(parent) = self.namespace_body_parents.get(&current).copied() {
+                if !ancestors.insert(parent) {
+                    break;
+                }
+                current = parent;
+            }
+        }
+        ancestors
     }
 
     fn eval_scheduled_method_definitions(
@@ -233,6 +373,7 @@ impl<'src> Analyzer<'src> {
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
+        let mut pending_namespace_bodies = None;
         let mut round = 0;
         // The worklist is driven solely by actual summary changes. There is
         // no arbitrary round limit: once no method or shared value changes,
@@ -248,6 +389,7 @@ impl<'src> Analyzer<'src> {
             self.filter_method_bodies = true;
             self.fixpoint.changed_methods.clear();
             self.fixpoint.changed_shared.clear();
+            self.active_namespace_bodies = pending_namespace_bodies.take();
             self.fixpoint.debug_phase = "inference";
             self.fixpoint.debug_round = round;
             self.reporting.types.clear();
@@ -274,6 +416,7 @@ impl<'src> Analyzer<'src> {
             // below in source order. Dynamic and nested definitions remain in
             // the root pass because their runtime reachability is contextual.
             self.reachable_method_definitions.clear();
+            self.retain_inactive_namespace_method_definitions();
             self.collect_method_definitions = true;
             self.skip_root_method_definitions = true;
             let mut environment = Environment::default();
@@ -289,8 +432,14 @@ impl<'src> Analyzer<'src> {
                 if self.config.debug {
                     eprintln!("[typey] direct method worklist fallback: {reason}");
                 }
+                let previous_active_namespace_bodies = self.active_namespace_bodies.take();
+                let previous_collect_method_definitions = self.collect_method_definitions;
+                self.collect_method_definitions = true;
+                self.skip_root_method_definitions = false;
                 let mut fallback_environment = Environment::default();
                 self.eval_node(root, &mut fallback_environment);
+                self.collect_method_definitions = previous_collect_method_definitions;
+                self.active_namespace_bodies = previous_active_namespace_bodies;
             }
             self.fixpoint.collecting_returns = false;
             self.commit_inferred_returns();
@@ -298,17 +447,32 @@ impl<'src> Analyzer<'src> {
             let changed_methods = std::mem::take(&mut self.fixpoint.changed_methods);
             let changed_shared = std::mem::take(&mut self.fixpoint.changed_shared);
             let mut next_pending = BTreeSet::new();
+            let mut next_namespace_bodies = BTreeSet::new();
             for method in &changed_methods {
                 next_pending.insert(method.clone());
                 if let Some(callers) = self.fixpoint.method_callers.get(method) {
-                    next_pending.extend(callers.iter().cloned());
+                    for caller in callers {
+                        if let Some(body_id) = self.namespace_body_key_ids.get(caller) {
+                            next_namespace_bodies.insert(*body_id);
+                        } else {
+                            next_pending.insert(caller.clone());
+                        }
+                    }
                 }
             }
             for shared_key in &changed_shared {
                 if let Some(readers) = self.fixpoint.shared_readers.get(shared_key) {
-                    next_pending.extend(readers.iter().cloned());
+                    for reader in readers {
+                        if let Some(body_id) = self.namespace_body_key_ids.get(reader) {
+                            next_namespace_bodies.insert(*body_id);
+                        } else {
+                            next_pending.insert(reader.clone());
+                        }
+                    }
                 }
             }
+            next_namespace_bodies
+                .extend(self.changed_namespace_bodies(&changed_methods, &changed_shared));
             if self.config.debug {
                 eprintln!(
                     "[typey] worklist round {round} complete: {} changed methods, {} changed shared keys, {} scheduled next",
@@ -322,6 +486,7 @@ impl<'src> Analyzer<'src> {
                 );
             }
             pending_methods = next_pending;
+            pending_namespace_bodies = Some(next_namespace_bodies);
         }
 
         // Re-run once with settled summaries. This final pass is the only pass
@@ -333,6 +498,7 @@ impl<'src> Analyzer<'src> {
         self.cfg_transferred_bodies_this_pass.clear();
         self.filter_method_bodies = false;
         self.fixpoint.active_methods.clear();
+        self.active_namespace_bodies = None;
         self.fixpoint.debug_phase = "final";
         self.fixpoint.debug_round = 0;
         self.fixpoint.debug_nodes = 0;

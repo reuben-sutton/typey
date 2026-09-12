@@ -43,6 +43,11 @@ pub struct Environment {
     pub(super) hash_shapes: BTreeMap<String, HashShape>,
     pub(super) self_type: Type,
     pub(super) method_key: Option<MethodKey>,
+    /// A namespace body keeps its runtime method context (`<class-body>` or
+    /// `<singleton-body>`) for dispatch, but uses a distinct dependency key
+    /// so repeated reopenings of the same class do not share invalidation
+    /// edges accidentally.
+    pub(super) dependency_key: Option<MethodKey>,
 }
 
 impl Default for Environment {
@@ -60,6 +65,7 @@ impl Default for Environment {
             hash_shapes: BTreeMap::new(),
             self_type: Type::Object,
             method_key: None,
+            dependency_key: None,
         }
     }
 }
@@ -365,6 +371,11 @@ impl Environment {
                 lattice.join(&self.self_type, &other.self_type)
             },
             method_key: self.method_key.clone(),
+            dependency_key: if self.dependency_key == other.dependency_key {
+                self.dependency_key.clone()
+            } else {
+                None
+            },
         };
         for name in self.locals.keys().chain(other.locals.keys()) {
             if result.locals.contains_key(name) {
