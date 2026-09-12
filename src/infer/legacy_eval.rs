@@ -920,7 +920,14 @@ impl<'src> Analyzer<'src> {
             self.narrow_from_predicate(&left_node, &mut right_environment, true);
             let right_node = and.right();
             let right = self.eval_node(&right_node, &mut right_environment).type_;
-            let type_ = self.apply_inline_assertion(node, Type::union([left.falsy_part(), right]));
+            let type_ = if left.truthy_part().is_never() {
+                left.falsy_part()
+            } else if left.falsy_part().is_never() {
+                right
+            } else {
+                Type::union([left.falsy_part(), right])
+            };
+            let type_ = self.apply_inline_assertion(node, type_);
             return Eval::value(self.record(node, type_));
         }
         if let Some(or) = node.as_or_node() {
@@ -930,7 +937,14 @@ impl<'src> Analyzer<'src> {
             self.narrow_from_predicate(&left_node, &mut right_environment, false);
             let right_node = or.right();
             let right = self.eval_node(&right_node, &mut right_environment).type_;
-            let type_ = self.apply_inline_assertion(node, Type::union([left.truthy_part(), right]));
+            let type_ = if left.falsy_part().is_never() {
+                left.truthy_part()
+            } else if left.truthy_part().is_never() {
+                right
+            } else {
+                Type::union([left.truthy_part(), right])
+            };
+            let type_ = self.apply_inline_assertion(node, type_);
             return Eval::value(self.record(node, type_));
         }
         if let Some(return_node) = node.as_return_node() {

@@ -815,6 +815,39 @@ fn transfers_logical_values_through_owned_cfg() {
 }
 
 #[test]
+fn preserves_definite_falsy_logical_values() {
+    let source = std::fs::read_to_string("tests/fixtures/logical_value_nil.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+
+    for result in [&baseline, &cfg] {
+        let reveals = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.starts_with("Revealed type:"))
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            reveals.iter().any(|message| message.contains("`NilClass`")),
+            "definite nil was widened: {reveals:?}"
+        );
+        assert!(
+            reveals
+                .iter()
+                .any(|message| message.contains("`FalseClass`")),
+            "definite false was widened: {reveals:?}"
+        );
+    }
+    assert_eq!(baseline.diagnostics, cfg.diagnostics);
+}
+
+#[test]
 fn advances_after_logical_keyword_splat_values_in_owned_cfg() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_keyword_splat_logical.rb").expect("fixture");
