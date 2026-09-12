@@ -660,6 +660,7 @@ impl<'src> Analyzer<'src> {
             fixed_array_elements,
             fixed_shape_array_elements,
             inline_closures,
+            straight_line_path,
             written_locals,
             has_unsupported,
             has_super_or_yield,
@@ -674,6 +675,7 @@ impl<'src> Analyzer<'src> {
                 metadata.fixed_array_elements.clone(),
                 metadata.fixed_shape_array_elements.clone(),
                 metadata.inline_closures.clone(),
+                metadata.straight_line_path.clone(),
                 metadata.written_locals.clone(),
                 metadata.has_unsupported_operation,
                 metadata.has_super_or_yield,
@@ -757,7 +759,13 @@ impl<'src> Analyzer<'src> {
         // blocks. Report their source diagnostics from the owned metadata
         // before transferring the reachable graph.
         transfer.report_unreachable_expressions(&graph);
-        let worklist = match cfg::transfer::run(&graph, &mut transfer, initial) {
+        let worklist = match cfg::transfer::run_from_cached(
+            &graph,
+            &mut transfer,
+            graph.entry,
+            initial,
+            straight_line_path.as_deref(),
+        ) {
             Ok(worklist) => worklist,
             Err(cfg::transfer::WorklistError::InvalidBlock(_)) => {
                 drop(transfer);

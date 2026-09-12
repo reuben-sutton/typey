@@ -76,9 +76,39 @@ pub fn run_from<T>(
 where
     T: BlockTransfer,
 {
+    let path = straight_line_path(cfg, start);
+    run_from_with_straight_line_path(cfg, transfer, start, initial, path.as_deref())
+}
+
+/// Interpret a body using a straight-line path computed from immutable CFG
+/// metadata when one is available. A missing path means that the generic
+/// worklist is required; it does not trigger another graph scan.
+pub(crate) fn run_from_cached<T>(
+    cfg: &Cfg,
+    transfer: &mut T,
+    start: BlockId,
+    initial: T::State,
+    straight_line_path: Option<&[BlockId]>,
+) -> Result<WorklistResult<T::State>, WorklistError<T::Error>>
+where
+    T: BlockTransfer,
+{
+    run_from_with_straight_line_path(cfg, transfer, start, initial, straight_line_path)
+}
+
+fn run_from_with_straight_line_path<T>(
+    cfg: &Cfg,
+    transfer: &mut T,
+    start: BlockId,
+    initial: T::State,
+    straight_line_path: Option<&[BlockId]>,
+) -> Result<WorklistResult<T::State>, WorklistError<T::Error>>
+where
+    T: BlockTransfer,
+{
     let entry = cfg.block(start).ok_or(WorklistError::InvalidBlock(start))?;
     let _ = entry;
-    if let Some(path) = straight_line_path(cfg, start) {
+    if let Some(path) = straight_line_path {
         return run_straight_line(cfg, transfer, initial, path);
     }
     let mut states = vec![None; cfg.blocks.len()];
@@ -130,7 +160,7 @@ where
 /// operation can add another successor.  Inference still owns operation
 /// effects, so this only recognizes CFG shapes whose terminators and unwind
 /// edges guarantee at most one edge per block.
-fn straight_line_path(cfg: &Cfg, start: BlockId) -> Option<Vec<BlockId>> {
+pub(crate) fn straight_line_path(cfg: &Cfg, start: BlockId) -> Option<Vec<BlockId>> {
     let mut path = Vec::new();
     let mut current = start;
     loop {
@@ -159,7 +189,7 @@ fn run_straight_line<T>(
     cfg: &Cfg,
     transfer: &mut T,
     initial: T::State,
-    path: Vec<BlockId>,
+    path: &[BlockId],
 ) -> Result<WorklistResult<T::State>, WorklistError<T::Error>>
 where
     T: BlockTransfer,
