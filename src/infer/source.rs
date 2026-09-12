@@ -73,6 +73,53 @@ impl SourceSite {
 }
 
 impl<'src> Analyzer<'src> {
+    fn contains_block_return_placeholder(type_: &Type) -> bool {
+        match type_ {
+            Type::TypeVar(name) => name.starts_with("$block_return:"),
+            Type::Named(_, arguments) => arguments
+                .iter()
+                .any(Self::contains_block_return_placeholder),
+            Type::Array(element) => Self::contains_block_return_placeholder(element),
+            Type::Hash(key, value) => {
+                Self::contains_block_return_placeholder(key)
+                    || Self::contains_block_return_placeholder(value)
+            }
+            Type::Tuple(elements) | Type::Union(elements) | Type::Intersection(elements) => {
+                elements.iter().any(Self::contains_block_return_placeholder)
+            }
+            Type::Proc(parameters, result) => {
+                parameters
+                    .iter()
+                    .any(Self::contains_block_return_placeholder)
+                    || Self::contains_block_return_placeholder(result)
+            }
+            Type::BoundProc {
+                receiver,
+                parameters,
+                result,
+            } => {
+                Self::contains_block_return_placeholder(receiver)
+                    || parameters
+                        .iter()
+                        .any(Self::contains_block_return_placeholder)
+                    || Self::contains_block_return_placeholder(result)
+            }
+            Type::Any
+            | Type::Anything
+            | Type::Never
+            | Type::Nil
+            | Type::True
+            | Type::False
+            | Type::Integer
+            | Type::Float
+            | Type::String
+            | Type::Symbol
+            | Type::Object
+            | Type::AttachedClass
+            | Type::AttachedClassOf(_) => false,
+        }
+    }
+
     /// Convert internal inference placeholders to types suitable for callers.
     ///
     /// Forwarded unannotated blocks need a symbolic result while a method is
@@ -81,6 +128,9 @@ impl<'src> Analyzer<'src> {
     /// fixpoint, but it is not a type parameter that a caller can act on.
     /// Never expose it through the public per-expression type stream.
     fn published_type(type_: &Type) -> Type {
+        if !Self::contains_block_return_placeholder(type_) {
+            return type_.clone();
+        }
         match type_ {
             Type::TypeVar(name) if name.starts_with("$block_return:") => Type::Anything,
             Type::Named(name, arguments) => Type::Named(
