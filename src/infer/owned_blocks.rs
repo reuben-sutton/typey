@@ -585,6 +585,14 @@ fn bind_owned_parameters(
         None
     };
     let expected = destructured.as_deref().unwrap_or(expected);
+    if parameters.parameters.is_empty() {
+        for (index, type_) in expected.iter().enumerate() {
+            environment.bind(format!("_{}", index + 1), type_.clone());
+            if index == 0 {
+                environment.bind("it", type_.clone());
+            }
+        }
+    }
     let mut positional_index = 0;
     for parameter in &parameters.parameters {
         let type_ = match parameter.kind {

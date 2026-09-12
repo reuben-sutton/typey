@@ -7144,25 +7144,29 @@ T.reveal_type(flag)
 
 #[test]
 fn infers_implicit_block_parameters() {
-    let result = check(
-        r#"
-T.reveal_type([1].map { it + 1 })
-T.reveal_type([1].map { _1 + 1 })
-"#,
+    let source = std::fs::read_to_string("tests/fixtures/cfg_implicit_block_parameters.rb")
+        .expect("fixture");
+    for config in [
         CheckerConfig::default(),
-    );
-    assert!(!result.has_errors(), "{:?}", result.diagnostics);
-    let arrays = result
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| {
-            diagnostic.severity == Severity::Note
-                && diagnostic
-                    .message
-                    .contains("Revealed type: `T::Array[Integer]`")
-        })
-        .count();
-    assert_eq!(arrays, 2, "{:?}", result.diagnostics);
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    ] {
+        let result = check(&source, config);
+        assert!(!result.has_errors(), "{:?}", result.diagnostics);
+        let arrays = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.severity == Severity::Note
+                    && diagnostic
+                        .message
+                        .contains("Revealed type: `T::Array[Integer]`")
+            })
+            .count();
+        assert_eq!(arrays, 3, "{:?}", result.diagnostics);
+    }
 }
 
 #[test]
