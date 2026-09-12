@@ -12,4 +12,4 @@ class Set
   end
 end
 
-T.reveal_type(Set["one", "two"]) # note: Set[String]
+T.reveal_type(Set["one", "two"]) # note: T::Set[String]

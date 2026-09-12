@@ -3,8 +3,8 @@ use std::process::Command;
 
 use typey::workspace::is_ruby_source;
 use typey::{
-    check_workspace, discover_ruby_files, discover_ruby_files_with_ignores, load_workspace,
-    CheckerConfig, WorkspaceFile,
+    builtin_rbi_paths, check_workspace, discover_ruby_files, discover_ruby_files_with_ignores,
+    load_workspace, load_workspace_paths, CheckerConfig, WorkspaceFile,
 };
 
 const FIXTURE_ROOT: &str = "tests/workspace_repo";
@@ -43,6 +43,32 @@ fn discovers_and_checks_rb_and_rbi_files_as_one_workspace() {
     assert!(notes
         .iter()
         .all(|diagnostic| diagnostic.diagnostic.message.contains("`String`")));
+}
+
+#[test]
+fn workspace_preserves_definite_logical_call_contracts() {
+    let path = Path::new("tests/fixtures/cfg_logical_values.rb");
+    let source = std::fs::read_to_string(path).expect("fixture exists");
+    let mut files =
+        load_workspace_paths(&builtin_rbi_paths().expect("builtins exist")).expect("builtins load");
+    files.push(WorkspaceFile::new(path, source));
+
+    let result = check_workspace(&files, CheckerConfig::default());
+    let notes = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.path == path)
+        .filter(|diagnostic| diagnostic.diagnostic.message.contains("Revealed type:"))
+        .map(|diagnostic| diagnostic.diagnostic.message.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notes,
+        vec![
+            "Revealed type: `T.nilable(String)`",
+            "Revealed type: `String`",
+            "Revealed type: `T.nilable(String)`",
+        ],
+    );
 }
 
 #[test]

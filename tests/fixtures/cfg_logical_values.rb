@@ -10,7 +10,7 @@ def logical_value(value)
   value && value.to_s
 end
 
-T.reveal_type(logical_value(nil)) # note: String
+T.reveal_type(logical_value(nil)) # note: T.nilable(String)
 
 # Predicate facts from both sides of a logical condition survive the join when
 # the non-matching branch cannot complete normally.

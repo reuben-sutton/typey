@@ -51,15 +51,27 @@ fn parses_inline_expectations_with_reveal_compatibility() {
     assert_eq!(parsed[1].severity, Severity::Note);
     assert_eq!(parsed[1].line, 2);
     assert_eq!(parsed[1].message, "Revealed type: `Integer`");
+    assert!(parsed[1].reveal_type);
     assert_eq!(parsed[2].severity, Severity::Note);
     assert_eq!(parsed[2].line, 3);
     assert_eq!(parsed[2].message, "`Integer`");
+    assert!(parsed[2].reveal_type);
     assert_eq!(parsed[3].severity, Severity::Note);
     assert_eq!(parsed[3].line, 4);
     assert_eq!(parsed[3].message, "a note");
+    assert!(!parsed[3].reveal_type);
     assert_eq!(parsed[4].severity, Severity::Error);
     assert_eq!(parsed[4].line, 4);
     assert_eq!(parsed[4].message, "caret-style expectation");
+}
+
+#[test]
+fn logical_fixture_reveal_expectations_are_exact() {
+    let path = Path::new("tests/fixtures/cfg_logical_values.rb");
+    let report = check_fixture(path, CheckerConfig::default()).expect("fixture is readable");
+
+    assert!(report.passed(), "{:?}", report.failures);
+    assert_eq!(report.expected[2].message, "T.nilable(String)");
 }
 
 #[test]

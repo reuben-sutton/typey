@@ -4129,7 +4129,8 @@ fn resolves_method_summaries_across_fixpoint_rounds() {
 fn widens_recursive_inferred_returns_to_a_finite_concrete_type() {
     let result = check_fixture("tests/fixtures/recursive_inferred_return.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| {
-        diagnostic.severity == Severity::Note && diagnostic.message.contains("T::Array[Object]")
+        diagnostic.severity == Severity::Note
+            && diagnostic.message == "Revealed type: `T::Array[T::Array[Object]]`"
     }));
     assert!(!result
         .diagnostics
@@ -4145,7 +4146,8 @@ fn widens_recursive_inferred_returns_to_a_finite_concrete_type() {
         },
     );
     assert!(cfg.diagnostics.iter().any(|diagnostic| {
-        diagnostic.severity == Severity::Note && diagnostic.message.contains("T::Array[Object]")
+        diagnostic.severity == Severity::Note
+            && diagnostic.message == "Revealed type: `T::Array[T::Array[Object]]`"
     }));
     assert!(!cfg
         .diagnostics

@@ -15,7 +15,7 @@ module StateStore
 end
 
 registry = StateStore[:key] ||= {}
-T.reveal_type(registry[:key]) # note: String
+T.reveal_type(registry[:key]) # note: T.nilable(String)
 
 module ActiveSupport
   module NestedStateStore

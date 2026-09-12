@@ -15,6 +15,7 @@ pub struct InlineExpectation {
     pub severity: Severity,
     pub line: usize,
     pub message: String,
+    pub reveal_type: bool,
 }
 
 /// The result of checking one fixture against its inline expectations.
@@ -87,6 +88,7 @@ pub fn expectations(source: &str) -> Vec<InlineExpectation> {
                         severity,
                         line,
                         message: message.to_owned(),
+                        reveal_type: prefix.contains("T.reveal_type"),
                     });
                 }
             }
@@ -186,7 +188,7 @@ pub fn check_fixture(path: &Path, config: CheckerConfig) -> io::Result<FixtureRe
                 !used[*index]
                     && diagnostic.severity == expectation.severity
                     && diagnostic.line == expectation.line
-                    && diagnostic.message.contains(&expectation.message)
+                    && expectation_matches(expectation, &diagnostic.message)
             });
         if let Some((index, _)) = matching {
             used[index] = true;
@@ -204,6 +206,19 @@ pub fn check_fixture(path: &Path, config: CheckerConfig) -> io::Result<FixtureRe
         result,
         failures,
     })
+}
+
+fn expectation_matches(expectation: &InlineExpectation, actual: &str) -> bool {
+    if !expectation.reveal_type {
+        return actual.contains(&expectation.message);
+    }
+
+    let expected_type = expectation
+        .message
+        .strip_prefix("Revealed type:")
+        .map_or(expectation.message.as_str(), str::trim);
+    let expected_type = expected_type.trim_matches('`');
+    actual == format!("Revealed type: `{expected_type}`")
 }
 
 /// Find Ruby fixtures recursively below `root` in stable path order.
@@ -232,4 +247,24 @@ fn collect_fixture_paths(root: &Path, paths: &mut Vec<PathBuf>) -> io::Result<()
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reveal_expectations_do_not_match_containing_types() {
+        let expectation = InlineExpectation {
+            severity: Severity::Note,
+            line: 1,
+            message: "String".to_owned(),
+            reveal_type: true,
+        };
+        assert!(expectation_matches(&expectation, "Revealed type: `String`"));
+        assert!(!expectation_matches(
+            &expectation,
+            "Revealed type: `T.nilable(String)`"
+        ));
+    }
 }

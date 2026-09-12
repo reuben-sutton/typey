@@ -9,4 +9,4 @@ module CfgStructAlias
   end
 end
 
-T.reveal_type(CfgStructAlias.build("ready")) # note: Reference
+T.reveal_type(CfgStructAlias.build("ready")) # note: CfgStructAlias::Reference
