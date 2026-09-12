@@ -1,7 +1,7 @@
 use super::hash_shape::HashShape;
 use super::MethodKey;
 use crate::types::{Type, TypeLattice};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PredicateAlias {
@@ -18,7 +18,7 @@ pub(super) struct PredicateAlias {
 /// of the top-level inference host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Environment {
-    pub(super) locals: BTreeMap<String, Type>,
+    pub(super) locals: HashMap<String, Type>,
     /// Types learned from observed calls to an unsigiled method are useful
     /// for expression inference, but they are not a proof about every future
     /// call. Keep their provenance so control-flow predicates do not treat a
@@ -53,7 +53,7 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         Self {
-            locals: BTreeMap::new(),
+            locals: HashMap::new(),
             inferred_locals: BTreeSet::new(),
             provisional_locals: BTreeSet::new(),
             block_parameters: BTreeSet::new(),
@@ -313,7 +313,7 @@ impl Environment {
     pub fn join(&self, other: &Self) -> Self {
         let lattice = TypeLattice;
         let mut result = Self {
-            locals: BTreeMap::new(),
+            locals: HashMap::with_capacity(self.locals.len().max(other.locals.len())),
             inferred_locals: self
                 .inferred_locals
                 .union(&other.inferred_locals)
