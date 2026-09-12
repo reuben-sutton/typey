@@ -375,12 +375,16 @@ struct Analyzer<'src> {
 /// Cloneable copy-on-write storage for analyzer state which is snapshotted
 /// around a potentially failing CFG transfer. A snapshot shares the current
 /// value; the first mutation of either side detaches only that value.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct CowState<T: Clone>(Arc<T>);
 
 impl<T: Clone> CowState<T> {
     fn new(value: T) -> Self {
         Self(Arc::new(value))
+    }
+
+    fn shares_storage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 

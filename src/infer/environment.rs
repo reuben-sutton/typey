@@ -1,5 +1,5 @@
 use super::hash_shape::HashShape;
-use super::MethodKey;
+use super::{CowState, MethodKey};
 use crate::types::{Type, TypeLattice};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -18,29 +18,29 @@ pub(super) struct PredicateAlias {
 /// of the top-level inference host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Environment {
-    pub(super) locals: HashMap<String, Type>,
+    pub(super) locals: CowState<HashMap<String, Type>>,
     /// Types learned from observed calls to an unsigiled method are useful
     /// for expression inference, but they are not a proof about every future
     /// call. Keep their provenance so control-flow predicates do not treat a
     /// sample argument as exhaustive.
-    pub(super) inferred_locals: BTreeSet<String>,
-    pub(super) provisional_locals: BTreeSet<String>,
+    pub(super) inferred_locals: CowState<BTreeSet<String>>,
+    pub(super) provisional_locals: CowState<BTreeSet<String>>,
     /// Locals introduced by a Ruby `&block` parameter.  A forwarded block
     /// needs a little more information than its ordinary `Proc` shape: the
     /// receiving method may pass it to another callback, where the expected
     /// parameters provide the missing signature.
-    pub(super) block_parameters: BTreeSet<String>,
-    pub(super) open_array_locals: BTreeSet<String>,
-    pub(super) known_nonempty_arrays: BTreeSet<String>,
-    pub(super) predicate_aliases: BTreeMap<String, PredicateAlias>,
-    pub(super) known_truthiness: BTreeMap<String, bool>,
+    pub(super) block_parameters: CowState<BTreeSet<String>>,
+    pub(super) open_array_locals: CowState<BTreeSet<String>>,
+    pub(super) known_nonempty_arrays: CowState<BTreeSet<String>>,
+    pub(super) predicate_aliases: CowState<BTreeMap<String, PredicateAlias>>,
+    pub(super) known_truthiness: CowState<BTreeMap<String, bool>>,
     /// Methods proven available by a path-sensitive `respond_to?` guard.
     /// The receiver key is prefixed with its storage kind so a local and an
     /// instance variable with the same source name cannot share a fact.
-    pub(super) known_respond_to: BTreeSet<(String, String)>,
+    pub(super) known_respond_to: CowState<BTreeSet<(String, String)>>,
     /// Flow-local refinements for hashes whose literal keys are known. The
     /// ordinary local/ivar type remains an aggregate `Type::Hash`.
-    pub(super) hash_shapes: BTreeMap<String, HashShape>,
+    pub(super) hash_shapes: CowState<BTreeMap<String, HashShape>>,
     pub(super) self_type: Type,
     pub(super) method_key: Option<MethodKey>,
     /// A namespace body keeps its runtime method context (`<class-body>` or
@@ -53,16 +53,16 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         Self {
-            locals: HashMap::new(),
-            inferred_locals: BTreeSet::new(),
-            provisional_locals: BTreeSet::new(),
-            block_parameters: BTreeSet::new(),
-            open_array_locals: BTreeSet::new(),
-            known_nonempty_arrays: BTreeSet::new(),
-            predicate_aliases: BTreeMap::new(),
-            known_truthiness: BTreeMap::new(),
-            known_respond_to: BTreeSet::new(),
-            hash_shapes: BTreeMap::new(),
+            locals: CowState::new(HashMap::new()),
+            inferred_locals: CowState::new(BTreeSet::new()),
+            provisional_locals: CowState::new(BTreeSet::new()),
+            block_parameters: CowState::new(BTreeSet::new()),
+            open_array_locals: CowState::new(BTreeSet::new()),
+            known_nonempty_arrays: CowState::new(BTreeSet::new()),
+            predicate_aliases: CowState::new(BTreeMap::new()),
+            known_truthiness: CowState::new(BTreeMap::new()),
+            known_respond_to: CowState::new(BTreeSet::new()),
+            hash_shapes: CowState::new(BTreeMap::new()),
             self_type: Type::Object,
             method_key: None,
             dependency_key: None,
@@ -312,55 +312,128 @@ impl Environment {
     #[must_use]
     pub fn join(&self, other: &Self) -> Self {
         let lattice = TypeLattice;
+        let locals_shared = self.locals.shares_storage(&other.locals);
+        let hash_shapes_shared = self.hash_shapes.shares_storage(&other.hash_shapes);
         let mut result = Self {
-            locals: HashMap::with_capacity(self.locals.len().max(other.locals.len())),
-            inferred_locals: self
-                .inferred_locals
-                .union(&other.inferred_locals)
-                .cloned()
-                .collect(),
-            provisional_locals: self
+            locals: if locals_shared {
+                self.locals.clone()
+            } else {
+                CowState::new(HashMap::with_capacity(
+                    self.locals.len().max(other.locals.len()),
+                ))
+            },
+            inferred_locals: if self.inferred_locals.shares_storage(&other.inferred_locals) {
+                self.inferred_locals.clone()
+            } else {
+                CowState::new(
+                    self.inferred_locals
+                        .union(&other.inferred_locals)
+                        .cloned()
+                        .collect(),
+                )
+            },
+            provisional_locals: if self
                 .provisional_locals
-                .union(&other.provisional_locals)
-                .cloned()
-                .collect(),
-            block_parameters: self
+                .shares_storage(&other.provisional_locals)
+            {
+                self.provisional_locals.clone()
+            } else {
+                CowState::new(
+                    self.provisional_locals
+                        .union(&other.provisional_locals)
+                        .cloned()
+                        .collect(),
+                )
+            },
+            block_parameters: if self
                 .block_parameters
-                .intersection(&other.block_parameters)
-                .cloned()
-                .collect(),
-            open_array_locals: self
+                .shares_storage(&other.block_parameters)
+            {
+                self.block_parameters.clone()
+            } else {
+                CowState::new(
+                    self.block_parameters
+                        .intersection(&other.block_parameters)
+                        .cloned()
+                        .collect(),
+                )
+            },
+            open_array_locals: if self
                 .open_array_locals
-                .intersection(&other.open_array_locals)
-                .cloned()
-                .collect(),
-            known_nonempty_arrays: self
+                .shares_storage(&other.open_array_locals)
+            {
+                self.open_array_locals.clone()
+            } else {
+                CowState::new(
+                    self.open_array_locals
+                        .intersection(&other.open_array_locals)
+                        .cloned()
+                        .collect(),
+                )
+            },
+            known_nonempty_arrays: if self
                 .known_nonempty_arrays
-                .intersection(&other.known_nonempty_arrays)
-                .cloned()
-                .collect(),
-            predicate_aliases: self
+                .shares_storage(&other.known_nonempty_arrays)
+            {
+                self.known_nonempty_arrays.clone()
+            } else {
+                CowState::new(
+                    self.known_nonempty_arrays
+                        .intersection(&other.known_nonempty_arrays)
+                        .cloned()
+                        .collect(),
+                )
+            },
+            predicate_aliases: if self
                 .predicate_aliases
-                .iter()
-                .filter_map(|(name, alias)| {
-                    (other.predicate_aliases.get(name) == Some(alias))
-                        .then(|| (name.clone(), alias.clone()))
-                })
-                .collect(),
-            known_truthiness: self
+                .shares_storage(&other.predicate_aliases)
+            {
+                self.predicate_aliases.clone()
+            } else {
+                CowState::new(
+                    self.predicate_aliases
+                        .iter()
+                        .filter_map(|(name, alias)| {
+                            (other.predicate_aliases.get(name) == Some(alias))
+                                .then(|| (name.clone(), alias.clone()))
+                        })
+                        .collect(),
+                )
+            },
+            known_truthiness: if self
                 .known_truthiness
-                .iter()
-                .filter_map(|(name, truthy)| {
-                    (other.known_truthiness.get(name) == Some(truthy))
-                        .then(|| (name.clone(), *truthy))
-                })
-                .collect(),
-            known_respond_to: self
+                .shares_storage(&other.known_truthiness)
+            {
+                self.known_truthiness.clone()
+            } else {
+                CowState::new(
+                    self.known_truthiness
+                        .iter()
+                        .filter_map(|(name, truthy)| {
+                            (other.known_truthiness.get(name) == Some(truthy))
+                                .then(|| (name.clone(), *truthy))
+                        })
+                        .collect(),
+                )
+            },
+            known_respond_to: if self
                 .known_respond_to
-                .intersection(&other.known_respond_to)
-                .cloned()
-                .collect(),
-            hash_shapes: BTreeMap::new(),
+                .shares_storage(&other.known_respond_to)
+            {
+                self.known_respond_to.clone()
+            } else {
+                CowState::new(
+                    self.known_respond_to
+                        .intersection(&other.known_respond_to)
+                        .cloned()
+                        .collect(),
+                )
+            },
+            hash_shapes: if hash_shapes_shared {
+                self.hash_shapes.clone()
+            } else {
+                CowState::new(BTreeMap::new())
+            },
             // `self` is flow-sensitive too: a predicate may narrow it on one
             // branch, and a join must retain the union of all feasible
             // receiver types rather than whichever branch happened to be
@@ -377,26 +450,30 @@ impl Environment {
                 None
             },
         };
-        for name in self.locals.keys().chain(other.locals.keys()) {
-            if result.locals.contains_key(name) {
-                continue;
+        if !locals_shared {
+            for name in self.locals.keys().chain(other.locals.keys()) {
+                if result.locals.contains_key(name) {
+                    continue;
+                }
+                let type_ = match (self.locals.get(name), other.locals.get(name)) {
+                    (Some(left), Some(right)) => lattice.join(left, right),
+                    (Some(value), None) | (None, Some(value)) => lattice.join(value, &Type::Nil),
+                    (None, None) => Type::Any,
+                };
+                result.locals.insert(name.clone(), type_);
             }
-            let type_ = match (self.locals.get(name), other.locals.get(name)) {
-                (Some(left), Some(right)) => lattice.join(left, right),
-                (Some(value), None) | (None, Some(value)) => lattice.join(value, &Type::Nil),
-                (None, None) => Type::Any,
-            };
-            result.locals.insert(name.clone(), type_);
         }
-        for name in self.hash_shapes.keys().chain(other.hash_shapes.keys()) {
-            if result.hash_shapes.contains_key(name) {
-                continue;
+        if !hash_shapes_shared {
+            for name in self.hash_shapes.keys().chain(other.hash_shapes.keys()) {
+                if result.hash_shapes.contains_key(name) {
+                    continue;
+                }
+                let shape = match (self.hash_shapes.get(name), other.hash_shapes.get(name)) {
+                    (Some(left), Some(right)) => left.join(right),
+                    _ => continue,
+                };
+                result.hash_shapes.insert(name.clone(), shape);
             }
-            let shape = match (self.hash_shapes.get(name), other.hash_shapes.get(name)) {
-                (Some(left), Some(right)) => left.join(right),
-                _ => continue,
-            };
-            result.hash_shapes.insert(name.clone(), shape);
         }
         result
     }
