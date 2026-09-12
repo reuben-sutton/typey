@@ -20,11 +20,9 @@ transfer spec described. Typey now has:
   routing and owned join-value recording.
 
 The current local gate includes 479 checker tests. The local conformance suite
-currently contains 272 generated tests; the newly added CFG fixtures pass
-targeted conformance, but the full conformance gate has not been rerun since
-the latest transfer changes. The suite
-reloads the bundled RBI set per fixture and is correspondingly expensive. A
-separate 37-fixture upstream smoke suite was green in the preceding run.
+currently contains 272 generated tests, and the full conformance gate and
+upstream fixture suite are green after the latest transfer changes. The suite
+reloads the bundled RBI set per fixture and is correspondingly expensive.
 The CFG path is still opt-in because the transfer host retains semantic
 bridges in the legacy recursive path: the recursive evaluator still uses Prism
 children for exact diagnostics and builtin hooks, while parser-backed callback
@@ -46,7 +44,7 @@ transfer telemetry.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Spoom | 2,895 | 2,895 | 100.00% | 1 | 9,213 | 35,024 | 3 |
 | Packwerk | 1,219 | 1,219 | 100.00% | 1 | 8,084 | 32,959 | 70 |
-| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,142 | 51,808 | 601 |
+| Rails ActiveSupport | 4,531 | 4,531 | 100.00% | 1 | 17,142 | 51,808 | 598 |
 
 The legacy differential is retained as historical diagnostic context, not as
 the completion criterion:
@@ -99,9 +97,10 @@ Remaining implementation work is to finish the remaining passed/forwarded-block
 binding cases and remove the parser-facing legacy adapters before making CFG
 the default.
 
-The next step is therefore not another scheduler abstraction. It is to make
-CFG transfer an owned-HIR abstract interpreter, complete the remaining control
-flow, and then measure whether the legacy path is still needed.
+The current performance work also includes a conservative straight-line CFG
+transfer fast path. It skips heap-based scheduling for bodies with only jumps
+and terminal edges while retaining the generic worklist for branches, loops,
+unwind, and ensure regions.
 
 ## Goals
 
@@ -437,8 +436,8 @@ The latest release Spoom CFG run has 2,895 executable source HIR bodies and
 transferred all 2,895 distinct source bodies plus one RBI body. It made 9,213
 body visits and 35,024 calls with zero unsupported-operation fallbacks, zero
 unsupported edges, and zero legacy bridges. It reports 3 diagnostics in the
-current checkout and completes in about 3.33 seconds end-to-end in release
-mode.
+current checkout and completes in about 3.09 seconds end-to-end in release
+mode (about 3.09 seconds in the latest sequential run).
 
 The latest release Packwerk CFG run has 1,219 executable source HIR bodies and
 transferred all 1,219 distinct source bodies plus one RBI body. Six `sig` declaration
@@ -448,7 +447,7 @@ legacy-bridge fallbacks. It reports 70 diagnostics in the current dirty
 checkout. The `YAML = Psych` standard-library alias remains modeled
 through the owned declaration path; runtime `Set[...]` now uses its singleton
 RBI contract, and anonymous `Class.new` blocks retain their included methods.
-The CFG analysis completes in about 5.77 seconds end-to-end in release mode.
+The CFG analysis completes in about 5.39 seconds end-to-end in release mode.
 
 ActiveSupport is the current large-component boundary. The current CFG run has
 4,531 executable source HIR bodies. After separating
@@ -458,9 +457,9 @@ applications from runtime `Constant[]` sends, and evaluating optional defaults
 as part of inferred method contracts, it transfers all 4,531 distinct source
 bodies plus one RBI body. It made 17,142 body visits and 51,808 calls with zero
 unsupported-operation, edge, or legacy-bridge fallbacks, reports 598
-diagnostics, and completes in about 5.70 seconds end-to-end in release mode.
-The current debug run spends 5.20 seconds in analysis and 6.05 seconds
-including the repository wrapper. A macOS sample profile identified
+diagnostics, and completes in about 5.55 seconds end-to-end in release mode.
+The current debug run spends about 4.96 seconds in analysis. A macOS sample
+profile identified
 environment and CFG-state cloning as an allocation hotspot; commit
 `66025e5` now shares flow environments copy-on-write and reuses unchanged
 environment components during joins. Comparable five-second samples reduced
@@ -489,12 +488,10 @@ As of 2026-09-12, the implementation is therefore not a finished Sorbet
 replacement. The checker gate is 479/479, all three repository checks transfer
 100% of their executable source bodies with zero measured fallbacks, and
 Spoom is an exact application regression check. The full 272-test conformance
-gate passed in the latest complete run; the broader suite still has one
-workspace failure caused by a dirty fixture whose expected reveal lines were
-removed, and the upstream smoke gate still needs a fresh complete run. Remaining
-work is primarily Sorbet/upstream behavior coverage, RBI/input-scope handling,
-untyped provenance reduction, and performance of the owned transfer path—not
-more blind iteration on legacy diagnostic differences.
+gate and upstream fixture suite are green. Remaining work is primarily
+Sorbet/upstream behavior coverage, RBI/input-scope handling, untyped provenance
+reduction, and performance of the owned transfer path—not more blind iteration
+on legacy diagnostic differences.
 
 ## Design
 
