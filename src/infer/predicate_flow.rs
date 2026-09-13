@@ -519,6 +519,37 @@ impl<'src> Analyzer<'src> {
                         return;
                     }
                 }
+                if truthy && name == "respond_to?" && arguments.len() == 1 {
+                    let method = arguments[0]
+                        .as_symbol_node()
+                        .map(|symbol| String::from_utf8_lossy(symbol.unescaped()).into_owned())
+                        .or_else(|| {
+                            arguments[0].as_string_node().map(|string| {
+                                String::from_utf8_lossy(string.unescaped()).into_owned()
+                            })
+                        });
+                    if let Some(method) = method {
+                        if let Some(local) = receiver.as_local_variable_read_node() {
+                            environment.set_known_respond_to(
+                                format!("\u{1}local:{}", prism::constant_name(local.name())),
+                                method,
+                                true,
+                            );
+                        } else if let Some(instance_variable) =
+                            receiver.as_instance_variable_read_node()
+                        {
+                            environment.set_known_respond_to(
+                                format!(
+                                    "\u{1}ivar:{}",
+                                    prism::constant_name(instance_variable.name())
+                                ),
+                                method,
+                                true,
+                            );
+                        }
+                    }
+                    return;
+                }
                 if truthy && name == "==" && arguments.len() == 1 {
                     if let Some(arity_call) = receiver.as_call_node() {
                         if prism::constant_name(arity_call.name()) == "arity"

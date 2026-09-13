@@ -217,6 +217,33 @@ impl<'src> Analyzer<'src> {
         );
     }
 
+    pub(super) fn known_respond_to_guard(
+        &self,
+        receiver: Option<&Node<'_>>,
+        method: &str,
+        environment: &Environment,
+    ) -> bool {
+        let Some(receiver) = receiver else {
+            return false;
+        };
+        if let Some(local) = receiver.as_local_variable_read_node() {
+            return environment.known_respond_to(
+                &format!("\u{1}local:{}", prism::constant_name(local.name())),
+                method,
+            );
+        }
+        if let Some(instance_variable) = receiver.as_instance_variable_read_node() {
+            return environment.known_respond_to(
+                &format!(
+                    "\u{1}ivar:{}",
+                    prism::constant_name(instance_variable.name())
+                ),
+                method,
+            );
+        }
+        false
+    }
+
     pub(super) fn report_missing_method_component_if_needed_at(
         &mut self,
         site: SourceSite,

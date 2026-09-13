@@ -211,6 +211,22 @@ fn accepts_kernel_raise_cause_keyword() {
 }
 
 #[test]
+fn honors_respond_to_guards_in_legacy_and_cfg_flow() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/respond_to_guard.rb").expect("fixture exists");
+    let baseline = check(&source, CheckerConfig::default());
+    assert!(!baseline.has_errors(), "{:#?}", baseline.diagnostics);
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn checks_sorbet_sig_calls() {
     check_fixture("tests/fixtures/sorbet_sig.rb");
     let source = std::fs::read_to_string("tests/fixtures/sorbet_sig.rb").expect("fixture");
@@ -553,10 +569,7 @@ fn respects_respond_to_method_guards_in_owned_cfg() {
             ..CheckerConfig::default()
         },
     );
-    assert!(
-        baseline.has_errors(),
-        "expected legacy missing-method diagnostic"
-    );
+    assert!(!baseline.has_errors(), "{:#?}", baseline.diagnostics);
     assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
 }
 

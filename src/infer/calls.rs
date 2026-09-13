@@ -424,7 +424,8 @@ impl<'src> Analyzer<'src> {
             }
             let key = self.implicit_method_key(&name, environment);
             let receiver_type = environment.self_type.clone();
-            let method_resolved = self.resolve_method_key(&key).is_some();
+            let method_resolved = self.resolve_method_key(&key).is_some()
+                || self.known_respond_to_guard(receiver_node.as_ref(), &name, environment);
             let random_formatter_signature =
                 self.random_formatter_signature(None, &receiver_type, &name);
             let resolved_owner = self
@@ -849,7 +850,8 @@ impl<'src> Analyzer<'src> {
                 &name,
                 environment,
             ) {
-                let method_resolved = self.resolve_method_key(&key).is_some();
+                let method_resolved = self.resolve_method_key(&key).is_some()
+                    || self.known_respond_to_guard(receiver_node.as_ref(), &name, environment);
                 let resolved_owner = self
                     .resolve_method_key(&key)
                     .and_then(|resolved| resolved.owner);
