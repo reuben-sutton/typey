@@ -177,6 +177,19 @@ impl<'src> Analyzer<'src> {
         // body evaluation. This makes signatures owner-aware and prevents a
         // method called `remove` (or `initialize`) in one file from changing a
         // same-named method elsewhere in a workspace.
+        let source_definition_keys = self
+            .declarations
+            .definitions
+            .iter()
+            .filter(|(offset, _)| {
+                !self
+                    .rbi_ranges
+                    .iter()
+                    .chain(&self.builtin_rbi_ranges)
+                    .any(|(start, end)| **offset >= *start && **offset < *end)
+            })
+            .map(|(_, key)| key.clone())
+            .collect::<BTreeSet<_>>();
         let mut source_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut builtin_rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
@@ -262,7 +275,23 @@ impl<'src> Analyzer<'src> {
             };
             target.entry(key.clone()).or_default().extend(signatures);
         }
-        for (key, signatures) in source_signatures.into_iter().chain(rbi_signatures) {
+        let source_annotated_keys = source_signatures.keys().cloned().collect::<BTreeSet<_>>();
+        for (key, signatures) in source_signatures {
+            if let Some(state) = self.declarations.methods.get_mut(&key) {
+                if !state.explicit {
+                    *state = MethodState::explicit_overloads(&signatures);
+                }
+            }
+        }
+        for (key, signatures) in rbi_signatures {
+            // An external RBI describes the default implementation of a
+            // method. A source definition in this workspace may reopen the
+            // same class and replace that implementation (as Rails does for
+            // Date#to_time), so its inferred body must remain authoritative
+            // unless the source itself carries an explicit signature.
+            if source_definition_keys.contains(&key) && !source_annotated_keys.contains(&key) {
+                continue;
+            }
             if let Some(state) = self.declarations.methods.get_mut(&key) {
                 if !state.explicit {
                     *state = MethodState::explicit_overloads(&signatures);
@@ -270,6 +299,9 @@ impl<'src> Analyzer<'src> {
             }
         }
         for (key, signatures) in builtin_rbi_signatures {
+            if source_definition_keys.contains(&key) && !source_annotated_keys.contains(&key) {
+                continue;
+            }
             if let Some(state) = self.declarations.methods.get_mut(&key) {
                 if !state.explicit {
                     *state = MethodState::explicit_overloads(&signatures);

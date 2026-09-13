@@ -2,7 +2,7 @@ use super::{
     name_matches, optional_proc_type, proc_parts, Analyzer, CallArguments, MethodKey, SourceSite,
 };
 use crate::prism;
-use crate::signature::MethodSig;
+use crate::signature::{KeywordParam, MethodSig};
 use crate::types::Type;
 use ruby_prism::Node;
 use std::collections::BTreeSet;
@@ -33,6 +33,9 @@ impl<'src> Analyzer<'src> {
             } else {
                 state.overloads.clone()
             };
+            if let Some(signature) = self.builtin_time_call_signature(&key, &overloads, arguments) {
+                return Some(signature);
+            }
             return Some(
                 self.select_overload(&overloads, arguments, has_block)
                     .unwrap_or(fallback),
@@ -93,6 +96,58 @@ impl<'src> Analyzer<'src> {
             self.fixpoint.changed_methods.insert(key);
         }
         Some(signature)
+    }
+
+    fn builtin_time_call_signature(
+        &self,
+        key: &MethodKey,
+        overloads: &[MethodSig],
+        arguments: &CallArguments<'_>,
+    ) -> Option<MethodSig> {
+        if key.owner.as_deref() != Some("Time") || !key.singleton {
+            return None;
+        }
+
+        // Ruby also accepts the ten fields returned by Time#to_a for the
+        // class constructors. The vendored core RBI documents this form but
+        // only declares the shorter year/month/... shape.
+        if matches!(key.name.as_str(), "gm" | "local" | "mktime" | "utc")
+            && arguments.argument_types.len() == 10
+            && arguments.keyword_arguments.is_empty()
+        {
+            let mut signature = overloads.first()?.clone();
+            signature.params = vec![Type::Any; 10];
+            signature.required_params = 1;
+            signature.accepts_rest = false;
+            signature.rest_index = None;
+            signature.keywords.clear();
+            return Some(signature);
+        }
+
+        // Ruby 3's Time.at accepts an `in:` timezone keyword. The core RBI's
+        // positional overloads predate that keyword, so add it only for this
+        // concrete call shape while retaining the declared positional types.
+        if key.name == "at"
+            && arguments
+                .keyword_arguments
+                .iter()
+                .any(|argument| argument.name == "in")
+        {
+            let mut signature = overloads
+                .iter()
+                .max_by_key(|signature| signature.params.len())?
+                .clone();
+            signature.keywords.insert(
+                "in".to_owned(),
+                KeywordParam {
+                    type_: Type::Any,
+                    required: false,
+                },
+            );
+            return Some(signature);
+        }
+
+        None
     }
 
     fn select_overload(

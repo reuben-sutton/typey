@@ -89,6 +89,42 @@ fn resolves_constants_from_included_module_ancestors() {
 }
 
 #[test]
+fn source_overrides_builtin_rbi_method_contracts() {
+    let result = check_fixture("tests/fixtures/source_overrides_builtin_rbi.rb");
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `Time`")));
+}
+
+#[test]
+fn accepts_ruby_time_constructor_compatibility_forms() {
+    let source = std::fs::read_to_string("tests/fixtures/time_constructor_compatibility.rb")
+        .expect("fixture exists");
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "time_constructor_compatibility.rb",
+        source,
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic
+                    .diagnostic
+                    .message
+                    .contains("Revealed type: `Time`")
+            })
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn checks_sorbet_sig_calls() {
     check_fixture("tests/fixtures/sorbet_sig.rb");
     let source = std::fs::read_to_string("tests/fixtures/sorbet_sig.rb").expect("fixture");
