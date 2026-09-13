@@ -3461,6 +3461,26 @@ fn rejects_safe_navigation_on_definitely_non_nil_receivers() {
 }
 
 #[test]
+fn permits_safe_navigation_through_mutable_accessor_forwarders() {
+    let path = "tests/fixtures/mutable_accessor_forwarder.rb";
+    let result = check_fixture(path);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("Revealed type: `T.nilable(String)`")
+    }));
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, result.diagnostics);
+}
+
+#[test]
 fn preserves_safe_navigation_diagnostics_through_owned_cfg_transfer() {
     let path = "tests/fixtures/safe_navigation_non_nil.rb";
     let source = std::fs::read_to_string(path).expect("fixture source");

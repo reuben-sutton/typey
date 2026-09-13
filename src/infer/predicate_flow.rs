@@ -3,7 +3,7 @@ use super::{
     ivar_refinement_key, name_matches, AccessorKind, Analyzer, CallSite, Environment, Eval, Flow,
     FlowKind, MethodKey, PredicateAlias,
 };
-use crate::prism;
+use crate::{hir, prism};
 use crate::signature;
 use crate::types::Type;
 use ruby_prism::{CallNode, Node};
@@ -1128,13 +1128,130 @@ impl<'src> Analyzer<'src> {
         let Some(resolved) = self.resolve_method_key(&key) else {
             return false;
         };
-        if self.declarations.accessors.get(&resolved) != Some(&AccessorKind::Reader) {
+        if self.declarations.accessors.get(&resolved) == Some(&AccessorKind::Reader) {
+            let writer = MethodKey {
+                owner: resolved.owner.clone(),
+                name: format!("{name}="),
+                singleton: resolved.singleton,
+            };
+            if self.declarations.accessors.get(&writer) == Some(&AccessorKind::Writer) {
+                return true;
+            }
+        }
+        self.forwarded_method_has_mutable_accessor(&resolved)
+    }
+
+    /// HIR equivalent of [`Self::safe_navigation_receiver_is_mutable_accessor`]
+    /// for the CFG transfer path. The outer call is the safe-navigation send;
+    /// its receiver must be a bare forwarding call such as `error_reporter`.
+    pub(super) fn hir_safe_navigation_receiver_is_mutable_accessor(
+        &self,
+        expression: hir::ExprId,
+        environment: &Environment,
+    ) -> bool {
+        let Some(hir::Expr {
+            kind: hir::ExprKind::Call(outer),
+            ..
+        }) = self.program.hir_program.expression(expression)
+        else {
+            return false;
+        };
+        let hir::Receiver::Explicit(receiver) = outer.receiver else {
+            return false;
+        };
+        let Some(hir::Expr {
+            kind: hir::ExprKind::Call(inner),
+            ..
+        }) = self.program.hir_program.expression(receiver)
+        else {
+            return false;
+        };
+        if !matches!(inner.receiver, hir::Receiver::Implicit)
+            || !inner.arguments.is_empty()
+            || inner.block.is_some()
+        {
             return false;
         }
+        let key = self.implicit_method_key(inner.name.as_str(), environment);
+        let Some(resolved) = self.resolve_method_key(&key) else {
+            return false;
+        };
+        if self.declarations.accessors.get(&resolved) == Some(&AccessorKind::Reader) {
+            let writer = MethodKey {
+                owner: resolved.owner.clone(),
+                name: format!("{}=", inner.name.as_str()),
+                singleton: resolved.singleton,
+            };
+            if self.declarations.accessors.get(&writer) == Some(&AccessorKind::Writer) {
+                return true;
+            }
+        }
+        self.forwarded_method_has_mutable_accessor(&resolved)
+    }
+
+    /// A small forwarding method can expose a mutable accessor without being
+    /// generated itself, for example `def self.error_reporter;
+    /// ActiveSupport.error_reporter; end`. Follow only a direct, side-effect
+    /// free return expression so safe navigation remains conservative for
+    /// arbitrary inferred methods.
+    fn forwarded_method_has_mutable_accessor(&self, method: &MethodKey) -> bool {
+        let Some(body_id) = self.owned_method_bodies.get(method) else {
+            return false;
+        };
+        let Some(body) = self.program.hir_program.body(*body_id) else {
+            return false;
+        };
+        let root = match self.program.hir_program.expression(body.root) {
+            Some(hir::Expr {
+                kind: hir::ExprKind::Sequence(expressions),
+                ..
+            }) if expressions.len() == 1 => expressions[0],
+            Some(_) => body.root,
+            None => return false,
+        };
+        let Some(hir::Expr {
+            kind: hir::ExprKind::Call(call),
+            ..
+        }) = self.program.hir_program.expression(root)
+        else {
+            return false;
+        };
+        let (owner, singleton) = match call.receiver {
+            hir::Receiver::Implicit | hir::Receiver::Super | hir::Receiver::Yield => {
+                (method.owner.clone(), method.singleton)
+            }
+            hir::Receiver::Explicit(receiver) => {
+                let Some(hir::Expr {
+                    kind: hir::ExprKind::Read(hir::Read::Constant(path)),
+                    ..
+                }) = self.program.hir_program.expression(receiver)
+                else {
+                    return false;
+                };
+                (
+                    Some(path.as_str().trim_start_matches("::").to_owned()),
+                    true,
+                )
+            }
+        };
+        let Some(owner) = owner else {
+            return false;
+        };
+        let target = MethodKey {
+            owner: Some(owner),
+            name: call.name.as_str().to_owned(),
+            singleton,
+        };
+        let Some(target) = self.resolve_method_key(&target) else {
+            return false;
+        };
+        let Some(AccessorKind::Reader) = self.declarations.accessors.get(&target) else {
+            return false;
+        };
         let writer = MethodKey {
-            owner: resolved.owner,
-            name: format!("{name}="),
-            singleton: resolved.singleton,
+            owner: target.owner,
+            name: format!("{}=", call.name.as_str()),
+            singleton: target.singleton,
         };
         self.declarations.accessors.get(&writer) == Some(&AccessorKind::Writer)
     }

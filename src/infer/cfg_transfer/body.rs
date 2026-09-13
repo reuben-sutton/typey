@@ -1428,6 +1428,13 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             && !source.is_never()
                             && !matches!(&source, Type::Anything)
                             && source.without(&Type::Nil) == source
+                            && !operation.expression.is_some_and(|expression| {
+                                self.analyzer
+                                    .hir_safe_navigation_receiver_is_mutable_accessor(
+                                        expression,
+                                        &next.environment,
+                                    )
+                            })
                         {
                             self.analyzer.error_at(
                                 site,
