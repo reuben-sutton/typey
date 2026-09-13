@@ -218,7 +218,7 @@ impl<'src> Analyzer<'src> {
                         included == owner || self.nominal_names_match(included, owner)
                     });
                     (included || prepended || extended).then(|| {
-                        if extended || info.extend_self {
+                        if extended || (info.is_module && info.extend_self) {
                             Self::class_object_type(candidate)
                         } else {
                             Type::named(candidate.clone())
@@ -227,7 +227,16 @@ impl<'src> Analyzer<'src> {
                 })
                 .collect::<Vec<_>>();
             if hosts.is_empty() {
-                Type::named(owner)
+                if self
+                    .declarations
+                    .classes
+                    .get(owner)
+                    .is_some_and(|info| info.extend_self)
+                {
+                    Self::class_object_type(owner)
+                } else {
+                    Type::named(owner)
+                }
             } else {
                 Type::union(hosts)
             }
@@ -773,15 +782,18 @@ impl<'src> Analyzer<'src> {
                 }
                 Type::Tuple(elements) => return Some(Type::union(elements.iter().cloned())),
                 Type::Named(owner, arguments) if name_matches(owner, "Enumerable") => {
-                    return arguments.first().cloned();
+                    return Some(arguments.first().cloned().unwrap_or(Type::Any));
                 }
                 Type::Named(owner, arguments) if name_matches(owner, "Array") => {
-                    return arguments.first().cloned();
+                    return Some(arguments.first().cloned().unwrap_or(Type::Any));
                 }
                 Type::Named(owner, arguments)
                     if name_matches(owner, "Hash") && arguments.len() == 2 =>
                 {
                     return Some(Type::Tuple(arguments.clone()));
+                }
+                Type::Named(owner, _) if name_matches(owner, "Hash") => {
+                    return Some(Type::Tuple(vec![Type::Any, Type::Any]));
                 }
                 _ => {}
             }
