@@ -9996,6 +9996,21 @@ fn narrows_class_hierarchies_using_symbol_discriminators() {
 }
 
 #[test]
+fn preserves_symbol_discriminator_narrowing_through_owned_cfg() {
+    let path = "tests/fixtures/discriminated_node_case.rb";
+    let source = std::fs::read_to_string(path).expect("fixture source");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+}
+
+#[test]
 fn records_all_modules_in_multi_argument_mixins() {
     let result = check_fixture("tests/fixtures/multiple_mixins.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| diagnostic

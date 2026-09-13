@@ -1627,6 +1627,7 @@ impl<'program> Builder<'program> {
                             condition: condition_value,
                             expression: condition,
                             source_place: scrutinee_place.clone(),
+                            discriminator: case.scrutinee,
                         },
                         None => Pattern::Truthy,
                     };
@@ -1729,6 +1730,10 @@ impl<'program> Builder<'program> {
                 hir::AssignTarget::Constant(_)
                 | hir::AssignTarget::Attribute { .. }
                 | hir::AssignTarget::Index { .. } => None,
+            },
+            hir::ExprKind::Call(call) => match call.receiver {
+                hir::Receiver::Explicit(receiver) => self.source_place(receiver),
+                _ => None,
             },
             _ => None,
         }
@@ -2281,6 +2286,7 @@ impl<'program> Builder<'program> {
                             condition: condition_value,
                             expression: condition,
                             source_place: None,
+                            discriminator: None,
                         };
                         let matched = self.emit(
                             condition_flow.block,

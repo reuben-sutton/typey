@@ -370,6 +370,11 @@ pub enum Pattern {
         condition: ValueId,
         expression: ExprId,
         source_place: Option<Place>,
+        /// The case predicate, when the pattern came from a value-producing
+        /// `case` expression. Keeping it lets transfer distinguish ordinary
+        /// `when :symbol` matching from a symbol-valued discriminator such as
+        /// `case node.type`.
+        discriminator: Option<ExprId>,
     },
 }
 

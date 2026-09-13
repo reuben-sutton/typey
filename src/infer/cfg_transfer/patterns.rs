@@ -76,20 +76,37 @@ pub(super) fn narrow_pattern_value(
             }
         }
     };
+    let discriminated = truthy.then(|| discriminated_case_type(analyzer, state, pattern));
+    let narrowed = discriminated
+        .as_ref()
+        .and_then(Option::as_ref)
+        .cloned()
+        .unwrap_or(narrowed);
     state.set_value(value, narrowed.clone());
     if let Some(source_place) = pattern_source_place {
-        match source_place {
-            cfg::Place::Local(local) => {
-                if let Some(name) = analyzer.program.hir_program.local_name(*local) {
-                    state.environment.bind(name.as_str().to_owned(), narrowed);
+        let is_discriminator = matches!(
+            pattern,
+            cfg::Pattern::Case {
+                discriminator: Some(_),
+                ..
+            }
+        );
+        if !is_discriminator || discriminated.as_ref().is_some_and(Option::is_some) {
+            match source_place {
+                cfg::Place::Local(local) => {
+                    if let Some(name) = analyzer.program.hir_program.local_name(*local) {
+                        state
+                            .environment
+                            .bind(name.as_str().to_owned(), narrowed.clone());
+                    }
                 }
+                cfg::Place::InstanceVariable(name) => {
+                    state
+                        .environment
+                        .bind(ivar_refinement_key(name.as_str()), narrowed.clone());
+                }
+                _ => {}
             }
-            cfg::Place::InstanceVariable(name) => {
-                state
-                    .environment
-                    .bind(ivar_refinement_key(name.as_str()), narrowed);
-            }
-            _ => {}
         }
     }
     if matches!(
@@ -105,6 +122,74 @@ pub(super) fn narrow_pattern_value(
             truthy == source.truthy,
         );
     }
+}
+
+fn discriminated_case_type(
+    analyzer: &Analyzer<'_>,
+    state: &BlockState,
+    pattern: &cfg::Pattern,
+) -> Option<Type> {
+    let cfg::Pattern::Case {
+        expression,
+        discriminator: Some(discriminator),
+        ..
+    } = pattern
+    else {
+        return None;
+    };
+    let Some(hir::ExprKind::Call(call)) = analyzer
+        .program
+        .hir_program
+        .expression(*discriminator)
+        .map(|expression| &expression.kind)
+    else {
+        return None;
+    };
+    if call.name.as_str() != "type" {
+        return None;
+    }
+    let hir::Receiver::Explicit(receiver) = &call.receiver else {
+        return None;
+    };
+    let Some(hir::ExprKind::Read(Read::Local(local))) = analyzer
+        .program
+        .hir_program
+        .expression(*receiver)
+        .map(|expression| &expression.kind)
+    else {
+        return None;
+    };
+    let local_name = analyzer
+        .program
+        .hir_program
+        .local_name(*local)
+        .map(|name| name.as_str().to_owned())?;
+    let current = state.environment.get(&local_name);
+    let current_name = Analyzer::named_type_name(&current)?;
+    let Some(hir::ExprKind::Literal(Literal::Symbol(symbol))) = analyzer
+        .program
+        .hir_program
+        .expression(*expression)
+        .map(|expression| &expression.kind)
+    else {
+        return None;
+    };
+    let narrowed = analyzer
+        .fixpoint
+        .symbol_method_returns
+        .iter()
+        .filter_map(|(key, method_symbol)| {
+            (key.name == "type"
+                && !key.singleton
+                && method_symbol == symbol
+                && key
+                    .owner
+                    .as_deref()
+                    .is_some_and(|owner| analyzer.nominal_subtype(owner, &current_name)))
+            .then(|| Type::named(key.owner.as_ref().expect("owner checked").clone()))
+        })
+        .collect::<Vec<_>>();
+    (!narrowed.is_empty()).then(|| Type::union(narrowed))
 }
 
 pub(super) fn pattern_source_place(graph: &cfg::Cfg, value: cfg::ValueId) -> Option<cfg::Place> {

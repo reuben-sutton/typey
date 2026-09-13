@@ -104,6 +104,11 @@ impl<'src> Analyzer<'src> {
         } else {
             registered_key.clone()
         };
+        if let Some(symbol) = self.trailing_symbol_literal_hir(body) {
+            self.fixpoint
+                .symbol_method_returns
+                .insert(key.clone(), symbol);
+        }
         if key != registered_key {
             let state = self
                 .declarations
@@ -298,6 +303,22 @@ impl<'src> Analyzer<'src> {
         }
         self.substitution_context = previous_substitution_context;
         Ok(())
+    }
+
+    fn trailing_symbol_literal_hir(&self, body: hir::BodyId) -> Option<String> {
+        fn trailing_expression(program: &hir::Program, expression: hir::ExprId) -> Option<String> {
+            let expression = program.expression(expression)?;
+            match &expression.kind {
+                hir::ExprKind::Literal(hir::Literal::Symbol(symbol)) => Some(symbol.clone()),
+                hir::ExprKind::Sequence(expressions) => expressions
+                    .last()
+                    .and_then(|expression| trailing_expression(program, *expression)),
+                _ => None,
+            }
+        }
+
+        let body = self.program.hir_program.body(body)?;
+        trailing_expression(&self.program.hir_program, body.root)
     }
 
     fn observe_owned_default_parameter(
