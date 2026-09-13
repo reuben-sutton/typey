@@ -71,6 +71,22 @@ pub(super) fn conditional_reachability(
         .and_then(|condition| analyzer.program.hir_program.expression(condition))
         .map(|expression| &expression.kind)
     {
+        if call.name.as_str() == "acts_like?"
+            && matches!(call.receiver, hir::Receiver::Implicit)
+            && call.arguments.len() == 1
+        {
+            if let Some(hir::Argument::Positional(argument)) = call.arguments.first() {
+                if let Some(expected) =
+                    analyzer.cfg_self_acts_like_type(*argument, &state.environment)
+                {
+                    let current = &state.environment.self_type;
+                    return (
+                        !current.meet(&expected).is_never(),
+                        !current.without(&expected).is_never(),
+                    );
+                }
+            }
+        }
         if call.name.as_str() == "!" {
             if let hir::Receiver::Explicit(receiver) = call.receiver {
                 if let Some(hir::ExprKind::Read(Read::Local(local))) = analyzer

@@ -29,7 +29,11 @@ impl<'src> Analyzer<'src> {
                 return (truthy, !truthy);
             }
             if let Some(alias) = environment.predicate_alias(&name) {
-                let source_type = environment.get(&alias.source);
+                let source_type = if alias.source == "<self>" {
+                    environment.self_type.clone()
+                } else {
+                    environment.get(&alias.source)
+                };
                 let (then_reachable, else_reachable) = if let Some(expected) = &alias.expected {
                     (
                         !source_type.meet(expected).is_never(),
@@ -126,6 +130,14 @@ impl<'src> Analyzer<'src> {
                     .is_some_and(|state| state.explicit && state.block.is_some());
                 if required {
                     return (true, false);
+                }
+            } else if name == "acts_like?" && call.receiver().is_none() {
+                if let Some(expected) = self.self_predicate_expected_type(&call, environment) {
+                    let current = &environment.self_type;
+                    return (
+                        !current.meet(&expected).is_never(),
+                        !current.without(&expected).is_never(),
+                    );
                 }
             } else if name == "nil?" {
                 if let Some(receiver) = call.receiver() {
@@ -246,6 +258,11 @@ impl<'src> Analyzer<'src> {
             // signature to typecheck the false arm as unreachable, but does
             // not emit an unreachable-code diagnostic for this Ruby idiom.
             return false;
+        }
+        if name == "acts_like?" && call.receiver().is_none() {
+            return self
+                .self_predicate_expected_type(&call, environment)
+                .is_some();
         }
         if matches!(name.as_str(), "is_a?" | "kind_of?" | "instance_of?")
             && call.receiver().is_some()
@@ -406,7 +423,11 @@ impl<'src> Analyzer<'src> {
                 return;
             }
             if let Some(alias) = environment.predicate_alias(&name).cloned() {
-                let source_current = environment.get(&alias.source);
+                let source_current = if alias.source == "<self>" {
+                    environment.self_type.clone()
+                } else {
+                    environment.get(&alias.source)
+                };
                 let source_truthy = if alias.negated { !truthy } else { truthy };
                 let source_narrowed = if let Some(expected) = alias.expected.as_ref() {
                     if source_truthy {
@@ -419,9 +440,16 @@ impl<'src> Analyzer<'src> {
                 } else {
                     source_current.falsy_part()
                 };
-                environment.bind(alias.source.clone(), source_current.meet(&source_narrowed));
+                let source_narrowed = source_current.meet(&source_narrowed);
+                if alias.source == "<self>" {
+                    environment.self_type = source_narrowed;
+                } else {
+                    environment.bind(alias.source.clone(), source_narrowed);
+                }
                 if alias.expected.is_none() {
-                    environment.set_known_truthiness(alias.source, source_truthy);
+                    if alias.source != "<self>" {
+                        environment.set_known_truthiness(alias.source, source_truthy);
+                    }
                 }
             }
             let current = environment.get(&name);
@@ -720,6 +748,15 @@ impl<'src> Analyzer<'src> {
                 } else {
                     current.without(&expected)
                 };
+            } else if name == "acts_like?" && receiver.is_none() && arguments.len() == 1 {
+                if let Some(expected) = self.self_predicate_expected_type(&call, environment) {
+                    let current = environment.self_type.clone();
+                    environment.self_type = if truthy {
+                        self.meet_predicate_type(&current, &expected)
+                    } else {
+                        current.without(&expected)
+                    };
+                }
             }
         }
     }
@@ -982,6 +1019,38 @@ impl<'src> Analyzer<'src> {
                     expected: None,
                 }));
         }
+        if let Some(if_node) = node.as_if_node() {
+            let then_value = if_node
+                .statements()
+                .and_then(|statements| statements.body().into_iter().last());
+            let else_value = if_node.subsequent().and_then(|subsequent| {
+                subsequent
+                    .as_else_node()
+                    .and_then(|else_node| else_node.statements())
+                    .and_then(|statements| statements.body().into_iter().last())
+            });
+            let mut alias = self.self_predicate_alias(&if_node.predicate(), environment)?;
+            if then_value
+                .as_ref()
+                .is_some_and(|value| value.as_self_node().is_some())
+                && else_value
+                    .as_ref()
+                    .is_some_and(|value| value.as_nil_node().is_some())
+            {
+                return Some(alias);
+            }
+            if then_value
+                .as_ref()
+                .is_some_and(|value| value.as_nil_node().is_some())
+                && else_value
+                    .as_ref()
+                    .is_some_and(|value| value.as_self_node().is_some())
+            {
+                alias.negated = !alias.negated;
+                return Some(alias);
+            }
+            return None;
+        }
         let call = node.as_call_node()?;
         let name = prism::constant_name(call.name());
         if name == "!" {
@@ -1043,6 +1112,143 @@ impl<'src> Analyzer<'src> {
             negated: false,
             expected: Some(expected),
         })
+    }
+
+    fn self_predicate_alias<'node>(
+        &self,
+        node: &Node<'node>,
+        environment: &Environment,
+    ) -> Option<PredicateAlias> {
+        let call = node.as_call_node()?;
+        let expected = self.self_predicate_expected_type(&call, environment)?;
+        Some(PredicateAlias {
+            source: "<self>".to_owned(),
+            negated: false,
+            expected: Some(expected),
+        })
+    }
+
+    fn self_predicate_expected_type<'node>(
+        &self,
+        call: &CallNode<'node>,
+        environment: &Environment,
+    ) -> Option<Type> {
+        if call.receiver().is_some() {
+            return None;
+        }
+        let argument = call
+            .arguments()
+            .and_then(|arguments| arguments.arguments().into_iter().next())?;
+        match prism::constant_name(call.name()).as_str() {
+            "is_a?" | "kind_of?" | "instance_of?" => {
+                Some(self.predicate_expected_type(&argument, environment))
+            }
+            "acts_like?" => {
+                let duck = argument
+                    .as_symbol_node()
+                    .map(|symbol| String::from_utf8_lossy(symbol.unescaped()).into_owned())
+                    .or_else(|| {
+                        argument
+                            .as_string_node()
+                            .map(|string| String::from_utf8_lossy(string.unescaped()).into_owned())
+                    })?;
+                self.self_acts_like_type(environment, &duck)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn cfg_self_acts_like_type(
+        &self,
+        argument: hir::ExprId,
+        environment: &Environment,
+    ) -> Option<Type> {
+        let expression = self.program.hir_program.expression(argument)?;
+        let duck = match &expression.kind {
+            hir::ExprKind::Literal(hir::Literal::Symbol(value))
+            | hir::ExprKind::Literal(hir::Literal::String(value)) => value,
+            _ => return None,
+        };
+        self.self_acts_like_type(environment, duck)
+    }
+
+    pub(super) fn cfg_self_predicate_alias(
+        &self,
+        expression: hir::ExprId,
+        environment: &Environment,
+    ) -> Option<PredicateAlias> {
+        let expression = self.program.hir_program.expression(expression)?;
+        let hir::ExprKind::Call(call) = &expression.kind else {
+            return None;
+        };
+        if !matches!(call.receiver, hir::Receiver::Implicit)
+            || call.arguments.len() != 1
+            || call.name.as_str() != "acts_like?"
+        {
+            return None;
+        }
+        let expected = self.cfg_self_acts_like_type(
+            match call.arguments.first()? {
+                hir::Argument::Positional(argument) => *argument,
+                _ => return None,
+            },
+            environment,
+        )?;
+        Some(PredicateAlias {
+            source: "<self>".to_owned(),
+            negated: false,
+            expected: Some(expected),
+        })
+    }
+
+    pub(super) fn self_acts_like_type(
+        &self,
+        environment: &Environment,
+        duck: &str,
+    ) -> Option<Type> {
+        if duck.is_empty()
+            || !duck
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return None;
+        }
+        let method = format!("acts_like_{duck}?");
+        let mut possible = Vec::new();
+        if !self.collect_acts_like_types(
+            &environment.self_type,
+            &method,
+            environment,
+            &mut possible,
+        ) {
+            return None;
+        }
+        Some(Type::union(possible))
+    }
+
+    fn collect_acts_like_types(
+        &self,
+        type_: &Type,
+        method: &str,
+        environment: &Environment,
+        possible: &mut Vec<Type>,
+    ) -> bool {
+        match type_ {
+            Type::Union(members) => members
+                .iter()
+                .all(|member| self.collect_acts_like_types(member, method, environment, possible)),
+            Type::Never => true,
+            Type::Any | Type::Anything | Type::TypeVar(_) | Type::Intersection(_) => false,
+            member => {
+                let Some(key) = self.receiver_method_key(None, member, method, environment) else {
+                    return false;
+                };
+                if self.resolve_method_key(&key).is_some() {
+                    possible.push(member.clone());
+                }
+                true
+            }
+        }
     }
 
     pub(super) fn equality_predicate_narrowing<'node>(

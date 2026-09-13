@@ -114,6 +114,26 @@ fn dispatches_object_methods_on_open_generic_values() {
 }
 
 #[test]
+fn correlates_acts_like_self_aliases_across_legacy_and_cfg_flow() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/acts_like_self_flow.rb").expect("fixture exists");
+    let baseline = check(&source, CheckerConfig::default());
+    assert!(!baseline.has_errors(), "{:#?}", baseline.diagnostics);
+    assert!(baseline
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn accepts_ruby_time_constructor_compatibility_forms() {
     let source = std::fs::read_to_string("tests/fixtures/time_constructor_compatibility.rb")
         .expect("fixture exists");

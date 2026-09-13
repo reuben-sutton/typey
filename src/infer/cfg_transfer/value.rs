@@ -503,17 +503,25 @@ impl<'src> Analyzer<'src> {
                         }
                     }
                     hir::Receiver::Implicit
-                        if matches!(call.name.as_str(), "is_a?" | "kind_of?" | "instance_of?") =>
+                        if matches!(
+                            call.name.as_str(),
+                            "is_a?" | "kind_of?" | "instance_of?" | "acts_like?"
+                        ) =>
                     {
                         if let Some(argument_id) = argument_id {
                             let current = environment.self_type.clone();
-                            let expected =
-                                self.cfg_predicate_expected_type(argument_id, environment);
-                            environment.self_type = if truthy {
-                                self.meet_predicate_type(&current, &expected)
+                            let expected = if call.name.as_str() == "acts_like?" {
+                                self.cfg_self_acts_like_type(argument_id, environment)
                             } else {
-                                current.without(&expected)
+                                Some(self.cfg_predicate_expected_type(argument_id, environment))
                             };
+                            if let Some(expected) = expected {
+                                environment.self_type = if truthy {
+                                    self.meet_predicate_type(&current, &expected)
+                                } else {
+                                    current.without(&expected)
+                                };
+                            }
                         }
                     }
                     _ => {}
@@ -533,7 +541,11 @@ impl<'src> Analyzer<'src> {
             return;
         };
         if let Some(alias) = environment.predicate_alias(name).cloned() {
-            let source_current = environment.get(&alias.source);
+            let source_current = if alias.source == "<self>" {
+                environment.self_type.clone()
+            } else {
+                environment.get(&alias.source)
+            };
             let source_truthy = if alias.negated { !truthy } else { truthy };
             let narrowed = if let Some(expected) = alias.expected.as_ref() {
                 if source_truthy {
@@ -546,9 +558,16 @@ impl<'src> Analyzer<'src> {
             } else {
                 source_current.falsy_part()
             };
-            environment.bind(alias.source.clone(), source_current.meet(&narrowed));
+            let narrowed = source_current.meet(&narrowed);
+            if alias.source == "<self>" {
+                environment.self_type = narrowed;
+            } else {
+                environment.bind(alias.source.clone(), narrowed);
+            }
             if alias.expected.is_none() {
-                environment.set_known_truthiness(alias.source, source_truthy);
+                if alias.source != "<self>" {
+                    environment.set_known_truthiness(alias.source, source_truthy);
+                }
             }
             return;
         }

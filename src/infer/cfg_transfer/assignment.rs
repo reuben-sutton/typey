@@ -221,6 +221,25 @@ fn owned_predicate_alias(
 ) -> Option<PredicateAlias> {
     let expression = analyzer.program.hir_program.expression(expression)?;
     match &expression.kind {
+        hir::ExprKind::If {
+            condition,
+            then_body,
+            else_body: Some(else_body),
+        } => {
+            let mut alias = analyzer.cfg_self_predicate_alias(*condition, environment)?;
+            let then_is_self = hir_conditional_value_is_self(analyzer, *then_body);
+            let then_is_nil = hir_conditional_value_is_nil(analyzer, *then_body);
+            let else_is_self = hir_conditional_value_is_self(analyzer, *else_body);
+            let else_is_nil = hir_conditional_value_is_nil(analyzer, *else_body);
+            if then_is_nil && else_is_self || then_is_self && else_is_nil {
+                if then_is_nil {
+                    alias.negated = !alias.negated;
+                }
+                Some(alias)
+            } else {
+                None
+            }
+        }
         hir::ExprKind::Read(hir::Read::Local(local)) => {
             let name = analyzer.program.hir_program.local_name(*local)?.as_str();
             environment.predicate_alias(name).cloned().or_else(|| {
@@ -277,6 +296,32 @@ fn owned_predicate_alias(
             })
         }
         _ => None,
+    }
+}
+
+fn hir_conditional_value_is_self(analyzer: &Analyzer<'_>, expression: hir::ExprId) -> bool {
+    let Some(expression) = analyzer.program.hir_program.expression(expression) else {
+        return false;
+    };
+    match &expression.kind {
+        hir::ExprKind::Read(hir::Read::SelfValue) => true,
+        hir::ExprKind::Sequence(expressions) => expressions
+            .last()
+            .is_some_and(|expression| hir_conditional_value_is_self(analyzer, *expression)),
+        _ => false,
+    }
+}
+
+fn hir_conditional_value_is_nil(analyzer: &Analyzer<'_>, expression: hir::ExprId) -> bool {
+    let Some(expression) = analyzer.program.hir_program.expression(expression) else {
+        return false;
+    };
+    match &expression.kind {
+        hir::ExprKind::Nil => true,
+        hir::ExprKind::Sequence(expressions) => expressions
+            .last()
+            .is_some_and(|expression| hir_conditional_value_is_nil(analyzer, *expression)),
+        _ => false,
     }
 }
 
