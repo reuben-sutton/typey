@@ -391,7 +391,20 @@ impl<'src> Analyzer<'src> {
                     untyped_origin = Some(fallback_origin);
                 }
                 if type_.is_any() {
-                    self.report_missing_method_if_needed(node, &receiver_type, &name, false);
+                    let resolved_on_all_members = match &receiver_type {
+                        Type::Union(members) => members.iter().all(|member| {
+                            self.receiver_method_key(None, member, &name, environment)
+                                .and_then(|key| self.resolve_method_key(&key))
+                                .is_some()
+                        }),
+                        _ => false,
+                    };
+                    self.report_missing_method_if_needed(
+                        node,
+                        &receiver_type,
+                        &name,
+                        resolved_on_all_members,
+                    );
                 }
                 type_
             }

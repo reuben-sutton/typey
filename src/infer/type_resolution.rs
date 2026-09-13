@@ -208,12 +208,22 @@ impl<'src> Analyzer<'src> {
                 .classes
                 .iter()
                 .filter_map(|(candidate, info)| {
-                    info.includes
-                        .iter()
-                        .any(|included| {
-                            included == owner || self.nominal_names_match(included, owner)
-                        })
-                        .then(|| Type::named(candidate.clone()))
+                    let included = info.includes.iter().any(|included| {
+                        included == owner || self.nominal_names_match(included, owner)
+                    });
+                    let prepended = info.prepends.iter().any(|included| {
+                        included == owner || self.nominal_names_match(included, owner)
+                    });
+                    let extended = info.extends.iter().any(|included| {
+                        included == owner || self.nominal_names_match(included, owner)
+                    });
+                    (included || prepended || extended).then(|| {
+                        if extended || info.extend_self {
+                            Self::class_object_type(candidate)
+                        } else {
+                            Type::named(candidate.clone())
+                        }
+                    })
                 })
                 .collect::<Vec<_>>();
             if hosts.is_empty() {

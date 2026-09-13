@@ -144,7 +144,7 @@ impl<'src> Analyzer<'src> {
                 else {
                     continue;
                 };
-                if let Some((type_, declared)) = self.eval_resolved_receiver_call(
+                let member_result = self.eval_resolved_receiver_call(
                     node,
                     name,
                     receiver_node,
@@ -153,7 +153,11 @@ impl<'src> Analyzer<'src> {
                     arguments,
                     block,
                     environment,
-                ) {
+                );
+                if name == "catch" {
+                    eprintln!("DEBUG catch member={member:?} result={member_result:?}");
+                }
+                if let Some((type_, declared)) = member_result {
                     let origin = if declared {
                         UntypedOrigin::DeclaredSignature
                     } else {
