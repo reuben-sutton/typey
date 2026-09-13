@@ -656,17 +656,14 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             let singleton = self.singleton_stack.last().is_some();
             let old_name = self.method_name(&node.old_name());
             let new_name = self.method_name(&node.new_name());
+            let target = self.alias_target(owner.as_deref(), &old_name, singleton);
             self.declarations.aliases.insert(
                 MethodKey {
                     owner: owner.clone(),
                     name: new_name,
                     singleton,
                 },
-                MethodKey {
-                    owner,
-                    name: old_name,
-                    singleton,
-                },
+                target,
             );
         }
         ruby_prism::visit_alias_method_node(self, node);
@@ -905,17 +902,14 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                         .cloned()
                         .or_else(|| self.class_stack.last().cloned());
                     let singleton = self.singleton_stack.last().is_some();
+                    let target = self.alias_target(owner.as_deref(), &arguments[1], singleton);
                     self.declarations.aliases.insert(
                         MethodKey {
                             owner: owner.clone(),
                             name: arguments[0].clone(),
                             singleton,
                         },
-                        MethodKey {
-                            owner,
-                            name: arguments[1].clone(),
-                            singleton,
-                        },
+                        target,
                     );
                 }
                 if name == "module_function" {
@@ -998,6 +992,40 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
 }
 
 impl MethodRegistrar<'_> {
+    fn alias_target(&self, owner: Option<&str>, old_name: &str, singleton: bool) -> MethodKey {
+        let target = MethodKey {
+            owner: owner.map(str::to_owned),
+            name: old_name.to_owned(),
+            singleton,
+        };
+        if self.declarations.methods.contains_key(&target)
+            || self.declarations.aliases.contains_key(&target)
+        {
+            return target;
+        }
+
+        // An alias captures the method that is visible at the alias statement,
+        // not a later definition with the same name. Class objects inherit
+        // `new` (and other class-object methods) from Class, so an alias that
+        // appears before a local singleton override must retain that inherited
+        // target. This is observable in ActiveSupport::TimeZone, where
+        // `create` aliases Class#new before defining the one-argument `new`.
+        if singleton {
+            let inherited = MethodKey {
+                owner: Some("Class".to_owned()),
+                name: old_name.to_owned(),
+                singleton: false,
+            };
+            if self.declarations.methods.contains_key(&inherited)
+                || self.declarations.aliases.contains_key(&inherited)
+            {
+                return inherited;
+            }
+        }
+
+        target
+    }
+
     fn definition_key<'node>(&self, node: &DefNode<'node>) -> MethodKey {
         let name = prism::constant_name(node.name());
         if let Some((owner, singleton)) = self.dynamic_definition_stack.last() {

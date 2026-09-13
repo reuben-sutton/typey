@@ -147,6 +147,24 @@ fn accepts_block_only_dynamic_eval_on_module_receivers() {
 }
 
 #[test]
+fn binds_aliases_to_the_method_visible_at_the_alias_statement() {
+    let source = std::fs::read_to_string("tests/fixtures/alias_before_singleton_override.rb")
+        .expect("fixture exists");
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "alias_before_singleton_override.rb",
+        source,
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .diagnostic
+        .message
+        .contains("Revealed type: `AliasBeforeSingletonOverride`")));
+}
+
+#[test]
 fn checks_sorbet_sig_calls() {
     check_fixture("tests/fixtures/sorbet_sig.rb");
     let source = std::fs::read_to_string("tests/fixtures/sorbet_sig.rb").expect("fixture");
