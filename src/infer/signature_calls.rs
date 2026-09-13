@@ -36,6 +36,10 @@ impl<'src> Analyzer<'src> {
             if let Some(signature) = self.builtin_time_call_signature(&key, &overloads, arguments) {
                 return Some(signature);
             }
+            if let Some(signature) = self.builtin_raise_call_signature(&key, &overloads, arguments)
+            {
+                return Some(signature);
+            }
             return Some(
                 self.select_overload(&overloads, arguments, has_block)
                     .unwrap_or(fallback),
@@ -148,6 +152,44 @@ impl<'src> Analyzer<'src> {
         }
 
         None
+    }
+
+    fn builtin_raise_call_signature(
+        &self,
+        key: &MethodKey,
+        overloads: &[MethodSig],
+        arguments: &CallArguments<'_>,
+    ) -> Option<MethodSig> {
+        if key.name != "raise"
+            || !key
+                .owner
+                .as_deref()
+                .is_some_and(|owner| name_matches(owner, "Kernel"))
+            || !arguments
+                .keyword_arguments
+                .iter()
+                .any(|argument| argument.name == "cause")
+        {
+            return None;
+        }
+
+        // Ruby's Kernel#raise accepts an optional `cause:` keyword in addition
+        // to its three positional forms. The core RBI predates that keyword;
+        // retain its positional contract and add the runtime-compatible
+        // optional parameter rather than counting the keyword hash as a
+        // fourth positional argument.
+        let mut signature = overloads
+            .iter()
+            .max_by_key(|signature| signature.params.len())?
+            .clone();
+        signature.keywords.insert(
+            "cause".to_owned(),
+            KeywordParam {
+                type_: Type::Any,
+                required: false,
+            },
+        );
+        Some(signature)
     }
 
     fn select_overload(

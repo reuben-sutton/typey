@@ -197,6 +197,20 @@ fn models_the_environment_hash_contract() {
 }
 
 #[test]
+fn accepts_kernel_raise_cause_keyword() {
+    let source = std::fs::read_to_string("tests/fixtures/raise_cause.rb").expect("fixture exists");
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new("raise_cause.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .diagnostic
+        .message
+        .contains("Revealed type: `T.noreturn`")));
+}
+
+#[test]
 fn checks_sorbet_sig_calls() {
     check_fixture("tests/fixtures/sorbet_sig.rb");
     let source = std::fs::read_to_string("tests/fixtures/sorbet_sig.rb").expect("fixture");
