@@ -317,6 +317,7 @@ impl<'src> Analyzer<'src> {
                 name: "extended".to_owned(),
                 singleton: true,
             };
+            self.fixpoint.known_module_hooks.insert(hook.clone());
             let mut hook_arguments = CallArguments::default();
             hook_arguments
                 .argument_types
@@ -392,6 +393,7 @@ impl<'src> Analyzer<'src> {
                 name: "included".to_owned(),
                 singleton: true,
             };
+            self.fixpoint.known_module_hooks.insert(hook.clone());
             let mut hook_arguments = CallArguments::default();
             hook_arguments
                 .argument_types

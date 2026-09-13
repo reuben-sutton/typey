@@ -18,6 +18,11 @@ pub(super) struct FixpointState {
     pub(super) method_callers: BTreeMap<MethodKey, BTreeSet<MethodKey>>,
     pub(super) method_shared_reads: BTreeMap<MethodKey, BTreeSet<SharedKey>>,
     pub(super) shared_readers: BTreeMap<SharedKey, BTreeSet<MethodKey>>,
+    /// Module lifecycle callbacks that are known to have been invoked by an
+    /// `include`/`extend` operation. Dynamic instance-variable writes made to
+    /// the callback's receiver are therefore initialization writes, rather
+    /// than merely possible writes from an arbitrary method call.
+    pub(super) known_module_hooks: BTreeSet<MethodKey>,
     pub(super) symbol_method_returns: BTreeMap<MethodKey, String>,
     pub(super) changed_shared: BTreeSet<SharedKey>,
     pub(super) debug_phase: &'static str,
@@ -36,6 +41,7 @@ impl Default for FixpointState {
             method_callers: BTreeMap::new(),
             method_shared_reads: BTreeMap::new(),
             shared_readers: BTreeMap::new(),
+            known_module_hooks: BTreeSet::new(),
             symbol_method_returns: BTreeMap::new(),
             changed_shared: BTreeSet::new(),
             debug_phase: "idle",

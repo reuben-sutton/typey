@@ -217,7 +217,13 @@ impl<'src> Analyzer<'src> {
                 )
             })
             .unwrap_or_default();
-        self.eval_dynamic_instance_variable_call_for_keys(name, keys, argument_types)
+        self.eval_dynamic_instance_variable_call_for_keys(
+            name,
+            keys,
+            argument_types,
+            receiver_is_self && self.dynamic_ivar_write_initializes_self(environment),
+            environment,
+        )
     }
 
     pub(super) fn begin_method_evaluation(&mut self, method: &MethodKey) {
@@ -335,7 +341,12 @@ impl<'src> Analyzer<'src> {
         name.starts_with('@').then_some(name)
     }
 
-    pub(super) fn observe_dynamic_ivar(&mut self, key: IvarKey, actual: &Type) {
+    pub(super) fn observe_dynamic_ivar(&mut self, key: IvarKey, actual: &Type, initialized: bool) {
+        if initialized && self.initialized_ivars.insert(key.clone()) {
+            self.fixpoint
+                .changed_shared
+                .insert(SharedKey::Ivar(key.clone()));
+        }
         let next = self
             .ivars
             .get(&key)
@@ -362,7 +373,27 @@ impl<'src> Analyzer<'src> {
             .as_deref()
             .map(|name| self.dynamic_ivar_keys(receiver_node, receiver_type, environment, name))
             .unwrap_or_default();
-        self.eval_dynamic_instance_variable_call_for_keys(name, keys, argument_types)
+        self.eval_dynamic_instance_variable_call_for_keys(
+            name,
+            keys,
+            argument_types,
+            receiver_node.is_none_or(|receiver| receiver.as_self_node().is_some())
+                && self.dynamic_ivar_write_initializes_self(environment),
+            environment,
+        )
+    }
+
+    fn dynamic_ivar_write_initializes_self(&self, environment: &Environment) -> bool {
+        let Some(method) = environment.method_key.as_ref() else {
+            return false;
+        };
+        (method.singleton
+            && matches!(
+                method.name.as_str(),
+                "<class-body>" | "<module-body>" | "<singleton-body>"
+            ))
+            || (!method.singleton
+                && (method.name == "initialize" || environment.initializes_instance_state))
     }
 
     fn eval_dynamic_instance_variable_call_for_keys(
@@ -370,12 +401,19 @@ impl<'src> Analyzer<'src> {
         name: &str,
         keys: Vec<IvarKey>,
         argument_types: &[Type],
+        initializes_state: bool,
+        environment: &Environment,
     ) -> Option<Type> {
         match name {
             "instance_variable_set" => {
                 let actual = argument_types.get(1).cloned().unwrap_or(Type::Any);
+                let initializes_state = initializes_state
+                    || environment
+                        .method_key
+                        .as_ref()
+                        .is_some_and(|method| self.fixpoint.known_module_hooks.contains(method));
                 for key in keys {
-                    self.observe_dynamic_ivar(key, &actual);
+                    self.observe_dynamic_ivar(key, &actual, initializes_state);
                 }
                 Some(actual)
             }
