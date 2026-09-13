@@ -66,6 +66,7 @@ pub(super) fn attribute_writer_signature(signature: &MethodSig) -> MethodSig {
 pub(super) struct DeclarationState {
     pub(super) methods: BTreeMap<MethodKey, MethodState>,
     pub(super) definitions: BTreeMap<usize, MethodKey>,
+    pub(super) definition_states: BTreeMap<usize, MethodState>,
     pub(super) parameter_shapes: BTreeMap<usize, ParameterShape>,
     pub(super) classes: BTreeMap<String, ClassInfo>,
     pub(super) class_name_set: HashSet<String>,
@@ -548,12 +549,15 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             .copied()
             .or_else(|| self.visibility_stack.last().copied())
             .unwrap_or(Visibility::Public);
-        let state = self
-            .declarations
+        let mut definition_state = MethodState::inferred(node.parameters());
+        definition_state.visibility = visibility;
+        self.declarations
+            .definition_states
+            .insert(definition_start, definition_state.clone());
+        self.declarations
             .methods
             .entry(key)
-            .or_insert_with(|| MethodState::inferred(node.parameters()));
-        state.visibility = visibility;
+            .or_insert(definition_state);
         self.method_depth += 1;
         ruby_prism::visit_def_node(self, node);
         self.method_depth -= 1;

@@ -90,11 +90,22 @@ fn resolves_constants_from_included_module_ancestors() {
 
 #[test]
 fn source_overrides_builtin_rbi_method_contracts() {
-    let result = check_fixture("tests/fixtures/source_overrides_builtin_rbi.rb");
-    assert!(result
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.message.contains("Revealed type: `Time`")));
+    let path = Path::new("tests/fixtures/source_overrides_builtin_rbi.rb");
+    let source = std::fs::read_to_string(path).expect("fixture exists");
+    let mut files =
+        load_workspace_paths(&builtin_rbi_paths().expect("builtins exist")).expect("builtins load");
+    files.push(WorkspaceFile::new(path, source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(result.diagnostics.iter().all(|diagnostic| {
+        !diagnostic
+            .diagnostic
+            .message
+            .contains("Wrong number of arguments for `to_time`")
+    }));
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .diagnostic
+        .message
+        .contains("Revealed type: `Time`")));
 }
 
 #[test]

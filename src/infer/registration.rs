@@ -190,6 +190,32 @@ impl<'src> Analyzer<'src> {
             })
             .map(|(_, key)| key.clone())
             .collect::<BTreeSet<_>>();
+        // A source definition may have been registered after a builtin/RBI
+        // placeholder with the same key. Preserve the source parameter shape
+        // so a source reopen can replace the external contract (for example,
+        // Active Support's Date#to_time).
+        let mut source_definition_states = BTreeMap::<MethodKey, MethodState>::new();
+        for (offset, key) in &self.declarations.definitions {
+            let is_external_definition = self
+                .rbi_ranges
+                .iter()
+                .chain(&self.builtin_rbi_ranges)
+                .any(|(start, end)| *offset >= *start && *offset < *end);
+            if !is_external_definition {
+                if let Some(state) = self.declarations.definition_states.get(offset) {
+                    source_definition_states
+                        .entry(key.clone())
+                        .or_insert_with(|| state.clone());
+                }
+            }
+        }
+        for (key, state) in source_definition_states {
+            if let Some(current) = self.declarations.methods.get_mut(&key) {
+                if !current.explicit {
+                    *current = state;
+                }
+            }
+        }
         let mut source_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
         let mut builtin_rbi_signatures = BTreeMap::<MethodKey, Vec<MethodSig>>::new();
