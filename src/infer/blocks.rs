@@ -400,17 +400,11 @@ impl<'src> Analyzer<'src> {
                 let Some(expression_type) = self.passed_block_expression_type(node, outer) else {
                     return Type::Any;
                 };
-                let local_name = block
-                    .expression()
-                    .and_then(|expression| expression.as_local_variable_read_node())
-                    .map(|local| prism::constant_name(local.name()));
-                let forwarded = local_name
-                    .as_deref()
-                    .is_some_and(|name| outer.is_block_parameter(name));
-                let Some(signature) = (!forwarded)
-                    .then(|| Self::passed_block_signature(&expression_type))
-                    .flatten()
-                else {
+                let Some(signature) = Self::passed_block_signature(&expression_type) else {
+                    let local_name = block
+                        .expression()
+                        .and_then(|expression| expression.as_local_variable_read_node())
+                        .map(|local| prism::constant_name(local.name()));
                     if let Some(signature) = local_name.and_then(|local_name| {
                         self.forwarded_block_signature(
                             &local_name,
@@ -842,7 +836,12 @@ impl<'src> Analyzer<'src> {
                                     .map_or(Type::Any, |(_, result)| result.clone());
                                 (Eval::value(return_type), Some(forwarded_signature))
                             } else {
-                                (Eval::value(Type::Any), None)
+                                // A concrete Proc signature remains valid when it
+                                // is forwarded. The forwarding-specific path is
+                                // only needed for an unresolved block result.
+                                let return_type = proc_parts(&signature)
+                                    .map_or(Type::Any, |(_, result)| result.clone());
+                                (Eval::value(return_type), Some(signature))
                             }
                         } else {
                             let return_type = proc_parts(&signature)

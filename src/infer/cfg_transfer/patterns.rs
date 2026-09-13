@@ -84,13 +84,7 @@ pub(super) fn narrow_pattern_value(
         .unwrap_or(narrowed);
     state.set_value(value, narrowed.clone());
     if let Some(source_place) = pattern_source_place {
-        let is_discriminator = matches!(
-            pattern,
-            cfg::Pattern::Case {
-                discriminator: Some(_),
-                ..
-            }
-        );
+        let is_discriminator = case_has_type_discriminator(analyzer, pattern);
         if !is_discriminator || discriminated.as_ref().is_some_and(Option::is_some) {
             match source_place {
                 cfg::Place::Local(local) => {
@@ -122,6 +116,24 @@ pub(super) fn narrow_pattern_value(
             truthy == source.truthy,
         );
     }
+}
+
+fn case_has_type_discriminator(analyzer: &Analyzer<'_>, pattern: &cfg::Pattern) -> bool {
+    let cfg::Pattern::Case {
+        discriminator: Some(discriminator),
+        ..
+    } = pattern
+    else {
+        return false;
+    };
+    matches!(
+        analyzer
+            .program
+            .hir_program
+            .expression(*discriminator)
+            .map(|expression| &expression.kind),
+        Some(hir::ExprKind::Call(call)) if call.name.as_str() == "type"
+    )
 }
 
 fn discriminated_case_type(
