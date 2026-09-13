@@ -118,7 +118,11 @@ impl<'src> Analyzer<'src> {
         let then_result = if then_reachable {
             then_result
         } else {
-            Eval::value(Type::Never)
+            // An unreachable branch must not contribute a normal path to the
+            // environment join. `Never` as a normal value still carries
+            // `Flow::normal()`, which would make facts established in the
+            // reachable branch (such as a literal hash shape) disappear.
+            Eval::unreachable()
         };
 
         let mut else_environment = environment.clone();
@@ -140,7 +144,7 @@ impl<'src> Analyzer<'src> {
         let else_result = if else_reachable {
             else_result
         } else {
-            Eval::value(Type::Never)
+            Eval::unreachable()
         };
 
         *environment = self.join_flow_environments(

@@ -1143,9 +1143,39 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     cfg::OperationKind::Defined { value } => {
                         next.value(*value)
                             .ok_or_else(|| format!("missing defined? operand {:?}", value))?;
+                        let type_ = operation
+                            .expression
+                            .and_then(|expression_id| {
+                                self.analyzer
+                                    .program
+                                    .hir_program
+                                    .expression(expression_id)
+                            })
+                            .and_then(|expression| match &expression.kind {
+                                hir::ExprKind::Defined { value } => self
+                                    .analyzer
+                                    .program
+                                    .hir_program
+                                    .expression(*value),
+                                _ => None,
+                            })
+                            .and_then(|expression| match &expression.kind {
+                                hir::ExprKind::Read(hir::Read::Constant(path)) => Some(
+                                    if self
+                                        .analyzer
+                                        .constant_is_known(&next.environment, path.as_str())
+                                    {
+                                        Type::String
+                                    } else {
+                                        Type::Nil
+                                    },
+                                ),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| Type::union([Type::Nil, Type::String]));
                         self.analyzer.apply_inline_assertion_in_environment_at(
                             site,
-                            Type::union([Type::Nil, Type::String]),
+                            type_,
                             &next.environment,
                         )
                     }

@@ -603,7 +603,23 @@ impl<'src> Analyzer<'src> {
             self.reporting.suppress_diagnostics = true;
             let _ = self.eval_node(&defined.value(), environment);
             self.reporting.suppress_diagnostics = previous_suppression;
-            let type_ = self.apply_inline_assertion(node, Type::union([Type::Nil, Type::String]));
+            // `defined?(CONST)` is a runtime existence check, not merely a
+            // probe whose result is always unknown.  Source constants are
+            // registered before evaluation, so use the current declaration
+            // graph to distinguish a known constant from a missing one. This
+            // keeps guards such as `unless defined?(CACHE)` path-sensitive:
+            // the initializer is the only reachable branch when CACHE has no
+            // prior definition, and its literal shape remains available.
+            let type_ = if let Some(name) = self.constant_reference_name(&defined.value()) {
+                if self.constant_is_known(environment, &name) {
+                    Type::String
+                } else {
+                    Type::Nil
+                }
+            } else {
+                Type::union([Type::Nil, Type::String])
+            };
+            let type_ = self.apply_inline_assertion(node, type_);
             return Eval::value(self.record(node, type_));
         }
         if let Some(range) = node.as_range_node() {
