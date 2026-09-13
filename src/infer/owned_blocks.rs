@@ -497,6 +497,20 @@ impl<'src> Analyzer<'src> {
         let closure = self.program.hir_program.closure(closure_id)?.clone();
         let captured = outer.clone();
         let mut closure_environment = outer.clone();
+        if let Some(metadata) = self
+            .program
+            .cfg_body_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(closure.body.0 as usize))
+        {
+            for local in metadata.written_locals.iter().copied() {
+                if let Some(name) = self.program.hir_program.local_name(local) {
+                    if captured.contains(name.as_str()) {
+                        closure_environment.widen_captured_truthiness(name.as_str());
+                    }
+                }
+            }
+        }
         if let Some(receiver) = bound_receiver {
             closure_environment.self_type = match receiver {
                 Type::AttachedClassOf(owner) => Type::named(owner.clone()),

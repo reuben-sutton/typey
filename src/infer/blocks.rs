@@ -7,7 +7,44 @@ use crate::cfg;
 use crate::hir;
 use crate::signature::{self, MethodSig};
 use crate::types::Type;
-use ruby_prism::{Node, ParametersNode};
+use ruby_prism::{Node, ParametersNode, Visit};
+use std::collections::BTreeSet;
+
+#[derive(Default)]
+struct CapturedLocalWriteCollector {
+    names: BTreeSet<String>,
+}
+
+impl<'pr> Visit<'pr> for CapturedLocalWriteCollector {
+    fn visit_local_variable_write_node(&mut self, node: &ruby_prism::LocalVariableWriteNode<'pr>) {
+        self.names.insert(prism::constant_name(node.name()));
+        ruby_prism::visit_local_variable_write_node(self, node);
+    }
+
+    fn visit_local_variable_and_write_node(
+        &mut self,
+        node: &ruby_prism::LocalVariableAndWriteNode<'pr>,
+    ) {
+        self.names.insert(prism::constant_name(node.name()));
+        ruby_prism::visit_local_variable_and_write_node(self, node);
+    }
+
+    fn visit_local_variable_or_write_node(
+        &mut self,
+        node: &ruby_prism::LocalVariableOrWriteNode<'pr>,
+    ) {
+        self.names.insert(prism::constant_name(node.name()));
+        ruby_prism::visit_local_variable_or_write_node(self, node);
+    }
+
+    fn visit_local_variable_operator_write_node(
+        &mut self,
+        node: &ruby_prism::LocalVariableOperatorWriteNode<'pr>,
+    ) {
+        self.names.insert(prism::constant_name(node.name()));
+        ruby_prism::visit_local_variable_operator_write_node(self, node);
+    }
+}
 
 impl<'src> Analyzer<'src> {
     /// Recover the contract of an unannotated block parameter when it is
@@ -587,7 +624,16 @@ impl<'src> Analyzer<'src> {
         expected: &[Type],
         outer: &Environment,
     ) -> (Eval, Environment) {
+        let mut writes = CapturedLocalWriteCollector::default();
+        if let Some(body) = block.body() {
+            writes.visit(&body);
+        }
         let mut environment = outer.clone();
+        for name in writes.names {
+            if outer.contains(&name) {
+                environment.widen_captured_truthiness(&name);
+            }
+        }
         if let Some(parameters) = block.parameters() {
             if let Some(parameters) = parameters
                 .as_block_parameters_node()

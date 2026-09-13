@@ -211,6 +211,17 @@ impl Environment {
         self.known_truthiness.get(name).copied()
     }
 
+    /// A block may be invoked more than once, so a literal truthiness fact
+    /// captured from its creating scope is not stable when the block writes
+    /// that local. Keep the useful boolean shape, but drop the one-shot fact
+    /// before transferring the block body.
+    pub(super) fn widen_captured_truthiness(&mut self, name: &str) {
+        if matches!(self.locals.get(name), Some(Type::True | Type::False)) {
+            self.locals.insert(name.to_owned(), Type::bool());
+        }
+        self.known_truthiness.remove(name);
+    }
+
     pub(super) fn set_known_respond_to(
         &mut self,
         receiver: impl Into<String>,

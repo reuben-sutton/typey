@@ -1740,6 +1740,11 @@ fn transfers_inline_callbacks_after_a_nonlocal_return_path() {
 }
 
 #[test]
+fn widens_captured_truthiness_for_repeated_callbacks() {
+    check_fixture("tests/fixtures/cfg_conditional_nonlocal_return.rb");
+}
+
+#[test]
 fn keeps_the_normal_call_type_separate_from_nonlocal_block_returns() {
     check_fixture("tests/fixtures/nonlocal_return_keeps_call_normal_type.rb");
 }
