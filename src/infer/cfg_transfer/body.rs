@@ -245,6 +245,18 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         }) else {
             return;
         };
+        if self
+            .analyzer
+            .program
+            .hir_program
+            .expression(conditional.condition)
+            .is_some_and(|expression| matches!(expression.kind, hir::ExprKind::Defined { .. }))
+        {
+            // `defined?` is a runtime existence probe. Sorbet uses its known
+            // result for flow, but does not report the unselected arm as an
+            // unreachable-program diagnostic.
+            return;
+        }
         if !self.should_report_unreachable_branch(conditional.expression) {
             return;
         }

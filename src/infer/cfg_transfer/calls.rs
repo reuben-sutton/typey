@@ -117,6 +117,33 @@ pub(super) fn transfer_call(
         }
     }
     let receiver_type = compound_assignment_receiver(analyzer, &input, receiver_type);
+    let static_type_receiver = cfg_static_type_receiver(analyzer, &input);
+    let type_expression_receiver = cfg_type_expression_receiver(analyzer, &input);
+    if let Some(description) = static_type_receiver.as_deref().map(cfg_type_description) {
+        if !matches!(
+            input.name.as_str(),
+            "new"
+                | "valid?"
+                | "recursively_valid?"
+                | "subtype_of?"
+                | "describe_obj"
+                | "error_message_for_obj"
+                | "error_message_for_obj_recursive"
+                | "validate!"
+                | "params"
+                | "returns"
+                | "void"
+                | "bind"
+        ) {
+            analyzer.error_at(
+                input.site,
+                format!(
+                    "Call to method `{}` on `{description}` mistakes a type for a value",
+                    input.name
+                ),
+            );
+        }
+    }
     let receiver_value = match input.receiver {
         cfg::ReceiverOperand::Value(value) => Some(*value),
         _ => None,
@@ -227,7 +254,10 @@ pub(super) fn transfer_call(
                 );
             }
         }
-        if receiver.missing_method && !is_static_type_receiver(&dispatch_receiver) {
+        if receiver.missing_method
+            && !is_static_type_receiver(&dispatch_receiver)
+            && type_expression_receiver.is_none()
+        {
             analyzer.report_missing_method_if_needed_at(
                 input.site,
                 &dispatch_receiver,
@@ -273,6 +303,156 @@ pub(super) fn transfer_call(
         result,
         environment,
     ))
+}
+
+fn cfg_static_type_receiver(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<String> {
+    let expression = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))?;
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return None;
+    };
+    let hir::Receiver::Explicit(receiver) = call.receiver else {
+        return None;
+    };
+    let receiver = analyzer.program.hir_program.expression(receiver)?;
+    cfg_static_type_value(analyzer, receiver).then(|| {
+        let source = String::from_utf8_lossy(
+            &analyzer.program.source[receiver.span.start as usize..receiver.span.end as usize],
+        );
+        source.trim().to_owned()
+    })
+}
+
+fn cfg_type_expression_receiver(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<()> {
+    let expression = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))?;
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return None;
+    };
+    let hir::Receiver::Explicit(receiver) = call.receiver else {
+        return None;
+    };
+    let receiver = analyzer.program.hir_program.expression(receiver)?;
+    cfg_type_expression_value(analyzer, receiver).then_some(())
+}
+
+fn cfg_type_expression_value(analyzer: &Analyzer<'_>, expression: &hir::Expr) -> bool {
+    if cfg_static_type_value(analyzer, expression) {
+        return true;
+    }
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return false;
+    };
+    let direct_class_of = matches!(
+        call.receiver,
+        hir::Receiver::Explicit(receiver)
+            if analyzer
+                .program
+                .hir_program
+                .expression(receiver)
+                .is_some_and(|receiver| {
+                    matches!(
+                        &receiver.kind,
+                        hir::ExprKind::Read(hir::Read::Constant(path))
+                            if path.as_str() == "T" || path.as_str() == "::T"
+                    )
+                })
+    ) && call.name.as_str() == "class_of";
+    direct_class_of
+        || match call.receiver {
+            hir::Receiver::Explicit(receiver) => analyzer
+                .program
+                .hir_program
+                .expression(receiver)
+                .is_some_and(|receiver| cfg_type_expression_value(analyzer, receiver)),
+            _ => false,
+        }
+}
+
+fn cfg_static_type_value(analyzer: &Analyzer<'_>, expression: &hir::Expr) -> bool {
+    match &expression.kind {
+        hir::ExprKind::Read(hir::Read::Constant(path)) => matches!(
+            path.as_str(),
+            "T.untyped"
+                | "::T.untyped"
+                | "T.anything"
+                | "::T.anything"
+                | "T.self_type"
+                | "::T.self_type"
+                | "T.noreturn"
+                | "::T.noreturn"
+                | "T.attached_class"
+                | "::T.attached_class"
+        ),
+        hir::ExprKind::Call(call) => {
+            let receiver_is_t = match call.receiver {
+                hir::Receiver::Explicit(receiver) => analyzer
+                    .program
+                    .hir_program
+                    .expression(receiver)
+                    .is_some_and(|receiver| {
+                        matches!(
+                            &receiver.kind,
+                            hir::ExprKind::Read(hir::Read::Constant(path))
+                                if path.as_str() == "T" || path.as_str() == "::T"
+                        )
+                    }),
+                _ => false,
+            };
+            let direct = receiver_is_t
+                && match call.name.as_str() {
+                    "class_of" => call.arguments.len() == 1,
+                    "any" | "all" | "nilable" | "noreturn" | "untyped" | "anything"
+                    | "self_type" | "proc" | "type_parameter" | "attached_class" => true,
+                    _ => false,
+                };
+            let generic = call.name.as_str() == "[]"
+                && match call.receiver {
+                    hir::Receiver::Explicit(receiver) => analyzer
+                        .program
+                        .hir_program
+                        .expression(receiver)
+                        .is_some_and(|receiver| {
+                            matches!(
+                                &receiver.kind,
+                                hir::ExprKind::Read(hir::Read::Constant(path))
+                                    if path.as_str().starts_with("T::")
+                            )
+                        }),
+                    _ => false,
+                };
+            let nested = match call.receiver {
+                hir::Receiver::Explicit(receiver) => analyzer
+                    .program
+                    .hir_program
+                    .expression(receiver)
+                    .is_some_and(|receiver| cfg_static_type_value(analyzer, receiver)),
+                _ => false,
+            } && !matches!(
+                call.name.as_str(),
+                "new"
+                    | "valid?"
+                    | "recursively_valid?"
+                    | "subtype_of?"
+                    | "describe_obj"
+                    | "error_message_for_obj"
+                    | "error_message_for_obj_recursive"
+                    | "validate!"
+            );
+            direct || generic || nested
+        }
+        _ => false,
+    }
+}
+
+fn cfg_type_description(source: &str) -> String {
+    if source.contains("T.self_type") {
+        "T.untyped".to_owned()
+    } else {
+        source.to_owned()
+    }
 }
 
 fn refine_nonempty_array_result(
