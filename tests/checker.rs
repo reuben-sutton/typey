@@ -1777,6 +1777,22 @@ fn merges_possible_rescue_local_state() {
 }
 
 #[test]
+fn accepts_calls_handled_by_method_missing() {
+    let source = std::fs::read_to_string("tests/fixtures/method_missing_dispatch.rb")
+        .expect("fixture exists");
+    let baseline = check(&source, CheckerConfig::default());
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!baseline.has_errors(), "{:#?}", baseline.diagnostics);
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn keeps_the_normal_call_type_separate_from_nonlocal_block_returns() {
     check_fixture("tests/fixtures/nonlocal_return_keeps_call_normal_type.rb");
 }

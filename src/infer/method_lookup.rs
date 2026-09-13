@@ -471,6 +471,36 @@ impl<'src> Analyzer<'src> {
         })
     }
 
+    pub(super) fn receiver_handles_missing_method(&self, receiver: &Type, name: &str) -> bool {
+        match receiver {
+            Type::Union(members) => members
+                .iter()
+                .all(|member| self.receiver_handles_missing_method(member, name)),
+            _ => {
+                let method_key =
+                    self.receiver_method_key(None, receiver, name, &Environment::default());
+                if method_key
+                    .as_ref()
+                    .and_then(|key| self.resolve_method_key(key))
+                    .is_some()
+                {
+                    return true;
+                }
+                let Some(owner) = Self::named_type_name(receiver) else {
+                    return false;
+                };
+                let method_missing = MethodKey {
+                    owner: Some(owner),
+                    name: "method_missing".to_owned(),
+                    singleton: false,
+                };
+                self.resolve_method_key(&method_missing)
+                    .and_then(|key| key.owner)
+                    .is_some_and(|owner| owner != "BasicObject")
+            }
+        }
+    }
+
     pub(super) fn super_method_key(&self, current: &MethodKey) -> Option<MethodKey> {
         let owner = current.owner.as_ref()?;
         let mut candidates = Vec::new();

@@ -208,6 +208,7 @@ impl<'src> Analyzer<'src> {
         name: &str,
         resolved: bool,
     ) {
+        let resolved = resolved || self.receiver_handles_missing_method(receiver, name);
         self.report_missing_method_message_if_needed_at(
             site,
             receiver,
@@ -227,6 +228,7 @@ impl<'src> Analyzer<'src> {
             || receiver.is_any()
             || receiver.contains_any()
             || receiver.is_never()
+            || self.receiver_handles_missing_method(receiver, name)
         {
             return;
         }
