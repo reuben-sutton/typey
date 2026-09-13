@@ -80,6 +80,15 @@ fn registers_inline_constant_annotations_before_inference() {
 }
 
 #[test]
+fn resolves_constants_from_included_module_ancestors() {
+    let result = check_fixture("tests/fixtures/included_module_constants.rb");
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
 fn checks_sorbet_sig_calls() {
     check_fixture("tests/fixtures/sorbet_sig.rb");
     let source = std::fs::read_to_string("tests/fixtures/sorbet_sig.rb").expect("fixture");

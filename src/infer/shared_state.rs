@@ -10,6 +10,72 @@ use ruby_prism::Node;
 use std::collections::BTreeSet;
 
 impl<'src> Analyzer<'src> {
+    fn append_constant_ancestor_candidates(
+        &self,
+        owner: &str,
+        name: &str,
+        candidates: &mut Vec<String>,
+        visited: &mut BTreeSet<String>,
+    ) {
+        let owner = self.resolve_global_name(owner.trim_start_matches("::"));
+        if !visited.insert(owner.clone()) {
+            return;
+        }
+        let Some(info) = self.declarations.classes.get(&owner) else {
+            return;
+        };
+
+        // Ruby constant lookup follows prepended and included modules, then
+        // the superclass chain. `extend` changes singleton method lookup, not
+        // the constant ancestry of the class object.
+        for module in info.prepends.iter().rev() {
+            let module = self.resolve_global_name(module.trim_start_matches("::"));
+            let key = format!("{module}::{name}");
+            if !candidates.contains(&key) {
+                candidates.push(key);
+            }
+            self.append_constant_ancestor_candidates(module.as_str(), name, candidates, visited);
+        }
+        for module in info.includes.iter().rev() {
+            let module = self.resolve_global_name(module.trim_start_matches("::"));
+            let key = format!("{module}::{name}");
+            if !candidates.contains(&key) {
+                candidates.push(key);
+            }
+            self.append_constant_ancestor_candidates(module.as_str(), name, candidates, visited);
+        }
+        if let Some(superclass) = &info.superclass {
+            let superclass = self.resolve_global_name(superclass.trim_start_matches("::"));
+            let key = format!("{superclass}::{name}");
+            if !candidates.contains(&key) {
+                candidates.push(key);
+            }
+            self.append_constant_ancestor_candidates(
+                superclass.as_str(),
+                name,
+                candidates,
+                visited,
+            );
+        }
+    }
+
+    pub(super) fn constant_is_known_through_ancestors(&self, name: &str) -> bool {
+        let name = name.trim_start_matches("::");
+        let Some((owner, constant_name)) = name.rsplit_once("::") else {
+            return false;
+        };
+        let mut candidates = Vec::new();
+        self.append_constant_ancestor_candidates(
+            owner,
+            constant_name,
+            &mut candidates,
+            &mut BTreeSet::new(),
+        );
+        candidates
+            .iter()
+            .any(|candidate| self.declarations.constants.contains_key(candidate))
+    }
+
     pub(super) fn literal_hash_shape_key(&self, node: &Node<'_>) -> String {
         let (start, end) = prism::span(node);
         format!("\u{1}literal-hash:{start}:{end}")
@@ -751,6 +817,19 @@ impl<'src> Analyzer<'src> {
                 .classes
                 .get(&current)
                 .and_then(|info| info.superclass.clone());
+        }
+
+        let mut visited = BTreeSet::new();
+        for candidate in candidates.clone() {
+            let Some((owner, constant_name)) = candidate.rsplit_once("::") else {
+                continue;
+            };
+            self.append_constant_ancestor_candidates(
+                owner,
+                constant_name,
+                &mut candidates,
+                &mut visited,
+            );
         }
 
         // A qualified constant reference such as `Color::BLUE` is still

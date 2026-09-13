@@ -269,6 +269,7 @@ impl<'src> Analyzer<'src> {
             || self.known_nominal_name(name)
             || self.declarations.class_name_suffixes.contains_key(name)
             || self.declarations.constant_name_suffixes.contains_key(name)
+            || self.constant_is_known_through_ancestors(&resolved)
     }
 
     pub(super) fn report_missing_constant_if_needed<'node>(
