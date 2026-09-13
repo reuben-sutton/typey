@@ -1342,9 +1342,12 @@ impl MethodRegistrar<'_> {
     fn parse_typed_constant<'node>(&self, value: &Node<'node>) -> Option<Type> {
         let call = value.as_call_node()?;
         if prism::constant_name(call.name()) != "let"
-            || call
-                .receiver()
-                .is_none_or(|receiver| prism::text(self.source, &receiver).trim() != "T")
+            || call.receiver().is_none_or(|receiver| {
+                prism::text(self.source, &receiver)
+                    .trim()
+                    .trim_start_matches("::")
+                    != "T"
+            })
         {
             return None;
         }
