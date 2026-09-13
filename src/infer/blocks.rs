@@ -83,7 +83,14 @@ impl<'src> Analyzer<'src> {
             return None;
         }
         let actual_proc = optional_proc_type(actual)?;
-        if Self::passed_block_signature(&actual_proc).is_some() {
+        // `bind_parameters` uses an empty parameter list for an unannotated
+        // `&block`.  Its return type may become concrete after an inline call
+        // is observed, but the empty list still means unknown arity; only a
+        // non-empty parameter list is evidence that forwarding has already
+        // recovered the block's shape.
+        if expected_parameters.is_empty()
+            || proc_parts(&actual_proc).is_some_and(|(parameters, _)| !parameters.is_empty())
+        {
             return None;
         }
         let key = environment.method_key.clone()?;
