@@ -165,13 +165,14 @@ impl<'src> Analyzer<'src> {
     pub(super) fn cfg_owned_closure_type(
         &mut self,
         closure_id: hir::ClosureId,
-        outer: &Environment,
+        outer: &mut Environment,
     ) -> Option<Type> {
         let (body_id, parameters, span) = {
             let closure = self.program.hir_program.closure(closure_id)?;
             (closure.body, closure.parameters.clone(), closure.span)
         };
         let signature = Analyzer::inferred_hir_block_signature(&parameters);
+        let captured = outer.clone();
         let mut closure_environment = outer.clone();
         let mut positional_index = 0;
         for parameter in &parameters.parameters {
@@ -227,6 +228,7 @@ impl<'src> Analyzer<'src> {
                 false,
             )
             .ok()?;
+        self.propagate_block_locals(outer, &captured, &closure_environment);
         Some(Type::Proc(signature.params, Box::new(body_result.type_)))
     }
 

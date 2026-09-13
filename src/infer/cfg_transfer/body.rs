@@ -1442,7 +1442,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                     cfg::OperationKind::MakeClosure { closure } => {
                         let type_ = self
                             .analyzer
-                            .cfg_owned_closure_type(*closure, &next.environment)
+                            .cfg_owned_closure_type(*closure, &mut next.environment)
                             .ok_or_else(|| {
                                 format!("closure transfer failed at {:?}", operation.span)
                             })?;

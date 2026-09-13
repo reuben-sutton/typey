@@ -47,6 +47,25 @@ impl<'pr> Visit<'pr> for CapturedLocalWriteCollector {
 }
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn closure_environment_with_captured_writes<'node>(
+        &self,
+        body: Option<&Node<'node>>,
+        outer: &mut Environment,
+    ) -> Environment {
+        let mut closure_environment = outer.clone();
+        let mut writes = CapturedLocalWriteCollector::default();
+        if let Some(body) = body {
+            writes.visit(body);
+        }
+        for name in writes.names {
+            if outer.contains(&name) {
+                outer.widen_captured_truthiness(&name);
+                closure_environment.widen_captured_truthiness(&name);
+            }
+        }
+        closure_environment
+    }
+
     /// Recover the contract of an unannotated block parameter when it is
     /// forwarded into a callback with a known input shape.  Ruby exposes an
     /// unannotated `&block` as an unknown-arity proc, but the forwarding site
@@ -624,11 +643,11 @@ impl<'src> Analyzer<'src> {
         expected: &[Type],
         outer: &Environment,
     ) -> (Eval, Environment) {
+        let mut environment = outer.clone();
         let mut writes = CapturedLocalWriteCollector::default();
         if let Some(body) = block.body() {
             writes.visit(&body);
         }
-        let mut environment = outer.clone();
         for name in writes.names {
             if outer.contains(&name) {
                 environment.widen_captured_truthiness(&name);

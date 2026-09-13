@@ -794,13 +794,16 @@ impl<'src> Analyzer<'src> {
                     .and_then(|parameters| parameters.parameters())
                     .or_else(|| parameters.as_parameters_node())
             });
-            let mut closure_environment = environment.clone();
+            let captured = environment.clone();
+            let lambda_body = lambda.body();
+            let mut closure_environment =
+                self.closure_environment_with_captured_writes(lambda_body.as_ref(), environment);
             self.bind_parameters(parameters, Some(&signature), &mut closure_environment, true);
-            let body_result = lambda
-                .body()
+            let body_result = lambda_body
                 .map(|body| self.eval_node(&body, &mut closure_environment))
                 .unwrap_or_else(|| Eval::value(Type::Nil));
             let return_type = body_result.method_return_type();
+            self.propagate_block_locals(environment, &captured, &closure_environment);
             let type_ = self.apply_inline_assertion_in_environment(
                 node,
                 Type::Proc(signature.params, Box::new(return_type)),
