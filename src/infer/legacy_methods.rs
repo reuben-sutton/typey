@@ -164,19 +164,22 @@ impl<'src> Analyzer<'src> {
         };
         let body_result = if let Some(body) = definition.body() {
             if self.config.enable_cfg {
-                self.program
+                match self
+                    .program
                     .hir_body_ids
                     .get(&prism::span(node))
                     .copied()
-                    .and_then(|body_id| {
+                    .map(|body_id| {
                         self.eval_cfg_body_owned(
                             self.owned_body_site(body_id),
                             body_id,
                             &mut method_environment,
                             true,
                         )
-                    })
-                    .unwrap_or_else(|| self.eval_node(&body, &mut method_environment))
+                    }) {
+                    Some(Ok(result)) => result,
+                    Some(Err(_)) | None => self.cfg_unsupported_result(node, "method body"),
+                }
             } else {
                 self.eval_node(&body, &mut method_environment)
             }

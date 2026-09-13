@@ -18,7 +18,7 @@ impl<'src> Analyzer<'src> {
         let span = prism::span(node);
         let expression = *self.program.hir_value_ids.get(&span)?;
         if !Self::owned_value_tree_supported(&self.program.hir_program, expression) {
-            return None;
+            return Some(self.cfg_unsupported_result(node, "value"));
         }
         self.cfg_transfer_values = self.cfg_transfer_values.saturating_add(1);
         Some(self.eval_owned_value(expression, environment))
@@ -38,7 +38,7 @@ impl<'src> Analyzer<'src> {
         {
             return result;
         }
-        self.eval_hir_assignment(node, target, value, operator, environment)
+        self.cfg_unsupported_result(node, "assignment")
     }
 
     fn eval_cfg_assignment_value(
@@ -373,17 +373,14 @@ impl<'src> Analyzer<'src> {
             .is_some_and(|index| index.has_call(span) || index.has_write(span))
     }
 
-    pub(super) fn record_cfg_fallback(
-        &mut self,
-        node: &Node<'_>,
-        kind: &str,
-        fallback: CfgFallbackKind,
-    ) {
-        self.record_cfg_fallback_at(
-            SourceSite::from_prism_span(prism::span(node)),
-            kind,
-            fallback,
-        );
+    pub(super) fn cfg_unsupported_result(&self, node: &Node<'_>, kind: &str) -> Eval {
+        if self.config.debug {
+            eprintln!(
+                "[typey] unsupported CFG {kind} at {:?}: continuing with T.anything",
+                prism::span(node)
+            );
+        }
+        Eval::value(Type::Anything)
     }
 
     /// Source-site construction for an owned body. Keeping this beside the

@@ -329,9 +329,19 @@ impl<'src> Analyzer<'src> {
         arguments: &CallArguments<'_>,
         environment: &mut super::Environment,
     ) -> Option<Type> {
-        let key = environment.method_key.clone()?;
+        let Some(key) = environment.method_key.clone() else {
+            // The parser already reports an invalid top-level/class-body
+            // yield. Keep the owned CFG body executable so later statements
+            // are still checked; there is no block contract to infer here.
+            return Some(Type::Any);
+        };
         let (expected, return_type) = {
-            let state = self.declarations.methods.get(&key)?;
+            let Some(state) = self.declarations.methods.get(&key) else {
+                // A namespace body is not a method and therefore has no
+                // yielded-block signature. This is an invalid-yield case,
+                // not a reason to hand the enclosing body back to Prism.
+                return Some(Type::Any);
+            };
             let expected = state
                 .block
                 .as_ref()

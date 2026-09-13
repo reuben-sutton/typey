@@ -468,21 +468,9 @@ impl<'src> Analyzer<'src> {
             self.skip_root_method_definitions = false;
             self.fixpoint.active_methods = pending_methods.clone();
             if let Err(reason) = self.eval_scheduled_method_definitions(&pending_methods) {
-                // A body which cannot be transferred through owned CFG still
-                // gets the established root-replay fallback for this round.
-                // The owned transfer normally reports the failure before
-                // publishing any body result, so this path remains rare.
                 if self.config.debug {
-                    eprintln!("[typey] direct method worklist fallback: {reason}");
+                    eprintln!("[typey] direct method worklist error: {reason}");
                 }
-                let previous_active_namespace_bodies = self.active_namespace_bodies.take();
-                let previous_collect_method_definitions = self.collect_method_definitions;
-                self.collect_method_definitions = true;
-                self.skip_root_method_definitions = false;
-                let mut fallback_environment = Environment::default();
-                self.eval_node(root, &mut fallback_environment);
-                self.collect_method_definitions = previous_collect_method_definitions;
-                self.active_namespace_bodies = previous_active_namespace_bodies;
             }
             self.fixpoint.collecting_returns = false;
             self.commit_inferred_returns();
@@ -632,7 +620,7 @@ impl<'src> Analyzer<'src> {
                 }
             }
             eprintln!(
-                "[typey] CFG transfers: {} body visits, {} unique bodies ({} source, {} RBI), {} calls, {} assignments, {} values, {} fallbacks (unsupported operations {}, unsupported edges {}, legacy bridges {})",
+                "[typey] CFG transfers: {} body visits, {} unique bodies ({} source, {} RBI), {} calls, {} assignments, {} values",
                 self.cfg_transfer_bodies,
                 self.cfg_transferred_bodies.len(),
                 self.cfg_transferred_bodies
@@ -658,11 +646,7 @@ impl<'src> Analyzer<'src> {
                     .count(),
                 self.cfg_transfer_calls,
                 self.cfg_transfer_assignments,
-                self.cfg_transfer_values,
-                self.cfg_transfer_fallbacks.total(),
-                self.cfg_transfer_fallbacks.unsupported_operation,
-                self.cfg_transfer_fallbacks.unsupported_edge,
-                self.cfg_transfer_fallbacks.legacy_bridge
+                self.cfg_transfer_values
             );
             eprintln!(
                 "[typey] complete: {} diagnostics, {} recorded types in {:?}",

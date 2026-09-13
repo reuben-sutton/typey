@@ -75,7 +75,7 @@ impl<'src> Analyzer<'src> {
         // RBI method bodies are declaration placeholders, not executable
         // application code. Their signatures are registered above; executing
         // bodies such as `def call(*args, **, &block); end` would only create
-        // CFG fallback noise for syntax that has no runtime semantics here.
+        // Owned transfer has no runtime semantics for declaration placeholders.
         if self.is_rbi_offset(span.start as usize) {
             return Ok(());
         }
@@ -200,14 +200,12 @@ impl<'src> Analyzer<'src> {
             // are published, while local effects join the method's normal
             // entry state instead of becoming unconditional assignments.
             let mut default_environment = method_environment.clone();
-            let default_result = self
-                .eval_cfg_body_owned(
-                    self.owned_body_site(default_body),
-                    default_body,
-                    &mut default_environment,
-                    true,
-                )
-                .ok_or_else(|| "parameter default requires a legacy transfer".to_owned())?;
+            let default_result = self.eval_cfg_body_owned(
+                self.owned_body_site(default_body),
+                default_body,
+                &mut default_environment,
+                true,
+            )?;
             // Call-site observations describe values supplied by callers, but
             // they are not exhaustive for an optional parameter.  Preserve
             // the value produced by the default path in the method entry
@@ -250,14 +248,12 @@ impl<'src> Analyzer<'src> {
         } else {
             None
         };
-        let body_result = self
-            .eval_cfg_body_owned(
-                self.owned_body_site(body),
-                body,
-                &mut method_environment,
-                true,
-            )
-            .ok_or_else(|| "method body requires a legacy transfer".to_owned())?;
+        let body_result = self.eval_cfg_body_owned(
+            self.owned_body_site(body),
+            body,
+            &mut method_environment,
+            true,
+        )?;
         self.expected_return_type = previous_expected_return;
         let inferred_return = body_result.method_return_type();
         if self.fixpoint.collecting_returns {
@@ -493,21 +489,17 @@ impl<'src> Analyzer<'src> {
                 .clone()
                 .expect("namespace body method context"),
         );
-        let result = self
-            .eval_cfg_body_owned(
-                self.owned_body_site(body),
-                body,
-                &mut namespace_environment,
-                true,
-            )
-            .is_some();
+        let result = self.eval_cfg_body_owned(
+            self.owned_body_site(body),
+            body,
+            &mut namespace_environment,
+            true,
+        );
         self.substitution_context = previous_substitution_context;
         if self.collect_method_definitions {
             self.namespace_body_stack.pop();
         }
-        result
-            .then_some(())
-            .ok_or_else(|| "namespace body requires a legacy transfer".to_owned())
+        result.map(|_| ())
     }
 
     fn eval_owned_singleton_body(
@@ -555,20 +547,16 @@ impl<'src> Analyzer<'src> {
                 .clone()
                 .expect("singleton body method context"),
         );
-        let result = self
-            .eval_cfg_body_owned(
-                self.owned_body_site(body),
-                body,
-                &mut singleton_environment,
-                true,
-            )
-            .is_some();
+        let result = self.eval_cfg_body_owned(
+            self.owned_body_site(body),
+            body,
+            &mut singleton_environment,
+            true,
+        );
         self.substitution_context = previous_substitution_context;
         if self.collect_method_definitions {
             self.namespace_body_stack.pop();
         }
-        result
-            .then_some(())
-            .ok_or_else(|| "singleton body requires a legacy transfer".to_owned())
+        result.map(|_| ())
     }
 }

@@ -3497,8 +3497,8 @@ fn preserves_safe_navigation_diagnostics_through_owned_cfg_transfer() {
 }
 
 #[test]
-fn rolls_back_owned_cfg_state_before_legacy_fallback() {
-    let path = "tests/fixtures/cfg_transactional_fallback.rb";
+fn keeps_owned_cfg_transfer_after_invalid_yield() {
+    let path = "tests/fixtures/cfg_invalid_yield.rb";
     let source = std::fs::read_to_string(path).expect("fixture source");
     let baseline = check(&source, CheckerConfig::default());
     let cfg = check(

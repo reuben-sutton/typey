@@ -17,7 +17,6 @@ pub(super) struct CfgBodyMetadata {
     pub(super) inline_closures: Arc<[hir::ClosureId]>,
     pub(super) straight_line_path: Option<Arc<[cfg::BlockId]>>,
     pub(super) written_locals: Arc<[hir::LocalId]>,
-    pub(super) has_unsupported_operation: bool,
     pub(super) has_super_or_yield: bool,
     pub(super) has_known_cfg_failure: bool,
 }
@@ -48,7 +47,6 @@ impl<'src> ProgramContext<'src> {
         source: &'src [u8],
         hir_program: hir::Program,
         cfg_graphs: Option<Arc<[cfg::Cfg]>>,
-        rbi_ranges: &[(usize, usize)],
         annotations: signature::AnnotationTable,
     ) -> Self {
         let cfg_index = cfg_graphs
@@ -63,7 +61,7 @@ impl<'src> ProgramContext<'src> {
                     .iter()
                     .enumerate()
                     .map(|(index, graph)| {
-                        let mut metadata = build_cfg_body_metadata(graph, rbi_ranges);
+                        let mut metadata = build_cfg_body_metadata(graph);
                         metadata.has_known_cfg_failure = known_cfg_failures
                             .as_ref()
                             .and_then(|failures| failures.get(index))
@@ -127,42 +125,14 @@ impl<'src> ProgramContext<'src> {
     }
 }
 
-fn build_cfg_body_metadata(graph: &cfg::Cfg, rbi_ranges: &[(usize, usize)]) -> CfgBodyMetadata {
+fn build_cfg_body_metadata(graph: &cfg::Cfg) -> CfgBodyMetadata {
     let mut fixed_array_elements = HashMap::new();
     let mut splatted_values = HashSet::new();
     let mut inline_closures = BTreeSet::new();
     let mut written_locals = BTreeSet::new();
-    let mut has_unsupported_operation = false;
     let mut has_super_or_yield = false;
 
     for operation in graph.blocks.iter().flat_map(|block| &block.operations) {
-        if !offset_in_ranges(operation.span.start as usize, rbi_ranges)
-            && !matches!(
-                operation.kind,
-                cfg::OperationKind::Const { .. }
-                    | cfg::OperationKind::Read { .. }
-                    | cfg::OperationKind::ReadSpecial { .. }
-                    | cfg::OperationKind::Write { .. }
-                    | cfg::OperationKind::MultiWrite { .. }
-                    | cfg::OperationKind::MultiWriteElement { .. }
-                    | cfg::OperationKind::Defined { .. }
-                    | cfg::OperationKind::Call { .. }
-                    | cfg::OperationKind::MakeClosure { .. }
-                    | cfg::OperationKind::BuildArray { .. }
-                    | cfg::OperationKind::BuildHash { .. }
-                    | cfg::OperationKind::BuildInterpolated { .. }
-                    | cfg::OperationKind::BuildRange { .. }
-                    | cfg::OperationKind::Definition { .. }
-                    | cfg::OperationKind::Record { .. }
-                    | cfg::OperationKind::ApplyAssertion { .. }
-                    | cfg::OperationKind::SetOutcome { .. }
-                    | cfg::OperationKind::PatternTest { .. }
-                    | cfg::OperationKind::BindForTarget { .. }
-            )
-        {
-            has_unsupported_operation = true;
-        }
-
         match &operation.kind {
             cfg::OperationKind::BuildArray { elements, .. } => {
                 if let Some(result) = operation.result {
@@ -235,7 +205,6 @@ fn build_cfg_body_metadata(graph: &cfg::Cfg, rbi_ranges: &[(usize, usize)]) -> C
         inline_closures: Arc::from(inline_closures.into_iter().collect::<Vec<_>>()),
         straight_line_path: cfg::transfer::straight_line_path(graph, graph.entry).map(Arc::from),
         written_locals: Arc::from(written_locals.into_iter().collect::<Vec<_>>()),
-        has_unsupported_operation,
         has_super_or_yield,
         has_known_cfg_failure: false,
     }
@@ -319,11 +288,4 @@ fn build_known_cfg_failures(program: &hir::Program, graphs: &[cfg::Cfg]) -> Vec<
     memo.into_iter()
         .map(|failure| failure.unwrap_or(false))
         .collect()
-}
-
-fn offset_in_ranges(offset: usize, ranges: &[(usize, usize)]) -> bool {
-    let index = ranges.partition_point(|(_, end)| *end <= offset);
-    ranges
-        .get(index)
-        .is_some_and(|(start, end)| *start <= offset && offset < *end)
 }

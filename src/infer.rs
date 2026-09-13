@@ -56,7 +56,6 @@ use call_types::{
     CallArgumentInput, CallArguments, CallSite, HirCallView, IndexAccess, KeywordArgument,
     KeywordArgumentInput, OwnedCallInput,
 };
-use cfg_transfer::{CfgFallbackCounters, CfgFallbackKind};
 use context::ProgramContext;
 use declarations::{AccessorKind, DeclarationState, MethodRegistrar, Visibility};
 pub use environment::Environment;
@@ -252,7 +251,7 @@ pub(crate) fn check_with_policies(
             annotations.assertions.len()
         );
     }
-    let program = ProgramContext::new(bytes, hir_program, cfg_graphs, rbi_ranges, annotations);
+    let program = ProgramContext::new(bytes, hir_program, cfg_graphs, annotations);
     let analyzer = Analyzer {
         program,
         config,
@@ -303,7 +302,6 @@ pub(crate) fn check_with_policies(
         cfg_transfer_calls: 0,
         cfg_transfer_assignments: 0,
         cfg_transfer_values: 0,
-        cfg_transfer_fallbacks: CfgFallbackCounters::default(),
         cfg_preflight_failures: HashMap::new(),
     };
     let result = analyzer.run(&root);
@@ -373,7 +371,6 @@ struct Analyzer<'src> {
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
     cfg_transfer_values: usize,
-    cfg_transfer_fallbacks: CfgFallbackCounters,
     cfg_preflight_failures: HashMap<hir::BodyId, Option<(hir::Span, String)>>,
 }
 
@@ -419,9 +416,7 @@ where
 /// Mutable analyzer state that an owned CFG body is allowed to touch while it
 /// is being interpreted. A transfer can fail after evaluating several
 /// operations, so a failed body must restore all semantic products before the
-/// legacy evaluator takes over. Telemetry is included here as well: failed
-/// attempts are not successful owned transfers and are counted separately by
-/// the caller after rollback.
+/// failure is surfaced to the owned evaluator.
 pub(super) struct CfgTransferSnapshot {
     declarations: CowState<DeclarationState>,
     reachable_method_definitions: CowState<BTreeSet<hir::DeclId>>,
@@ -462,7 +457,6 @@ pub(super) struct CfgTransferSnapshot {
     cfg_transfer_calls: usize,
     cfg_transfer_assignments: usize,
     cfg_transfer_values: usize,
-    cfg_transfer_fallbacks: CfgFallbackCounters,
 }
 
 impl<'src> Analyzer<'src> {
@@ -507,7 +501,6 @@ impl<'src> Analyzer<'src> {
             cfg_transfer_calls: self.cfg_transfer_calls,
             cfg_transfer_assignments: self.cfg_transfer_assignments,
             cfg_transfer_values: self.cfg_transfer_values,
-            cfg_transfer_fallbacks: self.cfg_transfer_fallbacks.clone(),
         }
     }
 
@@ -551,6 +544,5 @@ impl<'src> Analyzer<'src> {
         self.cfg_transfer_calls = snapshot.cfg_transfer_calls;
         self.cfg_transfer_assignments = snapshot.cfg_transfer_assignments;
         self.cfg_transfer_values = snapshot.cfg_transfer_values;
-        self.cfg_transfer_fallbacks = snapshot.cfg_transfer_fallbacks;
     }
 }

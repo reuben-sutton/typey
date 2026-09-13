@@ -338,7 +338,7 @@ impl<'src> Analyzer<'src> {
         if let Some(program) = node.as_program_node() {
             if self.config.enable_cfg {
                 if let Some(body_id) = self.program.hir_body_ids.get(&prism::span(node)).copied() {
-                    if let Some(result) = self.eval_cfg_body_owned(
+                    if let Ok(result) = self.eval_cfg_body_owned(
                         self.owned_body_site(body_id),
                         body_id,
                         environment,
@@ -347,6 +347,7 @@ impl<'src> Analyzer<'src> {
                         return result;
                     }
                 }
+                return self.cfg_unsupported_result(node, "program body");
             }
             let result = self.eval_statements(&program.statements(), environment);
             return Eval {
@@ -357,6 +358,19 @@ impl<'src> Analyzer<'src> {
             };
         }
         if let Some(statements) = node.as_statements_node() {
+            if self.config.enable_cfg {
+                if let Some(body_id) = self.program.hir_body_ids.get(&prism::span(node)).copied() {
+                    if let Ok(result) = self.eval_cfg_body_owned(
+                        self.owned_body_site(body_id),
+                        body_id,
+                        environment,
+                        true,
+                    ) {
+                        return result;
+                    }
+                }
+                return self.cfg_unsupported_result(node, "statements body");
+            }
             let result = self.eval_statements(&statements, environment);
             return Eval {
                 type_: self.record(node, result.type_),
@@ -463,15 +477,24 @@ impl<'src> Analyzer<'src> {
             }
         }
         if let Some((target, value, operator)) = self.hir_assignment_for_node(node) {
-            if self.config.enable_cfg && self.has_cfg_assignment_operation(node) {
-                return self.transfer_cfg_assignment(node, target, value, operator, environment);
-            }
             if self.config.enable_cfg {
-                self.record_cfg_fallback(node, "assignment", CfgFallbackKind::UnsupportedOperation);
+                if self.has_cfg_assignment_operation(node) {
+                    return self.transfer_cfg_assignment(
+                        node,
+                        target,
+                        value,
+                        operator,
+                        environment,
+                    );
+                }
+                return self.cfg_unsupported_result(node, "assignment");
             }
             return self.eval_hir_assignment(node, target, value, operator, environment);
         }
         if let Some(call) = node.as_call_node() {
+            if self.config.enable_cfg {
+                return self.cfg_unsupported_result(node, "call");
+            }
             let hir_call = self.hir_call_view(node, call).unwrap_or_else(|| {
                 let (start, end) = prism::span(node);
                     panic!(
@@ -486,6 +509,9 @@ impl<'src> Analyzer<'src> {
             return self.eval_call_result(node, &hir_call, environment);
         }
         if let Some(multi) = node.as_multi_write_node() {
+            if self.config.enable_cfg {
+                return self.cfg_unsupported_result(node, "multi-assignment");
+            }
             let previous_expected_return = self.expected_return_type.take();
             let previous_preserve_literal_tuples = self.preserve_literal_tuples;
             self.preserve_literal_tuples = true;
@@ -543,6 +569,9 @@ impl<'src> Analyzer<'src> {
             }
             result.type_ = self.record(node, result.type_.clone());
             return result;
+        }
+        if self.config.enable_cfg {
+            return self.cfg_unsupported_result(node, "expression");
         }
         if let Some(read) = node.as_class_variable_read_node() {
             let actual = self.class_var_type(environment, &prism::constant_name(read.name()));

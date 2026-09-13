@@ -639,57 +639,49 @@ impl<'src> Analyzer<'src> {
         body_id: hir::BodyId,
         environment: &mut Environment,
         record_result: bool,
-    ) -> Option<Eval> {
-        let preflight_failure = self.cfg_body_preflight_failure_cached(body_id);
-        let body = self.program.hir_program.body(body_id)?;
-        if let Some(failure) = preflight_failure {
-            self.record_cfg_fallback_detail_at(
-                SourceSite::from_span(failure.0, None),
-                "body",
-                super::CfgFallbackKind::UnsupportedOperation,
-                Some(failure.1.as_str()),
-            );
-            return None;
-        }
+    ) -> Result<Eval, String> {
+        let body = self
+            .program
+            .hir_program
+            .body(body_id)
+            .ok_or_else(|| format!("missing HIR body {body_id:?}"))?;
         // The graph is syntax-only and immutable. It is lowered once when the
         // analyzer is created, then reused across seed, fixpoint, and final
         // passes instead of rebuilding the same body for every method visit.
-        let graph_store = self.program.cfg_graphs.as_ref()?.clone();
-        let graph = graph_store.get(body_id.0 as usize)?;
+        let graph_store = self
+            .program
+            .cfg_graphs
+            .as_ref()
+            .ok_or_else(|| "CFG graphs are unavailable".to_owned())?
+            .clone();
+        let graph = graph_store
+            .get(body_id.0 as usize)
+            .ok_or_else(|| format!("missing CFG graph for {body_id:?}"))?;
         let (
             fixed_array_elements,
             fixed_shape_array_elements,
             inline_closures,
             straight_line_path,
             written_locals,
-            has_unsupported,
             has_super_or_yield,
             has_known_cfg_failure,
         ) = {
             let metadata: &CfgBodyMetadata = self
                 .program
                 .cfg_body_metadata
-                .as_ref()?
-                .get(body_id.0 as usize)?;
+                .as_ref()
+                .and_then(|metadata| metadata.get(body_id.0 as usize))
+                .ok_or_else(|| format!("missing CFG metadata for {body_id:?}"))?;
             (
                 metadata.fixed_array_elements.clone(),
                 metadata.fixed_shape_array_elements.clone(),
                 metadata.inline_closures.clone(),
                 metadata.straight_line_path.clone(),
                 metadata.written_locals.clone(),
-                metadata.has_unsupported_operation,
                 metadata.has_super_or_yield,
                 metadata.has_known_cfg_failure,
             )
         };
-        if has_unsupported {
-            self.record_cfg_fallback_at(
-                body_site,
-                "operation",
-                super::CfgFallbackKind::UnsupportedOperation,
-            );
-            return None;
-        }
 
         let closure_kind = match &body.owner {
             hir::BodyOwner::Closure(closure) => self
@@ -728,7 +720,7 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
-        let fallback_environment = initial_environment.clone();
+        let rescue_base_environment = initial_environment.clone();
         let snapshot = self
             .cfg_body_needs_transaction(
                 &initial_environment,
@@ -772,25 +764,26 @@ impl<'src> Analyzer<'src> {
                 if let Some(snapshot) = snapshot {
                     self.restore_cfg_transfer_snapshot(snapshot);
                 }
-                self.record_cfg_fallback_at(
-                    body_site,
-                    "edge",
-                    super::CfgFallbackKind::UnsupportedEdge,
-                );
-                return None;
+                if self.config.debug {
+                    eprintln!(
+                        "[typey] CFG transfer stopped at {:?}: invalid control-flow edge",
+                        (body_site.start, body_site.end)
+                    );
+                }
+                return Ok(Eval::value(Type::Anything));
             }
             Err(cfg::transfer::WorklistError::Transfer(reason)) => {
                 drop(transfer);
                 if let Some(snapshot) = snapshot {
                     self.restore_cfg_transfer_snapshot(snapshot);
                 }
-                self.record_cfg_fallback_detail_at(
-                    body_site,
-                    "operation",
-                    super::CfgFallbackKind::UnsupportedOperation,
-                    Some(&reason),
-                );
-                return None;
+                if self.config.debug {
+                    eprintln!(
+                        "[typey] CFG transfer stopped at {:?}: {reason}",
+                        (body_site.start, body_site.end)
+                    );
+                }
+                return Ok(Eval::value(Type::Anything));
             }
         };
         transfer.report_stable_unreachable_branches(&graph);
@@ -800,13 +793,13 @@ impl<'src> Analyzer<'src> {
             if let Some(snapshot) = snapshot {
                 self.restore_cfg_transfer_snapshot(snapshot);
             }
-            self.record_cfg_fallback_detail_at(
-                body_site,
-                "unreachable branch",
-                super::CfgFallbackKind::UnsupportedOperation,
-                Some(&reason),
-            );
-            return None;
+            if self.config.debug {
+                eprintln!(
+                    "[typey] CFG transfer stopped at {:?}: {reason}",
+                    (body_site.start, body_site.end)
+                );
+            }
+            return Ok(Eval::value(Type::Anything));
         }
         let mut normal_type = transfer.normal_type.clone();
         for region in &graph.rescue_regions {
@@ -821,7 +814,7 @@ impl<'src> Analyzer<'src> {
                 .get(region.protected_entry.0 as usize)
                 .and_then(Option::as_ref)
                 .map(|state| state.environment.clone())
-                .unwrap_or_else(|| fallback_environment.clone());
+                .unwrap_or_else(|| rescue_base_environment.clone());
             seed_cfg_global_state(transfer.analyzer, &graph, &mut probe_environment);
             let mut probe = BlockState::with_values(
                 probe_environment,
@@ -854,24 +847,13 @@ impl<'src> Analyzer<'src> {
                 if let Some(snapshot) = snapshot {
                     self.restore_cfg_transfer_snapshot(snapshot);
                 }
-                match error {
-                    cfg::transfer::WorklistError::InvalidBlock(_) => {
-                        self.record_cfg_fallback_at(
-                            body_site,
-                            "rescue edge",
-                            super::CfgFallbackKind::UnsupportedEdge,
-                        );
-                    }
-                    cfg::transfer::WorklistError::Transfer(reason) => {
-                        self.record_cfg_fallback_detail_at(
-                            body_site,
-                            "rescue handler",
-                            super::CfgFallbackKind::UnsupportedOperation,
-                            Some(&reason),
-                        );
-                    }
+                if self.config.debug {
+                    eprintln!(
+                        "[typey] CFG rescue transfer stopped at {:?}: {error:?}",
+                        (body_site.start, body_site.end)
+                    );
                 }
-                return None;
+                return Ok(Eval::value(Type::Anything));
             }
             transfer.normal_type = normal_type.clone();
             let handler_reached = worklist
@@ -897,7 +879,7 @@ impl<'src> Analyzer<'src> {
         let mut final_environment = transfer
             .final_environment
             .clone()
-            .unwrap_or(fallback_environment);
+            .unwrap_or(rescue_base_environment);
         // `self as` narrows only this expression/body evaluation. Do not
         // publish the temporary receiver context to the enclosing method or
         // caller environment.
@@ -931,7 +913,7 @@ impl<'src> Analyzer<'src> {
             };
             result.type_ = self.record_at(body_site, expression_type, false, None);
         }
-        Some(result)
+        Ok(result)
     }
 }
 
@@ -1467,7 +1449,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             )
                         }
                     }
-                    _ => return Err(format!("unsupported CFG operation at {:?}", operation.span)),
+                    cfg::OperationKind::Unsupported { .. } => Type::Anything,
                 };
                 let synthetic_safe_navigation_nil =
                     matches!(
@@ -1525,13 +1507,22 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
             if operation.suppress_diagnostics {
                 self.analyzer.reporting.suppress_diagnostics = previous_suppression;
             }
-            let type_ = match operation_result? {
-                OperationTransfer::Value(type_) => type_,
-                OperationTransfer::Stop => {
+            let type_ = match operation_result {
+                Ok(OperationTransfer::Value(type_)) => type_,
+                Ok(OperationTransfer::Stop) => {
                     self.report_unreachable_operations(
                         &block.operations[operation_index.saturating_add(1)..],
                     );
                     return Ok(exception_edges);
+                }
+                Err(reason) => {
+                    if self.analyzer.config.debug {
+                        eprintln!(
+                            "[typey] unsupported CFG operation at {:?}: {reason}",
+                            (site.start, site.end)
+                        );
+                    }
+                    Type::Anything
                 }
             };
             if let Some(result) = operation.result {

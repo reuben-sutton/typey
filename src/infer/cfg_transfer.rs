@@ -1,4 +1,4 @@
-use super::{Analyzer, CallArguments, Environment, OwnedCallInput, SourceSite};
+use super::{Analyzer, CallArguments, Environment, OwnedCallInput};
 use crate::hir;
 use crate::types::Type;
 
@@ -20,59 +20,7 @@ mod patterns;
 mod preflight;
 mod value;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CfgFallbackKind {
-    UnsupportedOperation,
-    UnsupportedEdge,
-    // Retained as an explicit telemetry bucket while the migration is
-    // complete. The owned CFG path must not use it; a future parser bridge
-    // must be visible in the report instead of becoming an unclassified gap.
-    #[allow(dead_code)]
-    LegacyBridge,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct CfgFallbackCounters {
-    pub(super) unsupported_operation: usize,
-    pub(super) unsupported_edge: usize,
-    pub(super) legacy_bridge: usize,
-}
-
-impl CfgFallbackCounters {
-    pub(super) fn record(&mut self, kind: CfgFallbackKind) {
-        let counter = match kind {
-            CfgFallbackKind::UnsupportedOperation => &mut self.unsupported_operation,
-            CfgFallbackKind::UnsupportedEdge => &mut self.unsupported_edge,
-            CfgFallbackKind::LegacyBridge => &mut self.legacy_bridge,
-        };
-        *counter = counter.saturating_add(1);
-    }
-
-    pub(super) fn total(&self) -> usize {
-        self.unsupported_operation
-            .saturating_add(self.unsupported_edge)
-            .saturating_add(self.legacy_bridge)
-    }
-}
-
 impl<'src> Analyzer<'src> {
-    pub(super) fn cfg_body_preflight_failure_cached(
-        &mut self,
-        body_id: hir::BodyId,
-    ) -> Option<(hir::Span, String)> {
-        if let Some(failure) = self.cfg_preflight_failures.get(&body_id) {
-            return failure.clone();
-        }
-        let failure = preflight::body_transfer_failure_ignoring_ranges(
-            &self.program.hir_program,
-            body_id,
-            &self.rbi_ranges,
-        )
-        .map(|failure| (failure.span, failure.reason));
-        self.cfg_preflight_failures.insert(body_id, failure.clone());
-        failure
-    }
-
     pub(super) fn cfg_body_preflight_failure(
         &self,
         body_id: hir::BodyId,
@@ -147,38 +95,6 @@ impl<'src> Analyzer<'src> {
             );
         }
         Ok(result.type_)
-    }
-
-    pub(super) fn record_cfg_fallback_at(
-        &mut self,
-        site: SourceSite,
-        kind: &str,
-        fallback: CfgFallbackKind,
-    ) {
-        self.record_cfg_fallback_detail_at(site, kind, fallback, None);
-    }
-
-    pub(super) fn record_cfg_fallback_detail_at(
-        &mut self,
-        site: SourceSite,
-        kind: &str,
-        fallback: CfgFallbackKind,
-        detail: Option<&str>,
-    ) {
-        self.cfg_transfer_fallbacks.record(fallback);
-        if self.config.debug {
-            if let Some(detail) = detail {
-                eprintln!(
-                    "[typey] CFG fallback for {kind} at {:?}: {detail}",
-                    (site.start, site.end)
-                );
-            } else {
-                eprintln!(
-                    "[typey] CFG fallback for {kind} at {:?}: no owned transfer is available",
-                    (site.start, site.end)
-                );
-            }
-        }
     }
 }
 

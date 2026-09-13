@@ -219,12 +219,14 @@ impl<'src> Analyzer<'src> {
                 closure_environment.bind("it", type_);
             }
         }
-        let body_result = self.eval_cfg_body_owned(
-            SourceSite::from_span(span, None),
-            body_id,
-            &mut closure_environment,
-            false,
-        )?;
+        let body_result = self
+            .eval_cfg_body_owned(
+                SourceSite::from_span(span, None),
+                body_id,
+                &mut closure_environment,
+                false,
+            )
+            .ok()?;
         Some(Type::Proc(signature.params, Box::new(body_result.type_)))
     }
 
@@ -533,7 +535,7 @@ impl<'src> Analyzer<'src> {
             false,
         );
         self.expected_return_type = previous_expected_return;
-        let body_result = body_result?;
+        let body_result = body_result.ok()?;
         self.propagate_block_locals(outer, &captured, &closure_environment);
         Some((body_result, closure_environment))
     }
