@@ -45,6 +45,29 @@ impl<'pr> Visit<'pr> for LocalWriteCollector {
     }
 }
 
+#[derive(Default)]
+struct MayRaiseCollector {
+    possible: bool,
+}
+
+impl<'pr> Visit<'pr> for MayRaiseCollector {
+    fn visit_call_node(&mut self, _node: &ruby_prism::CallNode<'pr>) {
+        self.possible = true;
+    }
+
+    fn visit_super_node(&mut self, _node: &ruby_prism::SuperNode<'pr>) {
+        self.possible = true;
+    }
+
+    fn visit_forwarding_super_node(&mut self, _node: &ruby_prism::ForwardingSuperNode<'pr>) {
+        self.possible = true;
+    }
+
+    fn visit_yield_node(&mut self, _node: &ruby_prism::YieldNode<'pr>) {
+        self.possible = true;
+    }
+}
+
 impl<'src> Analyzer<'src> {
     pub(super) fn eval_begin<'node>(
         &mut self,
@@ -93,6 +116,11 @@ impl<'src> Analyzer<'src> {
             let mut rescue_normal_type = rescue_result.normal_type.clone();
             let mut rescue_environment = rescue_environment;
             let rescue_abrupt = rescue_result.abrupt.without(FlowKind::Retry);
+            let body_may_raise = begin.statements().is_some_and(|statements| {
+                let mut collector = MayRaiseCollector::default();
+                collector.visit(&statements.as_node());
+                collector.possible
+            });
             if retrying {
                 // `retry` re-enters the begin body. We do not execute a
                 // second syntax tree traversal here; model the re-entry as a
@@ -114,7 +142,12 @@ impl<'src> Analyzer<'src> {
                 result.abrupt.without(FlowKind::Raise).join(&rescue_abrupt),
                 body_flow.without(FlowKind::Raise).union(rescue_flow),
             );
-            if body_flow.contains(FlowKind::Raise) {
+            // An ordinary send can raise even when the evaluator does not
+            // have a precise exceptional outcome for it. The rescue body is
+            // therefore a possible normal path whenever the protected body
+            // contains a send, yield, or super call; an empty begin remains
+            // definitely non-raising.
+            if body_flow.contains(FlowKind::Raise) || body_may_raise {
                 merged_environment = self.join_flow_environments(
                     &merged_environment,
                     body_flow,
