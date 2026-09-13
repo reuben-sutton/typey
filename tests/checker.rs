@@ -125,6 +125,28 @@ fn accepts_ruby_time_constructor_compatibility_forms() {
 }
 
 #[test]
+fn accepts_block_only_dynamic_eval_on_module_receivers() {
+    let source = std::fs::read_to_string("tests/fixtures/dynamic_eval_module_receiver.rb")
+        .expect("fixture exists");
+    let mut files = load_workspace_paths(&builtin_rbi_paths().expect("vendored RBIs load"))
+        .expect("vendored RBIs load");
+    files.push(WorkspaceFile::new(
+        "dynamic_eval_module_receiver.rb",
+        source,
+    ));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.diagnostic.message.starts_with("Revealed type:"))
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn checks_sorbet_sig_calls() {
     check_fixture("tests/fixtures/sorbet_sig.rb");
     let source = std::fs::read_to_string("tests/fixtures/sorbet_sig.rb").expect("fixture");

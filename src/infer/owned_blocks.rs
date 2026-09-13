@@ -109,7 +109,12 @@ impl<'src> Analyzer<'src> {
     ) -> Option<Eval> {
         if !matches!(
             input.name.as_str(),
-            "class_eval" | "module_eval" | "class_exec" | "instance_eval"
+            "class_eval"
+                | "module_eval"
+                | "class_exec"
+                | "module_exec"
+                | "instance_eval"
+                | "instance_exec"
         ) {
             return None;
         }

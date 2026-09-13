@@ -81,13 +81,23 @@ impl<'src> Analyzer<'src> {
     ) -> Option<Type> {
         if !matches!(
             name,
-            "class_eval" | "module_eval" | "class_exec" | "instance_eval"
+            "class_eval"
+                | "module_eval"
+                | "class_exec"
+                | "module_exec"
+                | "instance_eval"
+                | "instance_exec"
         ) {
             return None;
         }
         if !matches!(name, "instance_eval")
             && !receiver.is_any()
             && Self::class_object_instance_type(receiver).is_none()
+            && !matches!(
+                receiver,
+                Type::Named(name, _)
+                    if super::name_matches(name, "Class") || super::name_matches(name, "Module")
+            )
         {
             return None;
         }
