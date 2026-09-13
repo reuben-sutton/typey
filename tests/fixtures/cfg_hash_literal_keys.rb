@@ -12,7 +12,7 @@ class CfgHashLiteralKeys
   end
 
   #: -> String?
-  def formatter_name # error: Expected method `formatter_name` to return
+  def formatter_name
     options = {
       relative_file_paths: [], #: Array[String]
       formatter_name: nil, #: String?
@@ -37,7 +37,7 @@ T.reveal_type(CfgHashLiteralKeys.new.updated_value) # note: Integer
 
 class CfgIvarHashLiteralKeys
   #: -> Array[String]
-  def relative_file_paths # error: Expected method `relative_file_paths` to return
+  def relative_file_paths
     @options = {
       relative_file_paths: [], #: Array[String]
       ignore_nested_packages: false, #: bool
