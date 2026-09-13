@@ -98,6 +98,22 @@ fn source_overrides_builtin_rbi_method_contracts() {
 }
 
 #[test]
+fn dispatches_object_methods_on_open_generic_values() {
+    let result = check_fixture("tests/fixtures/legacy_predicate_union.rb");
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    let source = std::fs::read_to_string("tests/fixtures/legacy_predicate_union.rb")
+        .expect("fixture exists");
+    let cfg = check(
+        &source,
+        CheckerConfig {
+            enable_cfg: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+}
+
+#[test]
 fn accepts_ruby_time_constructor_compatibility_forms() {
     let source = std::fs::read_to_string("tests/fixtures/time_constructor_compatibility.rb")
         .expect("fixture exists");

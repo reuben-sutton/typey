@@ -1,4 +1,4 @@
-use super::{Analyzer, CallArguments, Environment, MethodKey, SharedKey, SourceSite};
+use super::{name_matches, Analyzer, CallArguments, Environment, MethodKey, SharedKey, SourceSite};
 use crate::prism;
 use crate::types::Type;
 use ruby_prism::Node;
@@ -422,10 +422,21 @@ impl<'src> Analyzer<'src> {
         } else if let Type::AttachedClassOf(owner) = receiver_type {
             (owner.clone(), false)
         } else if let Type::Named(owner, _) = receiver_type {
+            // An unconstrained generic value is still an Object.  This is
+            // important for methods added to Object by an application or a
+            // gem: `T.type_parameter(:V)` may call that contract even though
+            // it cannot call an arbitrary method on V.  `Enumerable::Elem`
+            // is the same open element type emitted for generic collection
+            // blocks, so give it the Object method set as well.
+            let owner = if name_matches(owner, "Enumerable::Elem") {
+                "Object"
+            } else {
+                owner
+            };
             let owner = owner
                 .strip_prefix("T::")
                 .filter(|bare| self.declarations.classes.contains_key(*bare))
-                .map_or_else(|| owner.clone(), str::to_owned);
+                .map_or_else(|| owner.to_owned(), str::to_owned);
             (owner, false)
         } else {
             let owner = match receiver_type {
@@ -450,7 +461,13 @@ impl<'src> Analyzer<'src> {
                 | Type::TypeVar(_)
                 | Type::AttachedClass
                 | Type::AttachedClassOf(_)
-                | Type::BoundProc { .. } => return None,
+                | Type::BoundProc { .. } => {
+                    if matches!(receiver_type, Type::TypeVar(_)) {
+                        "Object"
+                    } else {
+                        return None;
+                    }
+                }
             };
             (owner.to_owned(), false)
         };
