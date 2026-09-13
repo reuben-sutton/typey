@@ -214,7 +214,7 @@ fn transfer_write_inner<'src>(
     }
 }
 
-fn owned_predicate_alias(
+pub(super) fn owned_predicate_alias(
     analyzer: &mut Analyzer<'_>,
     expression: hir::ExprId,
     environment: &Environment,

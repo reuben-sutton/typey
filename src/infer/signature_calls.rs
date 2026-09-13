@@ -88,6 +88,9 @@ impl<'src> Analyzer<'src> {
                         positional_types.get(..start).unwrap_or_default()
                     });
                 changed |= state.observe_arguments(observed_positional_types);
+                if arguments.argument_aliases.len() == positional_types.len() {
+                    changed |= state.observe_parameter_aliases(&arguments.argument_aliases);
+                }
                 if state.accepts_keyword_rest || !state.keywords.is_empty() {
                     for argument in &arguments.keyword_arguments {
                         changed |= state.observe_keyword(&argument.name, &argument.type_);

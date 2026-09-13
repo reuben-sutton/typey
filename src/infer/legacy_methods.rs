@@ -86,6 +86,7 @@ impl<'src> Analyzer<'src> {
             &mut method_environment,
             !state.explicit,
         );
+        self.bind_parameter_aliases(definition.parameters(), &state, &mut method_environment);
         if !state.explicit {
             if let Some(shape) = self.declarations.parameter_shapes.get(&prism::span(node).0) {
                 let mut positional_index = 0;
@@ -265,6 +266,7 @@ impl<'src> Analyzer<'src> {
                 argument_nodes: Vec::new(),
                 argument_sites: Vec::new(),
                 argument_types: types,
+                argument_aliases: Vec::new(),
                 literal_tuple_arguments: Vec::new(),
                 argument_indices: Vec::new(),
                 positional_indices: Vec::new(),
@@ -455,6 +457,60 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
+    }
+
+    fn bind_parameter_aliases<'node>(
+        &self,
+        parameters: Option<ParametersNode<'node>>,
+        state: &MethodState,
+        environment: &mut Environment,
+    ) {
+        let Some(parameters) = parameters else { return };
+        let mut index = 0;
+        for parameter in &parameters.requireds() {
+            self.bind_parameter_alias(&parameter, index, state, environment);
+            index += 1;
+        }
+        for parameter in &parameters.optionals() {
+            self.bind_parameter_alias(&parameter, index, state, environment);
+            index += 1;
+        }
+        if let Some(rest) = parameters.rest() {
+            self.bind_parameter_alias(&rest, index, state, environment);
+            index += 1;
+        }
+        for parameter in &parameters.posts() {
+            self.bind_parameter_alias(&parameter, index, state, environment);
+            index += 1;
+        }
+    }
+
+    fn bind_parameter_alias<'node>(
+        &self,
+        parameter: &Node<'node>,
+        index: usize,
+        state: &MethodState,
+        environment: &mut Environment,
+    ) {
+        let name = parameter
+            .as_required_parameter_node()
+            .map(|parameter| prism::constant_name(parameter.name()))
+            .or_else(|| {
+                parameter
+                    .as_optional_parameter_node()
+                    .map(|parameter| prism::constant_name(parameter.name()))
+            })
+            .or_else(|| {
+                parameter
+                    .as_rest_parameter_node()
+                    .and_then(|parameter| parameter.name().map(prism::constant_name))
+            });
+        let Some(name) = name else { return };
+        let Some(alias) = state.parameter_alias(index).cloned() else {
+            return;
+        };
+        let type_ = environment.get(&name);
+        environment.bind_predicate_alias(name, type_, alias);
     }
 
     fn mark_inferred_parameter<'node>(

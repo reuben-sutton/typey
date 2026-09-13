@@ -102,6 +102,7 @@ impl<'src> Analyzer<'src> {
                         );
                         let type_ = self.record(&node, type_);
                         evaluated.argument_types.push(type_);
+                        evaluated.argument_aliases.push(None);
                         evaluated.argument_indices.push(argument_index);
                         evaluated.keyword_hash_indices.push(argument_index);
                         evaluated.keyword_arguments.extend(keyword_arguments);
@@ -123,6 +124,7 @@ impl<'src> Analyzer<'src> {
                     if let Type::Tuple(elements) = &result.type_ {
                         for type_ in elements {
                             evaluated.argument_types.push(type_.clone());
+                            evaluated.argument_aliases.push(None);
                             evaluated.argument_indices.push(argument_index);
                             evaluated.positional_types.push(type_.clone());
                             evaluated.positional_indices.push(argument_index);
@@ -143,6 +145,10 @@ impl<'src> Analyzer<'src> {
                 CallArgumentInput::Positional { node } => {
                     let result = self.eval_node(&node, environment);
                     evaluated.argument_types.push(result.type_.clone());
+                    evaluated.argument_aliases.push(
+                        self.predicate_alias_for_value(&node, environment)
+                            .filter(|alias| alias.source == "<self>"),
+                    );
                     evaluated.argument_indices.push(argument_index);
                     evaluated.positional_types.push(result.type_);
                     evaluated.positional_indices.push(argument_index);

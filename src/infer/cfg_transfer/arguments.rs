@@ -20,6 +20,7 @@ struct OwnedKeywordArgument {
 pub(super) struct OwnedCallArguments {
     argument_sites: Vec<SourceSite>,
     argument_types: Vec<Type>,
+    argument_aliases: Vec<Option<super::super::PredicateAlias>>,
     literal_tuple_arguments: Vec<Option<Type>>,
     argument_indices: Vec<usize>,
     positional_indices: Vec<usize>,
@@ -54,6 +55,7 @@ impl OwnedCallArguments {
             argument_nodes: Vec::new(),
             argument_sites,
             argument_types: self.argument_types,
+            argument_aliases: self.argument_aliases,
             literal_tuple_arguments: self.literal_tuple_arguments,
             argument_indices: self.argument_indices,
             positional_indices: self.positional_indices,
@@ -111,6 +113,7 @@ impl<'src> Analyzer<'src> {
             let positional_types = state.call_signature().params;
             let mut call_arguments = OwnedCallArguments {
                 argument_types: positional_types.clone(),
+                argument_aliases: vec![None; positional_types.len()],
                 literal_tuple_arguments: vec![None; positional_types.len()],
                 positional_types,
                 forwards_arguments: true,
@@ -241,6 +244,7 @@ impl<'src> Analyzer<'src> {
                     .apply_inline_assertion_at(site, Type::Hash(Box::new(key), Box::new(value)));
                 let hash_type = self.record_at(site, hash_type, false, None);
                 call_arguments.argument_types.push(hash_type);
+                call_arguments.argument_aliases.push(None);
                 call_arguments.literal_tuple_arguments.push(None);
                 call_arguments.argument_indices.push(argument_index);
                 group_start = *group_end;
@@ -266,6 +270,7 @@ impl<'src> Analyzer<'src> {
                 call_arguments.forwarded_positional_start =
                     Some(call_arguments.positional_types.len());
                 call_arguments.argument_types.push(forwarded_type.clone());
+                call_arguments.argument_aliases.push(None);
                 call_arguments.literal_tuple_arguments.push(None);
                 call_arguments.argument_indices.push(argument_index);
                 call_arguments.positional_indices.push(argument_index);
@@ -283,6 +288,7 @@ impl<'src> Analyzer<'src> {
                     for element in elements {
                         let type_ = values.get(element.0 as usize).cloned().flatten()?;
                         call_arguments.argument_types.push(type_.clone());
+                        call_arguments.argument_aliases.push(None);
                         call_arguments.literal_tuple_arguments.push(None);
                         call_arguments.argument_indices.push(argument_index);
                         call_arguments.positional_indices.push(argument_index);
@@ -291,6 +297,7 @@ impl<'src> Analyzer<'src> {
                 } else if let Type::Tuple(elements) = type_ {
                     for type_ in elements {
                         call_arguments.argument_types.push(type_.clone());
+                        call_arguments.argument_aliases.push(None);
                         call_arguments.literal_tuple_arguments.push(None);
                         call_arguments.argument_indices.push(argument_index);
                         call_arguments.positional_indices.push(argument_index);
@@ -310,8 +317,16 @@ impl<'src> Analyzer<'src> {
             else {
                 return None;
             };
+            let hir_value = match &group[0] {
+                hir::Argument::Positional(value) => *value,
+                _ => return None,
+            };
             let type_ = values.get(value.0 as usize).cloned().flatten()?;
             call_arguments.argument_types.push(type_.clone());
+            call_arguments.argument_aliases.push(
+                super::assignment::owned_predicate_alias(self, hir_value, environment)
+                    .filter(|alias| alias.source == "<self>"),
+            );
             call_arguments
                 .literal_tuple_arguments
                 .push(owned_literal_tuple_type(

@@ -22,9 +22,6 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(local) = node.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
-            if environment.is_inferred(&name) {
-                return (true, true);
-            }
             if let Some(truthy) = environment.known_truthiness(&name) {
                 return (truthy, !truthy);
             }
@@ -50,6 +47,9 @@ impl<'src> Analyzer<'src> {
                 } else {
                     (then_reachable, else_reachable)
                 };
+            }
+            if environment.is_inferred(&name) {
+                return (true, true);
             }
             let type_ = environment.get(&name);
             return (
@@ -419,7 +419,7 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(local) = node.as_local_variable_read_node() {
             let name = prism::constant_name(local.name());
-            if environment.is_inferred(&name) {
+            if environment.is_inferred(&name) && environment.predicate_alias(&name).is_none() {
                 return;
             }
             if let Some(alias) = environment.predicate_alias(&name).cloned() {

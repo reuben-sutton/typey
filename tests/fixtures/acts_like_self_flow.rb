@@ -9,6 +9,12 @@ end
 module ActsLikeSelfFlow
   def converted
     time = acts_like?(:time) ? self : nil
+    time_with_zone(time)
+  end
+
+  private
+
+  def time_with_zone(time)
     if time
       time.to_time
     else

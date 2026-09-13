@@ -1,6 +1,6 @@
 use super::{
     method_types::{merge_method_signatures, proc_parts},
-    AccessorKind, Visibility,
+    AccessorKind, PredicateAlias, Visibility,
 };
 use crate::hir;
 use crate::prism;
@@ -33,6 +33,12 @@ impl BlockReceiverBinding {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct MethodState {
     pub(super) params: Vec<Option<Type>>,
+    /// A parameter may preserve a path-sensitive relationship with the
+    /// receiver when every observed call passes the corresponding alias.
+    /// `parameter_alias_seen` distinguishes "no calls observed" from a call
+    /// which did not carry such a relationship.
+    pub(super) parameter_aliases: Vec<Option<PredicateAlias>>,
+    pub(super) parameter_alias_seen: Vec<bool>,
     pub(super) rest_index: Option<usize>,
     pub(super) keywords: Arc<BTreeMap<String, Option<Type>>>,
     pub(super) yield_params: Vec<Option<Type>>,
@@ -89,6 +95,8 @@ impl MethodState {
             .unwrap_or_default();
         Self {
             params: signature.params.iter().cloned().map(Some).collect(),
+            parameter_aliases: vec![None; signature.params.len()],
+            parameter_alias_seen: vec![false; signature.params.len()],
             rest_index: signature.rest_index,
             keywords: Arc::new(
                 signature
@@ -159,8 +167,11 @@ impl MethodState {
                     keywords.insert(prism::constant_name(optional.name()), None);
                 }
             }
+            let parameter_count = params.len();
             return Self {
                 params,
+                parameter_aliases: vec![None; parameter_count],
+                parameter_alias_seen: vec![false; parameter_count],
                 rest_index,
                 keywords: Arc::new(keywords),
                 yield_params: Vec::new(),
@@ -188,6 +199,8 @@ impl MethodState {
 
         Self {
             params,
+            parameter_aliases: Vec::new(),
+            parameter_alias_seen: Vec::new(),
             rest_index,
             keywords: Arc::new(keywords),
             yield_params: Vec::new(),
@@ -263,6 +276,8 @@ impl MethodState {
                 hir::ParameterKind::Block | hir::ParameterKind::Anonymous => {}
             }
         }
+        state.parameter_aliases.resize(state.params.len(), None);
+        state.parameter_alias_seen.resize(state.params.len(), false);
         state
     }
 
@@ -402,6 +417,70 @@ impl MethodState {
             changed |= self.observe_argument(slot_index, actual);
         }
         changed
+    }
+
+    pub(super) fn observe_parameter_aliases(&mut self, aliases: &[Option<PredicateAlias>]) -> bool {
+        if self.explicit {
+            return false;
+        }
+        let mut changed = false;
+        let Some(rest_index) = self.rest_index else {
+            for (index, alias) in aliases.iter().enumerate() {
+                changed |= self.observe_parameter_alias(index, alias.clone());
+            }
+            for index in aliases.len()..self.params.len() {
+                changed |= self.observe_parameter_alias(index, None);
+            }
+            return changed;
+        };
+
+        let post_count = self.params.len().saturating_sub(rest_index + 1);
+        let has_all_posts = aliases.len() >= rest_index + post_count;
+        let post_start = if has_all_posts {
+            aliases.len().saturating_sub(post_count)
+        } else {
+            aliases.len()
+        };
+        for (index, alias) in aliases.iter().enumerate() {
+            let slot_index = if index < rest_index {
+                index
+            } else if has_all_posts && index >= post_start {
+                rest_index + 1 + index - post_start
+            } else {
+                rest_index
+            };
+            changed |= self.observe_parameter_alias(slot_index, alias.clone());
+        }
+        changed
+    }
+
+    fn observe_parameter_alias(&mut self, index: usize, alias: Option<PredicateAlias>) -> bool {
+        if self.explicit {
+            return false;
+        }
+        let (Some(slot), Some(seen)) = (
+            self.parameter_aliases.get_mut(index),
+            self.parameter_alias_seen.get_mut(index),
+        ) else {
+            return false;
+        };
+        if !*seen {
+            *seen = true;
+            *slot = alias;
+            return true;
+        }
+        if *slot == alias {
+            return false;
+        }
+        if slot.is_some() {
+            *slot = None;
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn parameter_alias(&self, index: usize) -> Option<&PredicateAlias> {
+        self.parameter_aliases.get(index).and_then(Option::as_ref)
     }
 
     pub(super) fn observe_keyword(&mut self, name: &str, actual: &Type) -> bool {

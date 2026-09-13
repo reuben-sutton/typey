@@ -463,6 +463,29 @@ impl<'src> Analyzer<'src> {
                 hir::ParameterKind::Forwarded | hir::ParameterKind::Anonymous => {}
             }
         }
+        let mut positional = 0;
+        for parameter in &parameters.parameters {
+            if !matches!(
+                parameter.kind,
+                hir::ParameterKind::Required
+                    | hir::ParameterKind::Optional
+                    | hir::ParameterKind::Rest
+                    | hir::ParameterKind::Post
+            ) {
+                continue;
+            }
+            if let (Some(local), Some(alias)) = (
+                parameter
+                    .local
+                    .and_then(|local| self.program.hir_program.local_name(local))
+                    .map(|name| name.as_str().to_owned()),
+                state.parameter_alias(positional).cloned(),
+            ) {
+                let type_ = environment.get(&local);
+                environment.bind_predicate_alias(local, type_, alias);
+            }
+            positional += 1;
+        }
     }
 
     fn eval_owned_namespace_body(
