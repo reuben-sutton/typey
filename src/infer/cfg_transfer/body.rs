@@ -1128,17 +1128,12 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         let type_ = operation
                             .expression
                             .and_then(|expression_id| {
-                                self.analyzer
-                                    .program
-                                    .hir_program
-                                    .expression(expression_id)
+                                self.analyzer.program.hir_program.expression(expression_id)
                             })
                             .and_then(|expression| match &expression.kind {
-                                hir::ExprKind::Defined { value } => self
-                                    .analyzer
-                                    .program
-                                    .hir_program
-                                    .expression(*value),
+                                hir::ExprKind::Defined { value } => {
+                                    self.analyzer.program.hir_program.expression(*value)
+                                }
                                 _ => None,
                             })
                             .and_then(|expression| match &expression.kind {

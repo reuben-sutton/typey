@@ -3,9 +3,9 @@ use super::{
     ivar_refinement_key, name_matches, AccessorKind, Analyzer, CallSite, Environment, Eval, Flow,
     FlowKind, MethodKey, PredicateAlias,
 };
-use crate::{hir, prism};
 use crate::signature;
 use crate::types::Type;
+use crate::{hir, prism};
 use ruby_prism::{CallNode, Node};
 
 impl<'src> Analyzer<'src> {
