@@ -1793,6 +1793,11 @@ fn accepts_calls_handled_by_method_missing() {
 }
 
 #[test]
+fn keeps_uninitialized_singleton_accessors_nilable() {
+    check_fixture("tests/fixtures/singleton_accessor_nilability.rb");
+}
+
+#[test]
 fn keeps_the_normal_call_type_separate_from_nonlocal_block_returns() {
     check_fixture("tests/fixtures/nonlocal_return_keeps_call_normal_type.rb");
 }

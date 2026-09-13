@@ -209,8 +209,13 @@ impl<'src> Analyzer<'src> {
             return;
         };
         let initialized = environment.method_key.as_ref().is_some_and(|method| {
-            !method.singleton
-                && (method.name == "initialize" || environment.initializes_instance_state)
+            (method.singleton
+                && matches!(
+                    method.name.as_str(),
+                    "<class-body>" | "<module-body>" | "<singleton-body>"
+                ))
+                || (!method.singleton
+                    && (method.name == "initialize" || environment.initializes_instance_state))
         });
         if initialized && self.initialized_ivars.insert(key.clone()) {
             self.fixpoint
@@ -557,7 +562,7 @@ impl<'src> Analyzer<'src> {
     }
 
     fn ivar_type_with_initialization(&self, key: &IvarKey, type_: Type) -> Type {
-        if key.singleton || self.initialized_ivars.contains(key) {
+        if self.initialized_ivars.contains(key) {
             type_
         } else {
             type_.join(&Type::Nil)
