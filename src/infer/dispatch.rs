@@ -640,6 +640,7 @@ impl<'src> Analyzer<'src> {
             },
             Type::Named(class, _) if name_matches(class, "ENV") => match name {
                 "[]" | "fetch" | "[]=" => Type::union([Type::Nil, Type::String]),
+                "to_h" => Type::Hash(Box::new(Type::String), Box::new(Type::String)),
                 _ => self.eval_common_method(name),
             },
             callable @ (Type::Proc(_, _) | Type::BoundProc { .. })

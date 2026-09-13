@@ -313,6 +313,7 @@ pub(super) fn transfer_builtin_call(
         },
         Type::Named(class, _arguments) if name_matches(class, "ENV") => match name {
             "[]" | "fetch" | "[]=" => Some(Type::union([Type::Nil, Type::String])),
+            "to_h" => Some(Type::Hash(Box::new(Type::String), Box::new(Type::String))),
             _ => None,
         },
         Type::Named(class, _arguments)
