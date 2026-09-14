@@ -92,6 +92,7 @@ pub(super) struct MethodRegistrar<'a> {
     declarations: &'a mut DeclarationState,
     attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
     class_type_parameters: &'a BTreeMap<usize, Vec<String>>,
+    class_type_parameter_defaults: &'a BTreeMap<usize, BTreeMap<String, Type>>,
     assertions: &'a BTreeMap<usize, signature::InlineAssertion>,
     class_stack: Vec<String>,
     singleton_stack: Vec<String>,
@@ -109,6 +110,7 @@ impl<'a> MethodRegistrar<'a> {
         declarations: &'a mut DeclarationState,
         attribute_annotations: &'a BTreeMap<usize, Vec<MethodSig>>,
         class_type_parameters: &'a BTreeMap<usize, Vec<String>>,
+        class_type_parameter_defaults: &'a BTreeMap<usize, BTreeMap<String, Type>>,
         assertions: &'a BTreeMap<usize, signature::InlineAssertion>,
     ) -> Self {
         Self {
@@ -118,6 +120,7 @@ impl<'a> MethodRegistrar<'a> {
             declarations,
             attribute_annotations,
             class_type_parameters,
+            class_type_parameter_defaults,
             assertions,
             class_stack: Vec::new(),
             singleton_stack: Vec::new(),
@@ -591,11 +594,19 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
             .class_type_parameters
             .get(&prism::span(&node.as_node()).0)
         {
+            let defaults = self
+                .class_type_parameter_defaults
+                .get(&prism::span(&node.as_node()).0);
             for parameter in parameters {
                 if !info.type_members.contains_key(parameter) {
                     let index = info.type_members.len();
-                    info.type_members
-                        .insert(parameter.clone(), GenericMember { index, fixed: None });
+                    info.type_members.insert(
+                        parameter.clone(),
+                        GenericMember {
+                            index,
+                            fixed: defaults.and_then(|values| values.get(parameter).cloned()),
+                        },
+                    );
                 }
             }
         }

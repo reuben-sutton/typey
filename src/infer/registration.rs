@@ -80,6 +80,7 @@ impl<'src> Analyzer<'src> {
             &mut self.declarations,
             &self.program.annotations.attribute_annotations,
             &self.program.annotations.class_type_parameters,
+            &self.program.annotations.class_type_parameter_defaults,
             &self.program.annotations.assertions,
         );
         registrar.visit(root);

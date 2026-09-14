@@ -4949,6 +4949,10 @@ fn parses_the_supported_advanced_sorbet_type_forms() {
             .expect("benchmark signature parses");
     assert_eq!(benchmark_signature.return_type, Type::Float);
     assert!(!benchmark_signature.is_void);
+    let bare_void =
+        typey::signature::parse_sorbet_signature("sig {void}").expect("bare void signature parses");
+    assert_eq!(bare_void.return_type, Type::Nil);
+    assert!(bare_void.is_void);
     let tap_signature = typey::signature::parse_sorbet_signature(
         "sig do\n\
           params(\n\
@@ -8615,6 +8619,19 @@ Model.new.hierarchy.edge?(:first, :second)
         CheckerConfig::default(),
     );
     assert!(!result.has_errors(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn preserves_rbs_class_type_parameter_defaults() {
+    let result = check_fixture("tests/fixtures/rbs_generic_defaults.rb");
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]

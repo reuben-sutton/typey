@@ -156,6 +156,9 @@ pub struct AnnotationTable {
     pub attribute_annotations: BTreeMap<usize, Vec<MethodSig>>,
     /// RBS class-level type parameters attached to real class declarations.
     pub class_type_parameters: BTreeMap<usize, Vec<String>>,
+    /// Fixed/default values from RBS class-level type parameters, keyed by
+    /// the same class declaration offsets as `class_type_parameters`.
+    pub class_type_parameter_defaults: BTreeMap<usize, BTreeMap<String, Type>>,
     pub assertions: BTreeMap<usize, InlineAssertion>,
     pub signature_errors: Vec<SignatureError>,
 }
@@ -367,10 +370,16 @@ pub fn collect_for_ast(source: &str, root: &Node<'_>) -> AnnotationTable {
             .and_then(|definitions| definitions.first())
         {
             if let Some(text) = pending_rbs.take() {
-                if let Some(parameters) = parse_rbs_type_parameters(&text) {
+                if let Some((parameters, defaults)) = parse_rbs_type_parameters_with_defaults(&text)
+                {
                     table
                         .class_type_parameters
                         .insert(*class_definition, parameters);
+                    if !defaults.is_empty() {
+                        table
+                            .class_type_parameter_defaults
+                            .insert(*class_definition, defaults);
+                    }
                 }
             }
         }
@@ -677,7 +686,7 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
             .collect()
     });
 
-    let is_void = has_top_level_void(&text);
+    let is_void = has_top_level_void(&text) || has_bare_void_signature(&text);
     let is_abstract = text.contains("abstract");
     let return_type = if is_void {
         Type::Nil
@@ -700,6 +709,19 @@ pub fn parse_sorbet_signature(text: &str) -> Option<MethodSig> {
     } else {
         None
     }
+}
+
+fn has_bare_void_signature(text: &str) -> bool {
+    let Some(body) = text.trim().strip_prefix("sig").map(str::trim_start) else {
+        return false;
+    };
+    let Some(open) = body.find('{') else {
+        return false;
+    };
+    let Some(close) = matching_delimiter(body, open, '{', '}') else {
+        return false;
+    };
+    body[open + 1..close].trim() == "void" && body[close + 1..].trim().is_empty()
 }
 
 fn normalize_sorbet_parameter_name(name: &str) -> String {
@@ -939,6 +961,12 @@ fn parse_rbs_type_parameter_name(raw: &str) -> Option<String> {
 /// Parse a class-level RBS declaration such as `[Elem < Object, out Key]`.
 #[must_use]
 pub fn parse_rbs_type_parameters(text: &str) -> Option<Vec<String>> {
+    parse_rbs_type_parameters_with_defaults(text).map(|(parameters, _)| parameters)
+}
+
+fn parse_rbs_type_parameters_with_defaults(
+    text: &str,
+) -> Option<(Vec<String>, BTreeMap<String, Type>)> {
     let text = strip_comment_tail(text.trim());
     if !text.starts_with('[') {
         return None;
@@ -947,11 +975,16 @@ pub fn parse_rbs_type_parameters(text: &str) -> Option<Vec<String>> {
     if !text[close + 1..].trim().is_empty() {
         return None;
     }
-    let parameters = split_top_level(&text[1..close], ',')
-        .into_iter()
-        .filter_map(|parameter| parse_rbs_type_parameter_name(&parameter))
-        .collect::<Vec<_>>();
-    (!parameters.is_empty()).then_some(parameters)
+    let mut parameters = Vec::new();
+    let mut defaults = BTreeMap::new();
+    for parameter in split_top_level(&text[1..close], ',') {
+        let name = parse_rbs_type_parameter_name(&parameter)?;
+        if let Some((_, default)) = parameter.split_once('=') {
+            defaults.insert(name.clone(), parse_type(default.trim()));
+        }
+        parameters.push(name);
+    }
+    (!parameters.is_empty()).then_some((parameters, defaults))
 }
 
 #[must_use]
