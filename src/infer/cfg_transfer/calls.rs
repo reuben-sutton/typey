@@ -12,7 +12,7 @@ fn open_array_append_local(
     input: &OwnedCallInput,
     environment: &Environment,
 ) -> Option<String> {
-    if !matches!(input.name.as_str(), "push" | "<<" | "prepend") {
+    if !matches!(input.name.as_str(), "push" | "<<" | "prepend" | "concat") {
         return None;
     }
     let mut expression = input
@@ -40,7 +40,7 @@ fn open_array_append_local(
                     .then_some(name);
             }
             hir::ExprKind::Call(call)
-                if matches!(call.name.as_str(), "push" | "<<" | "prepend") => {}
+                if matches!(call.name.as_str(), "push" | "<<" | "prepend" | "concat") => {}
             _ => return None,
         }
     }
@@ -166,8 +166,16 @@ pub(super) fn transfer_call(
         cfg::ReceiverOperand::Super | cfg::ReceiverOperand::Yield => environment.self_type.clone(),
     };
     if let Some(local) = open_array_append_local(analyzer, &input, environment) {
-        if let Some(widened) = environment.widen_open_array(&local, &call_arguments.argument_types)
-        {
+        let widen_arguments = if input.name.as_str() == "concat" {
+            call_arguments
+                .argument_types
+                .iter()
+                .map(|argument| analyzer.array_element_type(argument))
+                .collect::<Vec<_>>()
+        } else {
+            call_arguments.argument_types.clone()
+        };
+        if let Some(widened) = environment.widen_open_array(&local, &widen_arguments) {
             receiver_type = widened;
         }
     }
