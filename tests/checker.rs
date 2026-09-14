@@ -6368,6 +6368,16 @@ fn transfers_nested_map_inside_generic_to_h_block_through_cfg() {
 }
 
 #[test]
+fn transfers_array_count_block_parameter_types() {
+    let result = check_fixture("tests/fixtures/array_count_block.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `T::Boolean`")));
+}
+
+#[test]
 fn preserves_pair_tuples_for_hash_from_collection_blocks() {
     let result = check(
         r#"

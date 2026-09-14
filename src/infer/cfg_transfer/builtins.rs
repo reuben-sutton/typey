@@ -785,7 +785,12 @@ fn transfer_array_builtin(
             Some(Type::union([Type::Nil, element.clone()]))
         }
         "sample" => Some(Type::Array(Box::new(element.clone()))),
-        "count" => Some(Type::Integer),
+        "count" => {
+            if input.block.is_some() {
+                let _ = callback(std::slice::from_ref(element))?;
+            }
+            Some(Type::Integer)
+        }
         "select!" | "filter!" | "reject!" => {
             if input.block.is_none() {
                 Some(Type::named("Enumerator"))
