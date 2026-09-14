@@ -1081,7 +1081,10 @@ impl<'src> Analyzer<'src> {
                         .classes
                         .get(owner)
                         .is_some_and(|info| info.type_members.contains_key(name))
-                }) => self.resolve_type_names(type_, owner),
+                }) =>
+            {
+                self.resolve_type_names(type_, owner)
+            }
             Type::Symbol => owner
                 .and_then(|owner| {
                     let resolved = self.resolve_name("Symbol", Some(owner));

@@ -3005,6 +3005,24 @@ fn transfers_nominal_generic_collection_methods_through_owned_cfg() {
 }
 
 #[test]
+fn transfers_array_and_hash_predicate_callback_parameters() {
+    let result = check_fixture("tests/fixtures/collection_predicate_callbacks.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `T::Boolean`")));
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `Integer`")));
+}
+
+#[test]
 fn transfers_core_collection_contracts_through_owned_cfg() {
     let source = r#"
 class Set

@@ -142,13 +142,17 @@ pub(super) fn transfer_builtin_call(
 
     let mut block_result = None;
     let mut callback = |parameters: &[Type]| {
-        analyzer.cfg_owned_block_return_type(
+        let result = analyzer.cfg_owned_block_return_type(
             input,
             parameters,
             &Type::Anything,
             values,
             environment,
-        )
+        );
+        if let Some(result) = result.as_ref() {
+            block_result = Some(result.clone());
+        }
+        result
     };
     let result = match receiver {
         Type::String => match name {
@@ -250,12 +254,26 @@ pub(super) fn transfer_builtin_call(
             "==" | "!=" => Some(Type::bool()),
             _ => None,
         },
-        Type::Array(element) => {
-            transfer_array_builtin(analyzer, input, element, arguments, values, environment)
-        }
+        Type::Array(element) => transfer_array_builtin(
+            analyzer,
+            input,
+            element,
+            arguments,
+            values,
+            environment,
+            &mut block_result,
+        ),
         Type::Tuple(elements) => {
             let element = analyzer.array_element_type(&Type::Tuple(elements.clone()));
-            transfer_array_builtin(analyzer, input, &element, arguments, values, environment)
+            transfer_array_builtin(
+                analyzer,
+                input,
+                &element,
+                arguments,
+                values,
+                environment,
+                &mut block_result,
+            )
         }
         Type::Hash(key, value) => match name {
             "new" => Some(Type::Hash(key.clone(), value.clone())),
@@ -283,13 +301,7 @@ pub(super) fn transfer_builtin_call(
                         },
                     )
                 } else if input.block.is_some() {
-                    let callback = analyzer.cfg_owned_block_return_type(
-                        input,
-                        std::slice::from_ref(key.as_ref()),
-                        &Type::Anything,
-                        values,
-                        environment,
-                    )?;
+                    let callback = callback(std::slice::from_ref(key.as_ref()))?;
                     Some(
                         value
                             .as_ref()
@@ -311,7 +323,11 @@ pub(super) fn transfer_builtin_call(
             "keys" => Some(Type::Array(Box::new(key.as_ref().clone()))),
             "values" => Some(Type::Array(Box::new(value.as_ref().clone()))),
             "length" | "size" => Some(Type::Integer),
-            "empty?" | "include?" | "key?" | "has_key?" | "any?" | "all?" | "none?" => {
+            "empty?" | "include?" | "key?" | "has_key?" => Some(Type::bool()),
+            "any?" | "all?" | "none?" => {
+                if input.block.is_some() {
+                    let _ = callback(&[key.as_ref().clone(), value.as_ref().clone()])?;
+                }
                 Some(Type::bool())
             }
             "to_h" | "dup" | "clone" | "slice" | "except" => {
@@ -369,7 +385,7 @@ pub(super) fn transfer_builtin_call(
                         .skip(1)
                         .find_map(option_parser_option_type)
                         .unwrap_or(Type::Any);
-                    block_result = Some(callback(std::slice::from_ref(&option_type))?);
+                    let _ = callback(std::slice::from_ref(&option_type))?;
                 }
                 Some(Type::named("OptionParser"))
             }
@@ -635,6 +651,7 @@ fn transfer_array_builtin(
     arguments: &CallArguments<'_>,
     values: &[Option<Type>],
     environment: &mut Environment,
+    block_result: &mut Option<Eval>,
 ) -> Option<Type> {
     let name = input.name.as_str();
     let flattened_element = analyzer.flattened_array_element_type(element);
@@ -644,13 +661,17 @@ fn transfer_array_builtin(
         .map(|argument| analyzer.array_element_type(argument))
         .collect::<Vec<_>>();
     let mut callback = |parameters: &[Type]| {
-        analyzer.cfg_owned_block_return_type(
+        let result = analyzer.cfg_owned_block_return_type(
             input,
             parameters,
             &Type::Anything,
             values,
             environment,
-        )
+        );
+        if let Some(result) = result.as_ref() {
+            *block_result = Some(result.clone());
+        }
+        result
     };
     match name {
         "new" => Some(Type::Array(Box::new(element.clone()))),
@@ -697,7 +718,13 @@ fn transfer_array_builtin(
                 .unwrap_or(Type::Any),
         ),
         "length" | "size" => Some(Type::Integer),
-        "empty?" | "include?" | "intersect?" | "any?" | "all?" | "none?" => Some(Type::bool()),
+        "empty?" | "include?" | "intersect?" => Some(Type::bool()),
+        "any?" | "all?" | "none?" => {
+            if input.block.is_some() {
+                let _ = callback(std::slice::from_ref(element))?;
+            }
+            Some(Type::bool())
+        }
         "inspect" | "to_s" => Some(Type::String),
         "compact" => Some(Type::Array(Box::new(element.without(&Type::Nil)))),
         "to_a" | "dup" | "clone" => Some(Type::Array(Box::new(element.clone()))),
