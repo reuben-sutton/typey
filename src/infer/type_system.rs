@@ -1075,6 +1075,13 @@ impl<'src> Analyzer<'src> {
 
     pub(crate) fn resolve_shadowed_builtin_types(&self, type_: &Type, owner: Option<&str>) -> Type {
         match type_ {
+            Type::TypeVar(name)
+                if owner.is_some_and(|owner| {
+                    self.declarations
+                        .classes
+                        .get(owner)
+                        .is_some_and(|info| info.type_members.contains_key(name))
+                }) => self.resolve_type_names(type_, owner),
             Type::Symbol => owner
                 .and_then(|owner| {
                     let resolved = self.resolve_name("Symbol", Some(owner));
