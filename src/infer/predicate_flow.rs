@@ -1,7 +1,7 @@
 use super::method_types::proc_arity_narrowing;
 use super::{
-    ivar_refinement_key, name_matches, AccessorKind, Analyzer, CallSite, Environment, Eval, Flow,
-    FlowKind, MethodKey, PredicateAlias,
+    ivar_refinement_key, name_matches, AccessorKind, Analyzer, Environment, Flow, FlowKind,
+    MethodKey, PredicateAlias,
 };
 use crate::signature;
 use crate::types::Type;
@@ -9,6 +9,18 @@ use crate::{hir, prism};
 use ruby_prism::{CallNode, Node};
 
 impl<'src> Analyzer<'src> {
+    /// Evaluate a parser node only when a legacy helper needs to recover the
+    /// corresponding owned expression. The actual entry point is the HIR/CFG
+    /// dispatcher; this method is not a second semantic evaluator.
+    pub(super) fn node_type<'node>(
+        &mut self,
+        node: &Node<'node>,
+        environment: &Environment,
+    ) -> Type {
+        let mut environment = environment.clone();
+        self.eval_node(node, &mut environment).type_
+    }
+
     pub(super) fn predicate_reachability<'node>(
         &self,
         node: &Node<'node>,
@@ -321,25 +333,6 @@ impl<'src> Analyzer<'src> {
             .rev()
             .find(|byte| !byte.is_ascii_whitespace())
             .is_none_or(|byte| *byte != b'=')
-    }
-
-    pub(super) fn eval_alternative<'node>(
-        &mut self,
-        node: &Node<'node>,
-        environment: &mut Environment,
-    ) -> Eval {
-        if let Some(if_node) = node.as_if_node() {
-            return self.eval_if(node, &if_node, environment);
-        }
-        if let Some(unless) = node.as_unless_node() {
-            return self.eval_unless(node, &unless, environment);
-        }
-        if let Some(else_clause) = node.as_else_node() {
-            if let Some(statements) = else_clause.statements() {
-                return self.eval_statements(&statements, environment);
-            }
-        }
-        self.eval_node(node, environment)
     }
 
     pub(super) fn join_flow_environments(
@@ -796,13 +789,11 @@ impl<'src> Analyzer<'src> {
                     .map(|member| self.meet_predicate_type(member, expected)),
             );
         }
-        if matches!(current, Type::TypeVar(_) | Type::Anything) {
+        if matches!(current, Type::Any | Type::TypeVar(_) | Type::Anything) {
             // A successful runtime class predicate resolves an unsolved
             // generic value for the current path. Intersecting `V` with
             // `Hash` leaves an opaque type variable that cannot dispatch
             // `Hash` methods such as `to_hash` or `map`.
-            expected.clone()
-        } else if self.is_assignable(expected, current) {
             expected.clone()
         } else if self.is_assignable(current, expected) {
             // The current type may be a more precise structural form of the
@@ -811,6 +802,8 @@ impl<'src> Analyzer<'src> {
             // discard its element positions and route `[]` through the
             // unparameterized fallback model.
             current.clone()
+        } else if self.is_assignable(expected, current) {
+            expected.clone()
         } else if Self::definitely_disjoint_class_types(self, current, expected) {
             Type::Never
         } else {
@@ -1234,9 +1227,19 @@ impl<'src> Analyzer<'src> {
         possible: &mut Vec<Type>,
     ) -> bool {
         match type_ {
-            Type::Union(members) => members
-                .iter()
-                .all(|member| self.collect_acts_like_types(member, method, environment, possible)),
+            Type::Union(members) => {
+                // A module method is checked once but may execute with any
+                // of its concrete including hosts. `acts_like?` is true only
+                // for the hosts which implement the requested duck method;
+                // hosts which do not implement it remain on the false path.
+                // Requiring every union member to implement the method loses
+                // that useful partition and widens the whole alias to Any.
+                let mut known = false;
+                for member in members {
+                    known |= self.collect_acts_like_types(member, method, environment, possible);
+                }
+                known
+            }
             Type::Never => true,
             Type::Any | Type::Anything | Type::TypeVar(_) | Type::Intersection(_) => false,
             member => {
@@ -1335,13 +1338,12 @@ impl<'src> Analyzer<'src> {
                 }
             }
         }
-        let site = CallSite {
-            argument_nodes: arguments,
-            argument_types: &[],
-            block: None,
-        };
-        let return_type = self.eval_method_call(&receiver_type, name, &site, environment);
-        !return_type.is_any() && return_type.without(&Type::Nil) == return_type
+        // The old parser evaluator used to make a second, speculative call
+        // here. CFG dispatch is the sole evaluator now; if declaration
+        // lookup could not establish a return contract, this predicate is
+        // not strong enough to prove non-nilability.
+        let _ = (arguments, environment);
+        false
     }
 
     /// A reader generated alongside a writer is a mutable observation, even

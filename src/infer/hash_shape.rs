@@ -67,6 +67,14 @@ impl HashShape {
         }
     }
 
+    pub(super) fn value_type(&self) -> Type {
+        self.entries
+            .values()
+            .chain(self.unknown_value.iter())
+            .cloned()
+            .fold(Type::Never, |current, value| current.join(&value))
+    }
+
     fn insert(&mut self, key: HashKey, value: Type) {
         self.entries.insert(key, value);
     }

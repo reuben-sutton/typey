@@ -1,25 +1,12 @@
 use std::path::Path;
 
-use std::fs;
 use typey::conformance::{check_fixture, expectations, fixture_paths};
 use typey::diagnostic::Severity;
 use typey::CheckerConfig;
 
 fn assert_fixture_matches_expectations(path: &str) {
     let path = Path::new(path);
-    // Keep the ordinary fixture set on the legacy default until the
-    // repository differential gate is green. A fixture whose expectation is
-    // specifically for owned CFG transfer opts in explicitly rather than
-    // relying on its filename.
-    let config = fs::read_to_string(path)
-        .expect("fixture is readable")
-        .lines()
-        .any(|line| line.trim() == "# conformance: cfg");
-    let config = CheckerConfig {
-        enable_cfg: config,
-        ..CheckerConfig::default()
-    };
-    let report = check_fixture(path, config).expect("fixture is readable");
+    let report = check_fixture(path, CheckerConfig::default()).expect("fixture is readable");
     assert!(report.passed(), "{}: {:?}", path.display(), report.failures);
 }
 

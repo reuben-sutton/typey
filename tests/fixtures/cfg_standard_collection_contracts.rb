@@ -1,7 +1,7 @@
 values = [1, 2]
 T.reveal_type(values.zip(["a"])) # note: Revealed type: `T::Array[[Integer, T.nilable(String)]]`
-T.reveal_type([["a"]].flatten) # note: Revealed type: `T::Array[T.untyped]`
-T.reveal_type(values.product(["a"])) # note: Revealed type: `T::Array[T.untyped]`
+T.reveal_type([["a"]].flatten) # note: Revealed type: `T::Array[String]`
+T.reveal_type(values.product(["a"])) # note: Revealed type: `T::Array[[Integer, String]]`
 T.reveal_type(values.sum) # note: Revealed type: `Integer`
 T.reveal_type(values.combination(1)) # note: Revealed type: `T::Enumerator[T::Array[Integer]]`
 T.reveal_type(values.select! { |value| value.even? }) # note: Revealed type: `T.nilable(T::Array[Integer])`

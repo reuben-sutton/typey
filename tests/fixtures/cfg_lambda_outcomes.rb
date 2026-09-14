@@ -10,4 +10,4 @@ break_value = lambda do
   break 7
   "unreachable"
 end
-T.reveal_type(break_value.call) # note: T.untyped
+T.reveal_type(break_value.call) # note: Integer

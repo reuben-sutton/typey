@@ -3,7 +3,7 @@
 # Ruby 3 keyword/hash shorthand must retain the local's concrete type in HIR.
 value = "text"
 options = { value: }
-T.reveal_type(options[:value]) # note: T.untyped
+T.reveal_type(options[:value]) # note: T.nilable(String)
 
 class CfgKeywordShorthand
   #: (value: String) -> String

@@ -205,12 +205,26 @@ impl<'src> Analyzer<'src> {
             // are published, while local effects join the method's normal
             // entry state instead of becoming unconditional assignments.
             let mut default_environment = method_environment.clone();
+            let previous_expected_return = self.expected_return_type.take();
+            self.expected_return_type = match parameter.kind {
+                hir::ParameterKind::Optional => body_signature
+                    .params
+                    .get(parameter_positional_index)
+                    .cloned(),
+                hir::ParameterKind::OptionalKeyword => parameter
+                    .name
+                    .as_ref()
+                    .and_then(|name| body_signature.keywords.get(name.as_str()))
+                    .map(|parameter| parameter.type_.clone()),
+                _ => None,
+            };
             let default_result = self.eval_cfg_body_owned(
                 self.owned_body_site(default_body),
                 default_body,
                 &mut default_environment,
                 true,
             )?;
+            self.expected_return_type = previous_expected_return;
             // Call-site observations describe values supplied by callers, but
             // they are not exhaustive for an optional parameter.  Preserve
             // the value produced by the default path in the method entry
@@ -269,13 +283,14 @@ impl<'src> Analyzer<'src> {
             && !state.is_abstract
             && !self.is_rbi_offset(span.start as usize)
         {
+            let declared_signature = state.call_signature();
             let expected = self.substitute_method_signature(
-                &state.call_signature(),
+                &declared_signature,
                 Some(&method_environment.self_type),
             );
             let invalid_attached_class_context =
-                (Self::contains_attached_class_type(&expected.return_type)
-                    || expected
+                (Self::contains_attached_class_type(&declared_signature.return_type)
+                    || declared_signature
                         .params
                         .iter()
                         .any(Self::contains_attached_class_type))
@@ -356,6 +371,21 @@ impl<'src> Analyzer<'src> {
     ) {
         let mut positional = 0;
         for parameter in &parameters.parameters {
+            if let Some(pattern) = &parameter.pattern {
+                let type_ = signature
+                    .params
+                    .get(positional)
+                    .cloned()
+                    .unwrap_or(Type::Any);
+                super::owned_blocks::bind_owned_parameter_pattern(
+                    self,
+                    pattern,
+                    &type_,
+                    environment,
+                );
+                positional += 1;
+                continue;
+            }
             let local_name = parameter
                 .local
                 .and_then(|local| self.program.hir_program.local_name(local))

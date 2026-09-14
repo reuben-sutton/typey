@@ -1260,6 +1260,9 @@ impl<'src> Analyzer<'src> {
     }
 
     pub(super) fn looks_like_class_name(name: &str) -> bool {
+        if name == "T" {
+            return true;
+        }
         let tail = name.rsplit_once("::").map_or(name, |(_, tail)| tail);
         tail.chars()
             .next()

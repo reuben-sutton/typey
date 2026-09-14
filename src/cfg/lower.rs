@@ -1364,19 +1364,35 @@ impl<'program> Builder<'program> {
     }
 
     fn mark_array_value_fixed_shape(&mut self, value: ValueId) {
-        for block in &mut self.cfg.blocks {
-            for operation in &mut block.operations {
-                if operation.result != Some(value) {
-                    continue;
+        let mut pending = vec![value];
+        let mut seen = HashSet::new();
+        while let Some(value) = pending.pop() {
+            if !seen.insert(value) {
+                continue;
+            }
+            let mut incoming = Vec::new();
+            for block in &mut self.cfg.blocks {
+                for parameter in &block.parameters {
+                    if parameter.value == value {
+                        incoming.extend(parameter.incoming.iter().map(|(_, value)| *value));
+                    }
                 }
-                if let OperationKind::BuildArray {
-                    preserve_fixed_shape,
-                    ..
-                } = &mut operation.kind
-                {
-                    *preserve_fixed_shape = true;
+                for operation in &mut block.operations {
+                    if operation.result != Some(value) {
+                        continue;
+                    }
+                    match &mut operation.kind {
+                        OperationKind::BuildArray {
+                            preserve_fixed_shape,
+                            ..
+                        } => *preserve_fixed_shape = true,
+                        OperationKind::Record { value: Some(value) }
+                        | OperationKind::ApplyAssertion { value } => incoming.push(*value),
+                        _ => {}
+                    }
                 }
             }
+            pending.extend(incoming);
         }
     }
 
@@ -1731,10 +1747,18 @@ impl<'program> Builder<'program> {
                 | hir::AssignTarget::Attribute { .. }
                 | hir::AssignTarget::Index { .. } => None,
             },
-            hir::ExprKind::Call(call) => match call.receiver {
+            // A call's explicit receiver is not generally the value being
+            // discriminated.  The `type` convention is the exception used
+            // by Sorbet-style discriminated unions: `case node.type` must
+            // retain `node` as the source place so the matching arm can
+            // narrow it. Treating arbitrary calls such as `result.code` as
+            // a place would instead bind `result` to the return type of
+            // `code`.
+            hir::ExprKind::Call(call) if call.name.as_str() == "type" => match call.receiver {
                 hir::Receiver::Explicit(receiver) => self.source_place(receiver),
                 _ => None,
             },
+            hir::ExprKind::Call(_) => None,
             _ => None,
         }
     }
@@ -2254,9 +2278,11 @@ impl<'program> Builder<'program> {
                 entry: rescue_entry,
                 exit: after,
                 protected_entry: body_start,
-                may_raise: begin
-                    .body
-                    .is_some_and(|body| self.expression_contains_call(body)),
+                // A rescue/else alternative remains part of the enclosing
+                // expression even when the protected syntax has no obvious
+                // send. Calls hidden behind coercions and overridden
+                // operators can still raise at runtime.
+                may_raise: begin.body.is_some(),
             });
             let exception = self.add_parameter(rescue_entry);
             self.rescues.push(RescueContext {
@@ -2391,17 +2417,6 @@ impl<'program> Builder<'program> {
             .expression(expression)
             .map(|expr| expr.span)
             .unwrap_or(Span::new(hir::FileId(0), 0, 0))
-    }
-
-    fn expression_contains_call(&self, expression: ExprId) -> bool {
-        let Some(root) = self.program.expression(expression) else {
-            return false;
-        };
-        self.program.expressions.iter().any(|candidate| {
-            candidate.span.start >= root.span.start
-                && candidate.span.end <= root.span.end
-                && matches!(candidate.kind, hir::ExprKind::Call(_))
-        })
     }
 }
 

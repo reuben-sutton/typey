@@ -155,6 +155,8 @@ fn transfer_write_inner<'src>(
             } else {
                 actual
             };
+            let type_ =
+                preserve_typed_empty_array_ivar(analyzer, environment, &name, expression, type_);
             let type_ = if logical {
                 type_.without(&Type::Nil)
             } else {
@@ -211,6 +213,48 @@ fn transfer_write_inner<'src>(
             environment.set_hash_shape(format!("\u{1}constant:{}", path.as_str()), hash_shape);
             type_
         }
+    }
+}
+
+fn preserve_typed_empty_array_ivar(
+    analyzer: &mut Analyzer<'_>,
+    environment: &Environment,
+    name: &str,
+    expression: Option<hir::ExprId>,
+    actual: Type,
+) -> Type {
+    let Type::Array(element) = actual else {
+        return actual;
+    };
+    if !element.is_any() {
+        return Type::Array(element);
+    }
+    let Some(hir::ExprKind::Assign { value, .. }) = expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+        .map(|expression| &expression.kind)
+    else {
+        return Type::Array(element);
+    };
+    let Some(hir::ExprKind::Array(elements)) = analyzer
+        .program
+        .hir_program
+        .expression(*value)
+        .map(|expression| &expression.kind)
+    else {
+        return Type::Array(element);
+    };
+    if !elements.is_empty() {
+        return Type::Array(element);
+    }
+    let refinement = ivar_refinement_key(name);
+    let current = if environment.contains(&refinement) {
+        Some(environment.get(&refinement))
+    } else {
+        analyzer.ivar_type(environment, name).into()
+    };
+    match current {
+        Some(Type::Array(element)) if !element.is_any() => Type::Array(element),
+        _ => Type::Array(element),
     }
 }
 

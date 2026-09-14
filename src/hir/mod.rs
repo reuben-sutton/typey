@@ -161,10 +161,25 @@ pub struct Parameter {
     pub name: Option<Name>,
     pub kind: ParameterKind,
     pub span: Span,
+    /// A required block parameter can destructure one callback value into a
+    /// nested tuple of locals, for example `|(name, metadata), index|`.
+    /// Keeping that shape in HIR lets CFG transfer bind the projected types
+    /// without treating the inner locals as independent arguments.
+    pub pattern: Option<ParameterPattern>,
     /// An optional or optional-keyword parameter's default expression is an
     /// owned body so it can be transferred with the same CFG semantics as
     /// the method body. Other parameter kinds have no default body.
     pub default_body: Option<BodyId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParameterPattern {
+    Local(LocalId),
+    Tuple {
+        lefts: Vec<ParameterPattern>,
+        rest: Option<Box<ParameterPattern>>,
+        rights: Vec<ParameterPattern>,
+    },
 }
 
 /// The parameter list for a body or closure.
@@ -205,6 +220,7 @@ pub enum Literal {
     Symbol(String),
     RegularExpression(String),
     XString(String),
+    Encoding,
 }
 
 /// Reads of values that are not method calls.

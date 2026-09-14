@@ -181,6 +181,16 @@ impl<'src> Analyzer<'src> {
         let mut closure_environment = outer.clone();
         let mut positional_index = 0;
         for parameter in &parameters.parameters {
+            if let Some(pattern) = &parameter.pattern {
+                let type_ = signature
+                    .params
+                    .get(positional_index)
+                    .cloned()
+                    .unwrap_or(Type::Any);
+                bind_owned_parameter_pattern(self, pattern, &type_, &mut closure_environment);
+                positional_index += 1;
+                continue;
+            }
             let type_ = match parameter.kind {
                 hir::ParameterKind::Required
                 | hir::ParameterKind::Optional
@@ -599,7 +609,11 @@ fn bind_owned_parameters(
         .iter()
         .filter(|parameter| parameter.kind == hir::ParameterKind::Required)
         .count();
-    let destructured = if required_parameters > 1 {
+    let has_nested_pattern = parameters
+        .parameters
+        .iter()
+        .any(|parameter| parameter.pattern.is_some());
+    let destructured = if !has_nested_pattern && required_parameters > 1 {
         match expected {
             [Type::Tuple(elements)] => Some(elements.clone()),
             [Type::Array(_)] => {
@@ -625,6 +639,12 @@ fn bind_owned_parameters(
     }
     let mut positional_index = 0;
     for parameter in &parameters.parameters {
+        if let Some(pattern) = &parameter.pattern {
+            let type_ = expected.get(positional_index).cloned().unwrap_or(Type::Any);
+            bind_owned_parameter_pattern(analyzer, pattern, &type_, environment);
+            positional_index += 1;
+            continue;
+        }
         let type_ = match parameter.kind {
             hir::ParameterKind::Required
             | hir::ParameterKind::Optional
@@ -665,6 +685,55 @@ fn bind_owned_parameters(
         }
         if positional_index == 1 && parameter.name.is_none() {
             environment.bind("it", type_);
+        }
+    }
+}
+
+pub(super) fn bind_owned_parameter_pattern(
+    analyzer: &Analyzer<'_>,
+    pattern: &hir::ParameterPattern,
+    expected: &Type,
+    environment: &mut Environment,
+) {
+    match pattern {
+        hir::ParameterPattern::Local(local) => {
+            if let Some(name) = analyzer.program.hir_program.local_name(*local) {
+                environment.bind(name.as_str().to_owned(), expected.clone());
+            }
+        }
+        hir::ParameterPattern::Tuple {
+            lefts,
+            rest,
+            rights,
+        } => {
+            let known_length = match expected {
+                Type::Tuple(elements) => Some(elements.len()),
+                _ => None,
+            };
+            for (index, pattern) in lefts.iter().enumerate() {
+                let type_ = analyzer.multi_assignment_element_type(expected, index, known_length);
+                bind_owned_parameter_pattern(analyzer, pattern, &type_, environment);
+            }
+            if let Some(pattern) = rest {
+                let element = analyzer.array_element_type(expected);
+                bind_owned_parameter_pattern(
+                    analyzer,
+                    pattern,
+                    &Type::Array(Box::new(element)),
+                    environment,
+                );
+            }
+            let right_start = known_length
+                .map(|length| length.saturating_sub(rights.len()))
+                .unwrap_or(lefts.len());
+            for (index, pattern) in rights.iter().enumerate() {
+                let type_ = analyzer.multi_assignment_element_type(
+                    expected,
+                    right_start + index,
+                    known_length,
+                );
+                bind_owned_parameter_pattern(analyzer, pattern, &type_, environment);
+            }
         }
     }
 }

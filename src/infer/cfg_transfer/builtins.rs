@@ -131,6 +131,16 @@ pub(super) fn transfer_builtin_call(
         }
     }
 
+    if name == "strongly_connected_components"
+        && matches!(receiver, Type::Named(class, _) if analyzer.nominal_subtype(class, "TSort"))
+    {
+        let node = tsort_method_yield_type(analyzer, receiver, "tsort_each_node")
+            .or_else(|| tsort_method_parameter_type(analyzer, receiver, "tsort_each_child"))
+            .unwrap_or(Type::Any);
+        return Some((Type::Array(Box::new(Type::Array(Box::new(node)))), None));
+    }
+
+    let mut block_result = None;
     let mut callback = |parameters: &[Type]| {
         analyzer.cfg_owned_block_return_type(
             input,
@@ -252,14 +262,26 @@ pub(super) fn transfer_builtin_call(
             "[]" => {
                 let literal_key = owned_hash_key(analyzer, input);
                 Some(match (literal_key, hash_shape) {
-                    (Some(key), Some(hash_shape)) => hash_shape.value_for(&key),
+                    (Some(key), Some(hash_shape))
+                        if hash_shape.entries.contains_key(&key)
+                            || hash_shape.unknown_value.is_some() =>
+                    {
+                        hash_shape.value_for(&key)
+                    }
+                    (Some(_), Some(_)) => Type::union([Type::Nil, value.as_ref().clone()]),
                     _ => Type::union([Type::Nil, value.as_ref().clone()]),
                 })
             }
             "default" | "dig" => Some(Type::union([Type::Nil, value.as_ref().clone()])),
             "fetch" => {
                 if let Some(default) = arguments.argument_types.get(1) {
-                    Some(value.as_ref().clone().join(default))
+                    Some(
+                        if matches!(default, Type::Array(element) if element.is_any()) {
+                            value.as_ref().clone()
+                        } else {
+                            value.as_ref().clone().join(default)
+                        },
+                    )
                 } else if input.block.is_some() {
                     let callback = analyzer.cfg_owned_block_return_type(
                         input,
@@ -292,8 +314,21 @@ pub(super) fn transfer_builtin_call(
             "empty?" | "include?" | "key?" | "has_key?" | "any?" | "all?" | "none?" => {
                 Some(Type::bool())
             }
-            "to_h" | "dup" | "clone" | "merge" | "merge!" | "update" | "reverse_merge"
-            | "slice" | "except" => Some(Type::Hash(key.clone(), value.clone())),
+            "to_h" | "dup" | "clone" | "slice" | "except" => {
+                Some(Type::Hash(key.clone(), value.clone()))
+            }
+            "merge" | "merge!" | "update" | "reverse_merge" => {
+                let (key, value) = arguments.argument_types.iter().fold(
+                    (key.as_ref().clone(), value.as_ref().clone()),
+                    |(key_type, value_type), argument| match argument {
+                        Type::Hash(argument_key, argument_value) => {
+                            (key_type.join(argument_key), value_type.join(argument_value))
+                        }
+                        _ => (key_type, value_type),
+                    },
+                );
+                Some(Type::Hash(Box::new(key), Box::new(value)))
+            }
             "compact" => Some(Type::Hash(
                 key.clone(),
                 Box::new(value.as_ref().clone().without(&Type::Nil)),
@@ -334,7 +369,7 @@ pub(super) fn transfer_builtin_call(
                         .skip(1)
                         .find_map(option_parser_option_type)
                         .unwrap_or(Type::Any);
-                    let _ = callback(std::slice::from_ref(&option_type))?;
+                    block_result = Some(callback(std::slice::from_ref(&option_type))?);
                 }
                 Some(Type::named("OptionParser"))
             }
@@ -468,6 +503,7 @@ pub(super) fn transfer_builtin_call(
                 _ => None,
             }
         }
+        Type::Symbol if matches!(name, "to_sym" | "intern") => Some(Type::Symbol),
         Type::Symbol if name == "name" => Some(Type::String),
         Type::Nil | Type::True | Type::False | Type::Object | Type::Named(_, _)
             if matches!(name, "to_s" | "inspect") =>
@@ -498,7 +534,27 @@ pub(super) fn transfer_builtin_call(
         }
         _ => None,
     }?;
-    Some((result, None))
+    Some((result, block_result))
+}
+
+fn tsort_method_yield_type(analyzer: &Analyzer<'_>, receiver: &Type, name: &str) -> Option<Type> {
+    analyzer
+        .receiver_method_key(None, receiver, name, &super::super::Environment::default())
+        .and_then(|key| analyzer.resolve_method_key(&key))
+        .and_then(|key| analyzer.declarations.methods.get(&key))
+        .and_then(|method| method.yield_params.first().cloned().flatten())
+}
+
+fn tsort_method_parameter_type(
+    analyzer: &Analyzer<'_>,
+    receiver: &Type,
+    name: &str,
+) -> Option<Type> {
+    analyzer
+        .receiver_method_key(None, receiver, name, &super::super::Environment::default())
+        .and_then(|key| analyzer.resolve_method_key(&key))
+        .and_then(|key| analyzer.declarations.methods.get(&key))
+        .and_then(|method| method.params.first().cloned().flatten())
 }
 
 fn option_parser_option_type(type_: &Type) -> Option<Type> {
@@ -647,14 +703,20 @@ fn transfer_array_builtin(
         "to_a" | "dup" | "clone" => Some(Type::Array(Box::new(element.clone()))),
         "flatten" => Some(Type::Array(Box::new(flattened_element))),
         "uniq" => Some(Type::Array(Box::new(element.clone()))),
-        "to_set" => Some(Type::Named("Set".to_owned(), vec![element.clone()])),
+        "to_set" => Some(Type::Named("T::Set".to_owned(), vec![element.clone()])),
         "to_h" => {
             let (key, value) = Analyzer::pair_types(element)?;
             Some(Type::Hash(Box::new(key), Box::new(value)))
         }
         "fetch" => {
             if let Some(default) = arguments.argument_types.get(1) {
-                Some(element.join(default))
+                Some(
+                    if matches!(default, Type::Array(default_element) if default_element.is_any()) {
+                        element.clone()
+                    } else {
+                        element.join(default)
+                    },
+                )
             } else if input.block.is_some() {
                 let callback = analyzer.cfg_owned_block_return_type(
                     input,
@@ -743,7 +805,10 @@ fn transfer_array_builtin(
         }
         "combination" | "repeated_combination" | "permutation" | "repeated_permutation" => {
             if input.block.is_none() {
-                Some(Type::named("Enumerator"))
+                Some(Type::Named(
+                    "T::Enumerator".to_owned(),
+                    vec![Type::Array(Box::new(element.clone()))],
+                ))
             } else {
                 let expected = Type::Array(Box::new(element.clone()));
                 let _ = callback(std::slice::from_ref(&expected))?;
@@ -763,7 +828,14 @@ fn transfer_array_builtin(
         }
         "zip" => {
             let mut tuple = vec![element.clone()];
-            tuple.extend(argument_elements);
+            // Arrays are allowed to have different lengths. Ruby pads a
+            // missing element from a shorter argument with nil, so the
+            // element type of every additional tuple position is nilable.
+            tuple.extend(
+                argument_elements
+                    .into_iter()
+                    .map(|argument| Type::union([Type::Nil, argument])),
+            );
             Some(Type::Array(Box::new(Type::Tuple(tuple))))
         }
         "sum" => {

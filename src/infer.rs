@@ -5,57 +5,42 @@ use crate::hir;
 use crate::prism;
 use crate::signature::{self, AssertionKind, MethodSig};
 use crate::types::Type;
-use ruby_prism::{ArgumentsNode, CallNode, Node, Visit};
+use ruby_prism::{Node, Visit};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-mod arguments;
-mod assignments;
-mod blocks;
-mod builtins;
-mod call_dispatch;
 mod call_types;
-mod calls;
-mod case_flow;
 mod cfg_state;
 mod cfg_transfer;
 mod context;
-mod control_flow;
 mod declarations;
 mod dispatch;
 mod environment;
-mod exceptions;
 mod fixpoint;
 mod flow;
 mod framework_hooks;
 mod hash_shape;
-mod intrinsics;
 mod keys;
-mod legacy_bridge;
-mod legacy_eval;
-mod legacy_methods;
-mod legacy_patterns;
 mod method_lookup;
 mod method_state;
 mod method_types;
 mod owned_blocks;
 mod owned_definitions;
+mod owned_support;
 mod predicate_flow;
+mod prism_dispatch;
 mod registration;
 mod runner;
 mod shared_state;
 mod signature_calls;
 mod source;
+mod source_bridge;
 mod type_resolution;
 mod type_system;
 
-use call_types::{
-    hir_call_argument_inputs, prism_call_argument_inputs, CallArgumentEvaluation,
-    CallArgumentInput, CallArguments, CallSite, HirCallView, IndexAccess, KeywordArgument,
-    KeywordArgumentInput, OwnedCallInput,
-};
+use call_types::{CallArguments, KeywordArgument, OwnedCallInput};
 use context::ProgramContext;
 use declarations::{AccessorKind, DeclarationState, MethodRegistrar, Visibility};
 pub use environment::Environment;
@@ -65,7 +50,7 @@ use flow::{Eval, Flow, FlowKind, OutcomeTypes};
 use keys::{
     ivar_refinement_key, name_matches, nominal_name, ClassVarKey, IvarKey, MethodKey, SharedKey,
 };
-use method_state::{BlockReceiverBinding, MethodState};
+use method_state::MethodState;
 use method_types::{
     apply_parameter_shape, optional_proc_type, proc_parts, proc_receiver, ParameterShape,
 };
@@ -92,10 +77,6 @@ pub struct CheckerConfig {
     pub strictness: Strictness,
     /// Emit phase and progress information to stderr while checking.
     pub debug: bool,
-    /// Compile owned HIR bodies into CFGs for the in-progress differential
-    /// migration. The default remains off until CFG transfer replaces the
-    /// recursive evaluator for all supported bodies.
-    pub enable_cfg: bool,
 }
 
 impl Default for CheckerConfig {
@@ -103,7 +84,6 @@ impl Default for CheckerConfig {
         Self {
             strictness: Strictness::Ignore,
             debug: false,
-            enable_cfg: false,
         }
     }
 }
@@ -157,18 +137,6 @@ impl CheckResult {
             .iter()
             .any(|diagnostic| diagnostic.severity == crate::diagnostic::Severity::Error)
     }
-}
-
-enum IndexAssignmentKind {
-    Operator(String),
-    And,
-    Or,
-}
-
-enum CallAssignmentKind {
-    Operator(String),
-    And,
-    Or,
 }
 
 fn trim_ascii_whitespace(bytes: &[u8]) -> &[u8] {
@@ -225,9 +193,9 @@ pub(crate) fn check_with_policies(
     let root = parsed.node();
     let hir_program = hir::lower(hir::FileId(0), bytes);
     let signature_declaration_bodies = hir_program.signature_declaration_body_ids();
-    let cfg_graphs = config
-        .enable_cfg
-        .then(|| Arc::<[cfg::Cfg]>::from(cfg::lower::build_all_for_index(&hir_program)));
+    let cfg_graphs = Some(Arc::<[cfg::Cfg]>::from(cfg::lower::build_all_for_index(
+        &hir_program,
+    )));
     let annotations = signature::collect_for_ast(source, &root);
     let mut diagnostics = parsed
         .errors()

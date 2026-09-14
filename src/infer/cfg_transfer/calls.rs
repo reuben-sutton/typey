@@ -183,6 +183,16 @@ pub(super) fn transfer_call(
         environment,
     ) {
         result
+    } else if input.name.as_str() == "class" {
+        // `Object#class` is a runtime operation whose result is determined by
+        // the receiver value.  A generic RBI declaration for `class` can
+        // otherwise win before receiver dispatch and expose its unresolved
+        // type parameter (for example `T::Array[T.untyped]` for `[1].class`).
+        // Keep the concrete runtime class contract ahead of that declaration.
+        let type_ = analyzer
+            .eval_node_helpers_method(&receiver_type, "class", &[])
+            .unwrap_or(Type::Any);
+        (type_, UntypedOrigin::InferredMethod)
     } else if let Some((type_, declaration_block)) =
         analyzer.cfg_declaration_call(&input, &receiver_type, values, environment)
     {
@@ -255,7 +265,7 @@ pub(super) fn transfer_call(
             }
         }
         if receiver.missing_method
-            && !is_static_type_receiver(&dispatch_receiver)
+            && static_type_receiver.is_none()
             && type_expression_receiver.is_none()
         {
             analyzer.report_missing_method_if_needed_at(
@@ -500,25 +510,8 @@ fn refine_nonempty_array_result(
     result
 }
 
-fn is_static_type_receiver(receiver: &Type) -> bool {
-    match receiver {
-        Type::Named(name, _) | Type::TypeVar(name)
-            if name == "T" || name.starts_with("T::Types::") =>
-        {
-            true
-        }
-        _ => Analyzer::class_object_instance_type(receiver).is_some_and(|instance| {
-            matches!(
-                instance,
-                Type::Named(name, _) | Type::TypeVar(name)
-                    if name == "T" || name.starts_with("T::Types::")
-            )
-        }),
-    }
-}
-
 fn update_hash_shape_after_call(
-    analyzer: &Analyzer<'_>,
+    analyzer: &mut Analyzer<'_>,
     input: &OwnedCallInput,
     receiver_value: Option<cfg::ValueId>,
     arguments: &super::super::CallArguments<'_>,
@@ -535,6 +528,45 @@ fn update_hash_shape_after_call(
         .or_else(|| super::builtins::owned_hash_key(analyzer, input));
     let value = arguments.argument_types.last().cloned();
     let read = hash_receiver_read(analyzer, input);
+    if let (Some(key), Some(value)) = (key.as_ref(), value.as_ref()) {
+        let shape = hash_shapes
+            .get(receiver_value.0 as usize)
+            .and_then(Option::as_ref)
+            .or_else(|| {
+                read.as_ref()
+                    .and_then(|read| super::assignment::hash_shape_key_for_read(analyzer, read))
+                    .and_then(|storage_key| environment.hash_shape(&storage_key))
+            });
+        if let Some(shape) = shape {
+            if shape.entries.contains_key(key) {
+                // Sorbet checks an indexed write against the hash's aggregate
+                // value contract, not only the currently known value for that
+                // key. A literal hash can therefore accept any value already
+                // represented by one of its other entries.
+                let expected = shape.value_type();
+                if !analyzer.is_assignable(value, &expected) {
+                    analyzer.error_at(
+                        input.site,
+                        format!("Expected `{expected}`, but found `{value}`"),
+                    );
+                    return;
+                }
+            }
+        }
+    }
+    let widen_aggregate = key.as_ref().map_or(true, |key| {
+        let shape = hash_shapes
+            .get(receiver_value.0 as usize)
+            .and_then(Option::as_ref)
+            .or_else(|| {
+                read.as_ref()
+                    .and_then(|read| super::assignment::hash_shape_key_for_read(analyzer, read))
+                    .and_then(|storage_key| environment.hash_shape(&storage_key))
+            });
+        shape
+            .map(|shape| !shape.entries.contains_key(key))
+            .unwrap_or(true)
+    });
     if let Some(value) = value {
         if let Some(key) = key {
             if let Some(shape) = hash_shapes
@@ -555,10 +587,12 @@ fn update_hash_shape_after_call(
                 }
             }
         }
-        if let Some(hir::Read::Local(local)) = read.as_ref() {
-            if let Some(name) = analyzer.program.hir_program.local_name(*local) {
-                if let Some(key_type) = arguments.argument_types.first().cloned() {
-                    environment.widen_hash_local(name.as_str(), key_type, value);
+        if widen_aggregate {
+            if let Some(hir::Read::Local(local)) = read.as_ref() {
+                if let Some(name) = analyzer.program.hir_program.local_name(*local) {
+                    if let Some(key_type) = arguments.argument_types.first().cloned() {
+                        environment.widen_hash_local(name.as_str(), key_type, value.clone());
+                    }
                 }
             }
         }

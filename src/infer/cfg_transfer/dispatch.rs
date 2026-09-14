@@ -7,6 +7,7 @@
 //! leaves the surrounding CFG transfer independent of individual receiver
 //! models.
 
+use super::super::declarations::Visibility;
 use super::super::hash_shape::HashShape;
 use super::super::{
     name_matches, optional_proc_type, proc_parts, Analyzer, CallArguments, Environment, Eval,
@@ -54,6 +55,23 @@ fn transfer_receiver_call_with_substitution(
     hash_shape: Option<&HashShape>,
 ) -> Result<ReceiverTransfer, String> {
     let name = input.name.as_str();
+    if name == "class" {
+        let class_name = match receiver {
+            Type::Array(_) | Type::Tuple(_) => Some("Array"),
+            Type::Hash(_, _) => Some("Hash"),
+            Type::Named(class, _) if name_matches(class, "Array") => Some("Array"),
+            Type::Named(class, _) if name_matches(class, "Hash") => Some("Hash"),
+            _ => None,
+        };
+        if let Some(class_name) = class_name {
+            return Ok(ReceiverTransfer {
+                type_: Analyzer::class_object_type(class_name),
+                block_result: None,
+                untyped_origin: UntypedOrigin::InferredMethod,
+                missing_method: false,
+            });
+        }
+    }
     if let Some(type_) = analyzer.owned_framework_call_type(receiver, name) {
         return Ok(ReceiverTransfer {
             type_,
@@ -358,7 +376,10 @@ fn transfer_receiver_call_with_substitution(
                 || name_matches(class, "Parser::Source::Map")
                 || name_matches(class, "Parser::Source::Range")
                 || name_matches(class, "Parser::AST::Node")
-    );
+    ) || matches!(
+        receiver,
+        Type::Array(_) | Type::Tuple(_) | Type::Hash(_, _)
+    ) || matches!(receiver, Type::Named(class, _) if analyzer.nominal_subtype(class, "TSort"));
     if standard_builtin_receiver {
         if let Some((type_, block_result)) = super::builtins::transfer_builtin_call(
             analyzer,
@@ -372,6 +393,41 @@ fn transfer_receiver_call_with_substitution(
             return Ok(ReceiverTransfer {
                 type_,
                 block_result,
+                untyped_origin: UntypedOrigin::FallbackCall,
+                missing_method: false,
+            });
+        }
+    }
+
+    if name == "const_get" {
+        if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
+            let owner = Analyzer::named_type_name(&instance);
+            let constant_name = owned_constant_name(analyzer, input);
+            if let (Some(owner), Some(constant_name)) = (owner, constant_name) {
+                let resolved = analyzer.resolve_name(
+                    &constant_name,
+                    (!constant_name.starts_with("::")).then_some(owner.as_str()),
+                );
+                if analyzer.declarations.classes.contains_key(&resolved) {
+                    return Ok(ReceiverTransfer {
+                        type_: Analyzer::class_object_type(&resolved),
+                        block_result: None,
+                        untyped_origin: UntypedOrigin::InferredMethod,
+                        missing_method: false,
+                    });
+                }
+                if let Some(type_) = analyzer.declarations.constants.get(&resolved).cloned() {
+                    return Ok(ReceiverTransfer {
+                        type_: analyzer.resolve_type_names(&type_, Some(&owner)),
+                        block_result: None,
+                        untyped_origin: UntypedOrigin::InferredMethod,
+                        missing_method: false,
+                    });
+                }
+            }
+            return Ok(ReceiverTransfer {
+                type_: Type::Object,
+                block_result: None,
                 untyped_origin: UntypedOrigin::FallbackCall,
                 missing_method: false,
             });
@@ -761,7 +817,7 @@ fn transfer_receiver_call_with_substitution(
     // dispatcher supplies the optional length/keyword contract explicitly;
     // keep owned CFG calls on that same contract instead of reporting the
     // Ruby implementation's internal forwarding call as an arity error.
-    if let Some(signature) = analyzer.random_formatter_signature(None, receiver, name) {
+    if let Some(signature) = analyzer.random_formatter_signature(receiver, name) {
         let type_ = analyzer.invoke_signature_at(
             input.site,
             name,
@@ -792,9 +848,70 @@ fn transfer_receiver_call_with_substitution(
         }
     }
 
+    // Core primitive operators can have provisional inferred declarations in
+    // the shared method table. Those declarations start at `T.noreturn` and
+    // would make a later fixpoint pass treat an otherwise ordinary operation
+    // such as `Integer#+` as an unconditional raise. Use the structural
+    // primitive contract until an explicit user/RBI signature is available;
+    // explicit contracts still retain normal precedence.
+    let primitive_operator = matches!(
+        receiver,
+        Type::Nil
+            | Type::True
+            | Type::False
+            | Type::Integer
+            | Type::Float
+            | Type::String
+            | Type::Symbol
+    ) && matches!(
+        name,
+        "+" | "-" | "*" | "/" | "%" | "<=>" | "==" | "!=" | "<" | "<=" | ">" | ">="
+    );
+    let primitive_has_explicit_contract = analyzer
+        .receiver_method_key(None, receiver, name, environment)
+        .and_then(|key| analyzer.resolve_method_key(&key))
+        .and_then(|key| analyzer.declarations.methods.get(&key))
+        .is_some_and(|state| state.explicit);
+    if primitive_operator && !primitive_has_explicit_contract {
+        if let Some((type_, block_result)) = super::builtins::transfer_builtin_call(
+            analyzer,
+            input,
+            receiver,
+            arguments,
+            values,
+            environment,
+            hash_shape,
+        ) {
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result,
+                untyped_origin: UntypedOrigin::FallbackCall,
+                missing_method: false,
+            });
+        }
+    }
+
     let key = analyzer.receiver_method_key(None, receiver, name, environment);
     if let Some(key) = key {
         analyzer.record_method_dependency(&key, environment);
+        if analyzer
+            .resolve_method_key(&key)
+            .and_then(|resolved| analyzer.declarations.methods.get(&resolved))
+            .is_some_and(|state| state.visibility == Visibility::Private)
+            && !matches!(input.receiver, cfg::ReceiverOperand::Implicit)
+            && !analyzer.private_call_allowed(&key, environment)
+        {
+            analyzer.error_at(
+                input.site,
+                format!("Non-private call to private method `{name}` on `{receiver}`"),
+            );
+            return Ok(ReceiverTransfer {
+                type_: Type::Any,
+                block_result: None,
+                untyped_origin: UntypedOrigin::FallbackCall,
+                missing_method: false,
+            });
+        }
         let inferred_accessor = analyzer
             .resolve_method_key(&key)
             .filter(|resolved| {
@@ -941,16 +1058,20 @@ fn transfer_receiver_call_with_substitution(
         });
     }
 
-    // The remaining T.* contracts still have parser-backed metatype and
-    // annotation semantics. Keep those calls on the transactional migration
-    // boundary until their owned representation is complete; treating an
-    // unsupported intrinsic as an ordinary missing application method would
-    // lose reveal/type-expression diagnostics.
+    // An unhandled call on Sorbet's runtime type objects is still a checked
+    // call. Intrinsic constructors have already been handled above; an
+    // operation such as `T.proc.call` must not disappear behind an internal
+    // transfer error.
     if matches!(receiver, Type::Named(name, _) if name == "T" || name.starts_with("T::Types::"))
         || Analyzer::class_object_instance_type(receiver)
             .is_some_and(|instance| matches!(instance, Type::Named(name, _) if name == "T"))
     {
-        return Err(format!("intrinsic `{name}` has no owned contract"));
+        return Ok(ReceiverTransfer {
+            type_: Type::Any,
+            block_result: None,
+            untyped_origin: UntypedOrigin::FallbackCall,
+            missing_method: true,
+        });
     }
 
     let block_result = match input.block.as_ref() {
@@ -1033,6 +1154,26 @@ fn is_generic_type_application(analyzer: &Analyzer<'_>, input: &OwnedCallInput) 
     if name.starts_with("T::") {
         return true;
     }
+    if analyzer
+        .declarations
+        .classes
+        .get(name)
+        .is_some_and(|info| !info.type_members.is_empty())
+    {
+        // A class which declares Sorbet generic members uses `Foo[T]` as a
+        // type application when it has no runtime singleton `[]`. If the
+        // class does define that method, however, the same syntax is an
+        // ordinary Ruby constructor call (for example `Set["one"]`) and its
+        // declared signature must win over the generic-type shorthand.
+        let runtime_key = MethodKey {
+            owner: Some(name.to_owned()),
+            name: "[]".to_owned(),
+            singleton: true,
+        };
+        if analyzer.resolve_method_key(&runtime_key).is_none() {
+            return true;
+        }
+    }
 
     // Bare generic applications such as `Enumerator[Integer]` occur inside
     // Sorbet type expressions (`T.any`, `T.let`, `T.cast`, ...). The same
@@ -1091,6 +1232,24 @@ fn is_generic_type_application(analyzer: &Analyzer<'_>, input: &OwnedCallInput) 
                     && expression.span.end <= argument.span.end
             })
         })
+}
+
+fn owned_constant_name(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<String> {
+    let expression = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))?;
+    let crate::hir::ExprKind::Call(call) = &expression.kind else {
+        return None;
+    };
+    let crate::hir::Argument::Positional(argument) = call.arguments.first()? else {
+        return None;
+    };
+    let expression = analyzer.program.hir_program.expression(*argument)?;
+    match &expression.kind {
+        crate::hir::ExprKind::Literal(crate::hir::Literal::Symbol(name)) => Some(name.clone()),
+        crate::hir::ExprKind::Literal(crate::hir::Literal::String(name)) => Some(name.clone()),
+        _ => None,
+    }
 }
 
 fn hash_constructor_pair_types(type_: &Type) -> Option<(Type, Type)> {

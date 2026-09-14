@@ -21,10 +21,10 @@ pub(super) struct CfgBodyMetadata {
     pub(super) has_known_cfg_failure: bool,
 }
 
-/// The immutable program view used by recursive evaluation and CFG transfer.
+/// The immutable program view used by HIR/CFG transfer and parser boundaries.
 ///
 /// Keeping source indexing and owned-program lookup together gives the
-/// evaluator layers one dependency boundary. Mutable declarations, fixpoint
+/// inference layers one dependency boundary. Mutable declarations, fixpoint
 /// summaries, and reporting products remain on `Analyzer` because they change
 /// during analysis.
 pub(super) struct ProgramContext<'src> {
@@ -33,10 +33,8 @@ pub(super) struct ProgramContext<'src> {
     pub(super) cfg_index: Option<cfg::CfgIndex>,
     pub(super) cfg_graphs: Option<Arc<[cfg::Cfg]>>,
     pub(super) cfg_body_metadata: Option<Arc<[CfgBodyMetadata]>>,
-    pub(super) hir_call_ids: HashMap<(usize, usize), hir::ExprId>,
-    pub(super) hir_assignment_ids: HashMap<(usize, usize), hir::ExprId>,
-    pub(super) hir_value_ids: HashMap<(usize, usize), hir::ExprId>,
     pub(super) hir_body_ids: HashMap<(usize, usize), hir::BodyId>,
+    pub(super) hir_declaration_ids: HashMap<(usize, usize), hir::DeclId>,
     pub(super) line_map: prism::LineMap,
     pub(super) has_inline_assertions: bool,
     pub(super) annotations: signature::AnnotationTable,
@@ -72,9 +70,20 @@ impl<'src> ProgramContext<'src> {
                     .collect::<Vec<_>>(),
             )
         });
-        let mut hir_call_ids = HashMap::new();
-        let mut hir_assignment_ids = HashMap::new();
-        let mut hir_value_ids = HashMap::new();
+        let hir_declaration_ids = hir_program
+            .declarations
+            .iter()
+            .enumerate()
+            .map(|(index, declaration)| {
+                (
+                    (
+                        declaration.span.start as usize,
+                        declaration.span.end as usize,
+                    ),
+                    hir::DeclId(index as u32),
+                )
+            })
+            .collect::<HashMap<_, _>>();
         let hir_body_ids = hir_program
             .bodies
             .iter()
@@ -86,38 +95,14 @@ impl<'src> ProgramContext<'src> {
                 )
             })
             .collect::<HashMap<_, _>>();
-        for (index, expression) in hir_program.expressions.iter().enumerate() {
-            let span = (expression.span.start as usize, expression.span.end as usize);
-            match &expression.kind {
-                hir::ExprKind::Call(_) => {
-                    hir_call_ids
-                        .entry(span)
-                        .or_insert(hir::ExprId(index as u32));
-                }
-                hir::ExprKind::Assign { .. } => {
-                    hir_assignment_ids
-                        .entry(span)
-                        .or_insert(hir::ExprId(index as u32));
-                }
-                hir::ExprKind::Nil | hir::ExprKind::Literal(_) | hir::ExprKind::Read(_) => {
-                    hir_value_ids
-                        .entry(span)
-                        .or_insert(hir::ExprId(index as u32));
-                }
-                _ => {}
-            }
-        }
-
         Self {
             source,
             hir_program,
             cfg_index,
             cfg_graphs,
             cfg_body_metadata,
-            hir_call_ids,
-            hir_assignment_ids,
-            hir_value_ids,
             hir_body_ids,
+            hir_declaration_ids,
             line_map: prism::LineMap::new(source),
             has_inline_assertions: !annotations.assertions.is_empty(),
             annotations,

@@ -15,5 +15,5 @@ class AssertionBase
 end
 
 AssertionBase.include(AliasAssertions)
-value = AssertionBase.new.assert_not_nil("ok") # error: Method `assert_not_nil` does not exist
-T.reveal_type(value) # note: Revealed type: `T.untyped`
+value = AssertionBase.new.assert_not_nil("ok")
+T.reveal_type(value) # note: Revealed type: `String`

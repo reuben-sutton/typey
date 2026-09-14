@@ -1,29 +1,17 @@
 //! Owned shapes used at the boundary between Ruby call syntax and dispatch.
 //!
-//! The recursive evaluator keeps its parser-node call adapter separately. The
-//! owned shapes here are the stable semantic vocabulary consumed by CFG
-//! transfer.
+//! Owned call shapes and callback contracts consumed by CFG transfer.
 
 use super::{
-    optional_proc_type, proc_parts, Analyzer, Eval, Flow, MethodKey, OutcomeTypes, PredicateAlias,
-    SourceSite,
+    optional_proc_type, proc_parts, Analyzer, Eval, MethodKey, PredicateAlias, SourceSite,
 };
 use crate::cfg;
 use crate::hir;
-use crate::prism;
 use crate::signature::MethodSig;
 use crate::types::Type;
-use ruby_prism::{ArgumentsNode, CallNode, Node};
+use ruby_prism::Node;
 
-pub(super) struct CallSite<'a, 'node> {
-    pub(super) argument_nodes: &'a [Node<'node>],
-    pub(super) argument_types: &'a [Type],
-    pub(super) block: Option<&'a Node<'node>>,
-}
-
-/// The owned semantic input consumed by CFG call transfer. Parser nodes are
-/// deliberately absent; source nodes remain a separate compatibility adapter
-/// for legacy diagnostic and builtin APIs.
+/// The owned semantic input consumed by CFG call transfer.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct OwnedCallInput<'a> {
     pub(super) site: SourceSite,
@@ -81,246 +69,6 @@ impl<'a> OwnedCallInput<'a> {
             defer_inline_assertion,
         }
     }
-}
-
-/// A call shape whose semantic fields come from owned HIR. During this
-/// migration the Prism call is retained only as a child-node bridge so the
-/// existing evaluator can still evaluate receiver and argument expressions.
-/// The evaluator itself never asks the Prism node to decide the call shape.
-pub(super) struct HirCallView<'node> {
-    pub(super) call: hir::Call,
-    pub(super) prism_call: CallNode<'node>,
-}
-
-impl<'node> HirCallView<'node> {
-    pub(super) fn name(&self) -> String {
-        self.call.name.as_str().to_owned()
-    }
-
-    pub(super) fn argument_inputs(&self) -> Vec<CallArgumentInput<'node>> {
-        hir_call_argument_inputs(&self.call.arguments, self.prism_call.arguments())
-    }
-
-    pub(super) fn receiver(&self) -> Option<Node<'node>> {
-        match self.call.receiver {
-            hir::Receiver::Explicit(_) => self.prism_call.receiver(),
-            hir::Receiver::Implicit | hir::Receiver::Super | hir::Receiver::Yield => None,
-        }
-    }
-
-    pub(super) fn block(&self) -> Option<Node<'node>> {
-        self.call.block.as_ref().and(self.prism_call.block())
-    }
-
-    pub(super) fn is_safe_navigation(&self) -> bool {
-        self.call.safe_navigation
-    }
-}
-
-pub(super) fn prism_call_argument_inputs<'node>(
-    arguments: Option<ArgumentsNode<'node>>,
-) -> Vec<CallArgumentInput<'node>> {
-    arguments.map_or_else(Vec::new, |arguments| {
-        prism_argument_inputs_from_nodes(arguments.arguments().into_iter().collect())
-    })
-}
-
-fn prism_argument_inputs_from_nodes<'node>(
-    arguments: Vec<Node<'node>>,
-) -> Vec<CallArgumentInput<'node>> {
-    arguments
-        .into_iter()
-        .map(|argument| {
-            if argument.as_forwarding_arguments_node().is_some() {
-                return CallArgumentInput::Forwarded { node: argument };
-            }
-            if let Some(splat) = argument.as_splat_node() {
-                return CallArgumentInput::Splat {
-                    node: argument,
-                    expression: splat.expression(),
-                };
-            }
-            if let Some(keyword_hash) = argument.as_keyword_hash_node() {
-                let entries = keyword_hash
-                    .elements()
-                    .into_iter()
-                    .map(|child| {
-                        if let Some(assoc) = child.as_assoc_node() {
-                            let key = assoc.key();
-                            let name = key.as_symbol_node().map(|symbol| {
-                                String::from_utf8_lossy(symbol.unescaped()).into_owned()
-                            });
-                            KeywordArgumentInput::Pair {
-                                key,
-                                value: assoc.value(),
-                                name,
-                            }
-                        } else if let Some(splat) = child.as_assoc_splat_node() {
-                            splat
-                                .value()
-                                .map_or(KeywordArgumentInput::Forwarded, |value| {
-                                    KeywordArgumentInput::Splat(Some(value))
-                                })
-                        } else {
-                            KeywordArgumentInput::Forwarded
-                        }
-                    })
-                    .collect();
-                return CallArgumentInput::KeywordHash {
-                    node: argument,
-                    entries,
-                };
-            }
-            CallArgumentInput::Positional { node: argument }
-        })
-        .collect()
-}
-
-fn call_argument_input_kind<'node>(input: &CallArgumentInput<'node>) -> &'static str {
-    match input {
-        CallArgumentInput::Forwarded { .. } => "forwarded",
-        CallArgumentInput::Positional { .. } => "positional",
-        CallArgumentInput::Splat { .. } => "splat",
-        CallArgumentInput::KeywordHash { .. } => "keyword hash",
-    }
-}
-
-pub(super) fn hir_call_argument_inputs<'node>(
-    arguments: &[hir::Argument],
-    prism_arguments: Option<ArgumentsNode<'node>>,
-) -> Vec<CallArgumentInput<'node>> {
-    let mut raw = prism_call_argument_inputs(prism_arguments).into_iter();
-    let mut result = Vec::with_capacity(arguments.len());
-    let mut hir_index = 0;
-    while hir_index < arguments.len() {
-        match &arguments[hir_index] {
-            hir::Argument::Keyword { .. } | hir::Argument::KeywordSplat(_) => {
-                let (node, raw_entries) = match raw.next() {
-                    Some(CallArgumentInput::KeywordHash { node, entries }) => (node, entries),
-                    Some(_) | None => {
-                        panic!("HIR keyword arguments did not match Prism argument bridge")
-                    }
-                };
-                let mut raw_entries = raw_entries.into_iter();
-                let mut hir_entries = Vec::new();
-                while let Some(argument) = arguments.get(hir_index) {
-                    match argument {
-                        hir::Argument::Keyword { name, .. } => {
-                            let Some(KeywordArgumentInput::Pair { key, value, .. }) =
-                                raw_entries.next()
-                            else {
-                                panic!("HIR keyword argument has no Prism child bridge");
-                            };
-                            hir_entries.push(KeywordArgumentInput::Pair {
-                                key,
-                                value,
-                                name: Some(name.as_str().to_owned()),
-                            });
-                            hir_index += 1;
-                        }
-                        hir::Argument::KeywordSplat(_) => {
-                            let Some(KeywordArgumentInput::Splat(value)) = raw_entries.next()
-                            else {
-                                panic!("HIR keyword splat has no Prism child bridge");
-                            };
-                            hir_entries.push(KeywordArgumentInput::Splat(value));
-                            hir_index += 1;
-                        }
-                        hir::Argument::Forwarded => {
-                            let Some(KeywordArgumentInput::Forwarded) = raw_entries.next() else {
-                                panic!("HIR keyword forwarding has no Prism child bridge");
-                            };
-                            hir_entries.push(KeywordArgumentInput::Forwarded);
-                            hir_index += 1;
-                        }
-                        _ => break,
-                    }
-                }
-                result.push(CallArgumentInput::KeywordHash {
-                    node,
-                    entries: hir_entries,
-                });
-            }
-            hir::Argument::Positional(_) => match raw.next() {
-                Some(CallArgumentInput::Positional { node }) => {
-                    result.push(CallArgumentInput::Positional { node });
-                    hir_index += 1;
-                }
-                Some(CallArgumentInput::KeywordHash { node, .. }) => {
-                    // Prism uses the keyword-hash node for brace-less hash
-                    // arguments too. The HIR lowerer has already decided
-                    // whether that syntax is a keyword group or a positional
-                    // hash; preserve the HIR decision here.
-                    result.push(CallArgumentInput::Positional { node });
-                    hir_index += 1;
-                }
-                Some(input) => panic!(
-                    "HIR positional argument did not match Prism argument bridge: raw {} at {:?}, HIR {arguments:?}",
-                    call_argument_input_kind(&input),
-                    prism::span(match &input {
-                        CallArgumentInput::Forwarded { node }
-                        | CallArgumentInput::Positional { node }
-                        | CallArgumentInput::Splat { node, .. }
-                        | CallArgumentInput::KeywordHash { node, .. } => node,
-                    }),
-                ),
-                None => panic!(
-                    "HIR positional argument has no Prism child bridge: HIR {arguments:?}"
-                ),
-            },
-            hir::Argument::Splat(_) => match raw.next() {
-                Some(CallArgumentInput::Splat { node, expression }) => {
-                    result.push(CallArgumentInput::Splat { node, expression });
-                    hir_index += 1;
-                }
-                Some(_) | None => panic!("HIR splat did not match Prism argument bridge"),
-            },
-            hir::Argument::Forwarded => match raw.next() {
-                Some(CallArgumentInput::Forwarded { node }) => {
-                    result.push(CallArgumentInput::Forwarded { node });
-                    hir_index += 1;
-                }
-                Some(CallArgumentInput::KeywordHash { node, entries })
-                    if entries
-                        .iter()
-                        .all(|entry| matches!(entry, KeywordArgumentInput::Forwarded)) =>
-                {
-                    // A bare `**` is normalized by HIR to forwarded
-                    // arguments, but Prism keeps it inside a keyword hash.
-                    // Preserve the keyword-hash wrapper so argument
-                    // evaluation retains its keyword-forwarding semantics.
-                    result.push(CallArgumentInput::KeywordHash { node, entries });
-                    hir_index += 1;
-                }
-                Some(CallArgumentInput::Splat {
-                    node,
-                    expression: None,
-                }) => {
-                    // Ruby's `*` forwarding syntax is represented by Prism as
-                    // an empty splat, while HIR intentionally normalizes it
-                    // to the same forwarded-arguments shape as `...`.
-                    result.push(CallArgumentInput::Forwarded { node });
-                    hir_index += 1;
-                }
-                Some(input) => panic!(
-                    "HIR forwarding did not match Prism argument bridge: raw {} at {:?}, HIR {arguments:?}",
-                    call_argument_input_kind(&input),
-                    prism::span(match &input {
-                        CallArgumentInput::Forwarded { node }
-                        | CallArgumentInput::Positional { node }
-                        | CallArgumentInput::Splat { node, .. }
-                        | CallArgumentInput::KeywordHash { node, .. } => node,
-                    }),
-                ),
-                None => panic!("HIR forwarding has no Prism child bridge: HIR {arguments:?}"),
-            },
-        }
-    }
-    assert!(
-        raw.next().is_none(),
-        "Prism argument bridge contains a shape not represented by HIR"
-    );
-    result
 }
 
 impl<'src> Analyzer<'src> {
@@ -411,6 +159,13 @@ impl<'src> Analyzer<'src> {
                     arguments,
                     Some(receiver_type),
                 ));
+                // A block result can be the only source of a generic method
+                // binding.  When it is not inferable at this call site,
+                // Sorbet treats the callback result contract as open rather
+                // than exposing the method's symbolic `U` in a diagnostic.
+                for parameter in &signature.type_parameters {
+                    bindings.entry(parameter.clone()).or_insert(Type::Anything);
+                }
                 let expected =
                     signature
                         .block
@@ -436,10 +191,35 @@ impl<'src> Analyzer<'src> {
                     return Some(Eval::value(result));
                 }
                 let actual = values.get(value.0 as usize).cloned().flatten()?;
+                let block_site = self.cfg_passed_block_site(input).unwrap_or(input.site);
                 let local_name = self.cfg_passed_block_local_name(input);
-                let result = optional_proc_type(&actual)
-                    .filter(|block| Self::passed_block_signature(block).is_some())
-                    .and_then(|block| proc_parts(&block).map(|(_, result)| result.clone()))
+                let passed_signature = optional_proc_type(&actual)
+                    .and_then(|block| Self::passed_block_signature(&block));
+                let forwarded_signature = local_name.as_deref().and_then(|name| {
+                    let expected_parameters = expected
+                        .as_ref()
+                        .and_then(|expected| proc_parts(expected))
+                        .map(|(parameters, _)| parameters.to_vec())?;
+                    self.forwarded_block_signature(name, &actual, &expected_parameters, environment)
+                });
+                let effective_signature =
+                    forwarded_signature.as_ref().or(passed_signature.as_ref());
+                if let (Some(expected), Some(actual_signature)) =
+                    (expected.as_ref(), effective_signature)
+                {
+                    if !Self::passed_block_is_assignable(self, actual_signature, expected) {
+                        self.error_at(
+                            block_site,
+                            format!(
+                                "Expected `{}` but found `{}` for block argument",
+                                Self::block_type_description(expected),
+                                Self::block_type_description(actual_signature),
+                            ),
+                        );
+                    }
+                }
+                let result = effective_signature
+                    .and_then(|block| proc_parts(block).map(|(_, result)| result.clone()))
                     .map(Eval::value)
                     .or_else(|| {
                         let name = local_name.as_deref()?;
@@ -448,7 +228,7 @@ impl<'src> Analyzer<'src> {
                             .and_then(|expected| proc_parts(expected))
                             .map(|(parameters, _)| parameters.to_vec())?;
                         let signature = self.forwarded_block_signature(
-                            &name,
+                            name,
                             &actual,
                             &expected_parameters,
                             environment,
@@ -624,17 +404,22 @@ impl<'src> Analyzer<'src> {
                     // forwarding rule above.
                     return Some((Eval::value(Type::Any), environment.clone()));
                 };
-                if !Self::passed_block_is_assignable(self, &signature, &expected) {
+                let forwarded_signature = local_name.as_deref().and_then(|name| {
+                    self.forwarded_block_signature(name, &actual, expected_parameters, environment)
+                });
+                let effective_signature = forwarded_signature.as_ref().unwrap_or(&signature);
+                if !Self::passed_block_is_assignable(self, effective_signature, &expected) {
                     self.error_at(
                         block_site,
                         format!(
                             "Expected `{}` but found `{}` for block argument",
                             Self::block_type_description(&expected),
-                            Self::block_type_description(&signature),
+                            Self::block_type_description(effective_signature),
                         ),
                     );
                 }
-                let result = proc_parts(&signature).map_or(Type::Any, |(_, result)| result.clone());
+                let result =
+                    proc_parts(effective_signature).map_or(Type::Any, |(_, result)| result.clone());
                 Some((Eval::value(result), environment.clone()))
             }
         }
@@ -728,33 +513,6 @@ impl<'src> Analyzer<'src> {
     }
 }
 
-pub(super) enum CallArgumentInput<'node> {
-    Forwarded {
-        node: Node<'node>,
-    },
-    Positional {
-        node: Node<'node>,
-    },
-    Splat {
-        node: Node<'node>,
-        expression: Option<Node<'node>>,
-    },
-    KeywordHash {
-        node: Node<'node>,
-        entries: Vec<KeywordArgumentInput<'node>>,
-    },
-}
-
-pub(super) enum KeywordArgumentInput<'node> {
-    Pair {
-        key: Node<'node>,
-        value: Node<'node>,
-        name: Option<String>,
-    },
-    Splat(Option<Node<'node>>),
-    Forwarded,
-}
-
 pub(super) struct KeywordArgument<'node> {
     pub(super) name: String,
     pub(super) node: Option<Node<'node>>,
@@ -794,19 +552,4 @@ pub(super) struct CallArguments<'node> {
     pub(super) forwarded_positional_start: Option<usize>,
     /// The call forwards keyword arguments as well as its positional tail.
     pub(super) forwards_keywords: bool,
-}
-
-pub(super) struct CallArgumentEvaluation<'node> {
-    pub(super) arguments: CallArguments<'node>,
-    pub(super) abrupt: OutcomeTypes,
-    pub(super) abrupt_flow: Flow,
-    pub(super) all_normal: bool,
-}
-
-pub(super) struct IndexAccess<'node> {
-    pub(super) receiver_type: Type,
-    pub(super) arguments: CallArguments<'node>,
-    pub(super) abrupt: OutcomeTypes,
-    pub(super) abrupt_flow: Flow,
-    pub(super) all_normal: bool,
 }

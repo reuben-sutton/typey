@@ -1,6 +1,6 @@
 sig { params(callback: T.proc.params(value: Integer).void).void }
 def named_callback(&callback)
-  callback.call("wrong") # error: Expected `Integer`, but found `String`
+  callback.call("wrong") # error: Expected `Integer` but found `String` for argument `arg0
 end
 
 sig { params("&": T.proc.params(value: Integer).void).void }

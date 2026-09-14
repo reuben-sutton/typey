@@ -1,172 +1,11 @@
 //! Owned value, read, and predicate transfer for CFG/HIR.
 
-use super::super::{ivar_refinement_key, Analyzer, Environment, Eval, SharedKey, SourceSite};
+use super::super::{ivar_refinement_key, Analyzer, Environment, SharedKey, SourceSite};
 use super::globals::cfg_global_refinement_key;
-use crate::hir::{self, ArrayElement, ExprKind, HashElement, Literal, Read};
+use crate::hir::{self, Literal, Read};
 use crate::types::Type;
 
 impl<'src> Analyzer<'src> {
-    pub(in crate::infer) fn owned_value_tree_supported(
-        program: &hir::Program,
-        expression: hir::ExprId,
-    ) -> bool {
-        let Some(expression) = program.expression(expression) else {
-            return false;
-        };
-        match &expression.kind {
-            ExprKind::Nil | ExprKind::Literal(_) | ExprKind::Read(_) => true,
-            ExprKind::Array(elements) => elements.iter().all(|element| match element {
-                ArrayElement::Value(value) | ArrayElement::Splat { value, .. } => {
-                    Self::owned_value_tree_supported(program, *value)
-                }
-            }),
-            ExprKind::Hash(elements) => elements.iter().all(|element| match element {
-                HashElement::Pair { key, value, .. } => {
-                    Self::owned_value_tree_supported(program, *key)
-                        && Self::owned_value_tree_supported(program, *value)
-                }
-                HashElement::Splat { value, .. } => {
-                    Self::owned_value_tree_supported(program, *value)
-                }
-            }),
-            _ => false,
-        }
-    }
-
-    pub(in crate::infer) fn eval_owned_value(
-        &mut self,
-        expression: hir::ExprId,
-        environment: &mut Environment,
-    ) -> Eval {
-        let (span, kind) = {
-            let expression = self
-                .program
-                .hir_program
-                .expression(expression)
-                .expect("owned value expression exists after preflight");
-            (expression.span, expression.kind.clone())
-        };
-        let site = SourceSite::from_span(span, Some(expression));
-        let type_ = match kind {
-            ExprKind::Nil => Type::Nil,
-            ExprKind::Literal(literal) => Self::cfg_literal_type(&literal),
-            ExprKind::Read(read) => {
-                let type_ = self.transfer_cfg_read_at(site, read, environment);
-                return Eval::value(self.record_at(site, type_, false, None));
-            }
-            ExprKind::Array(elements) => return self.eval_owned_array(site, elements, environment),
-            ExprKind::Hash(elements) => return self.eval_owned_hash(site, elements, environment),
-            _ => unreachable!("non-value HIR operation reached owned value transfer"),
-        };
-        let type_ = self.apply_inline_assertion_in_environment_at(site, type_, environment);
-        Eval::value(self.record_at(site, type_, false, None))
-    }
-
-    fn eval_owned_array(
-        &mut self,
-        site: SourceSite,
-        elements: Vec<ArrayElement>,
-        environment: &mut Environment,
-    ) -> Eval {
-        let tuple_depth = self.literal_tuple_depth;
-        self.literal_tuple_depth += 1;
-        let mut element_types = Vec::new();
-        let mut fixed_length = true;
-        let mut element = Type::Never;
-        for element_value in elements {
-            let (value, splat, splat_span) = match element_value {
-                ArrayElement::Value(value) => (value, false, None),
-                ArrayElement::Splat { value, span } => (value, true, Some(span)),
-            };
-            let child_type = self.eval_owned_value(value, environment).type_;
-            if let Some(span) = splat_span {
-                self.record_at(
-                    SourceSite::from_span(span, None),
-                    child_type.clone(),
-                    false,
-                    None,
-                );
-            }
-            let child_type = if splat {
-                fixed_length = false;
-                self.array_element_type(&child_type)
-            } else {
-                child_type
-            };
-            element_types.push(child_type.clone());
-            element = element.join(&child_type);
-        }
-        self.literal_tuple_depth = tuple_depth;
-        let element = if element.is_never() {
-            if (self.preserve_literal_tuples || self.preserve_nested_literal_tuples)
-                && tuple_depth > 0
-            {
-                Type::Never
-            } else {
-                Type::Any
-            }
-        } else {
-            element
-        };
-        let inferred = if fixed_length
-            && ((self.preserve_literal_tuples && tuple_depth == 0)
-                || (self.preserve_nested_literal_tuples && tuple_depth > 0)
-                || self.expected_return_type.as_ref().is_some_and(|expected| {
-                    tuple_depth == 0
-                        && matches!(expected, Type::Tuple(elements) if elements.len() == element_types.len())
-                }))
-        {
-            Type::Tuple(element_types)
-        } else {
-            Type::Array(Box::new(element))
-        };
-        let type_ = self.apply_inline_assertion_in_environment_at(site, inferred, environment);
-        Eval::value(self.record_at(site, type_, false, None))
-    }
-
-    fn eval_owned_hash(
-        &mut self,
-        site: SourceSite,
-        elements: Vec<HashElement>,
-        environment: &mut Environment,
-    ) -> Eval {
-        let mut key = Type::Never;
-        let mut value = Type::Never;
-        for element in elements {
-            match element {
-                HashElement::Pair {
-                    key: key_id,
-                    value: value_id,
-                    ..
-                } => {
-                    key = key.join(&self.eval_owned_value(key_id, environment).type_);
-                    value = value.join(&self.eval_owned_value(value_id, environment).type_);
-                }
-                HashElement::Splat {
-                    value: value_id, ..
-                } => match self.eval_owned_value(value_id, environment).type_ {
-                    Type::Hash(splat_key, splat_value) => {
-                        key = key.join(&splat_key);
-                        value = value.join(&splat_value);
-                    }
-                    Type::Any => {
-                        key = Type::Any;
-                        value = Type::Any;
-                    }
-                    _ => {}
-                },
-            }
-        }
-        let key = if key.is_never() { Type::Any } else { key };
-        let value = if value.is_never() { Type::Any } else { value };
-        let type_ = self.apply_inline_assertion_in_environment_at(
-            site,
-            Type::Hash(Box::new(key), Box::new(value)),
-            environment,
-        );
-        Eval::value(self.record_at(site, type_, false, None))
-    }
-
     pub(super) fn cfg_literal_type(literal: &Literal) -> Type {
         match literal {
             Literal::Nil => Type::Nil,
@@ -179,6 +18,7 @@ impl<'src> Analyzer<'src> {
             Literal::String(_) | Literal::XString(_) => Type::String,
             Literal::Symbol(_) => Type::Symbol,
             Literal::RegularExpression(_) => Type::named("Regexp"),
+            Literal::Encoding => Type::named("Encoding"),
         }
     }
 
@@ -560,7 +400,12 @@ impl<'src> Analyzer<'src> {
             };
             let narrowed = source_current.meet(&narrowed);
             if alias.source == "<self>" {
-                environment.self_type = narrowed;
+                environment.self_type = narrowed.clone();
+                // The local is the value being tested.  A self alias carries
+                // a refinement for both the receiver and that local; only
+                // updating `self_type` would leave `if time` dispatching on
+                // the original `T.nilable(self)` value.
+                environment.bind(name.to_owned(), narrowed.clone());
             } else {
                 environment.bind(alias.source.clone(), narrowed);
             }
@@ -771,6 +616,11 @@ impl<'src> Analyzer<'src> {
                 .hir_program
                 .local_name(local)
                 .map_or(Type::Any, |name| environment.get(name.as_str())),
+            hir::ExprKind::Call(call) if call.name.as_str() == "class" => {
+                // Predicate arguments represent the value matched by the
+                // class object, not the Class[...] object itself.
+                environment.self_type.clone()
+            }
             _ => Type::Any,
         }
     }

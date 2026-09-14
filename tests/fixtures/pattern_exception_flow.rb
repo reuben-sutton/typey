@@ -7,7 +7,7 @@ in Integer
 else
   matched = nil
 end
-T.reveal_type(matched) # note: T.nilable(String)
+T.reveal_type(matched) # note: String
 
 handled = begin
   raise "boom"

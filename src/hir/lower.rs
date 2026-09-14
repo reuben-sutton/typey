@@ -7,11 +7,11 @@
 //! span instead of disappearing.
 
 use super::{
-    Argument, ArrayElement, AssignOperator, AssignTarget, BeginExpr, Body, BodyId, BodyOwner,
+    Argument, ArrayElement, AssignOperator, AssignTarget, BeginExpr, Body, BodyId, BodyOwner, Call,
     CaseArm, CaseExpr, Closure, ClosureId, ClosureKind, ConstantPath, DeclId, Declaration,
     DeclarationKind, Expr, ExprId, ExprKind, FileId, HashElement, InterpolatedKind, Literal,
-    LocalId, LogicalKind, LoopExpr, LoopKind, Name, Parameter, ParameterKind, Parameters, Program,
-    Read, Receiver, RescueClause, ScopeId, Span, Unsupported,
+    LocalId, LogicalKind, LoopExpr, LoopKind, Name, Parameter, ParameterKind, ParameterPattern,
+    Parameters, Program, Read, Receiver, RescueClause, ScopeId, Span, Unsupported,
 };
 use crate::prism;
 use ruby_prism::{ArgumentsNode, CallNode, Node, ParametersNode, Visit};
@@ -840,6 +840,9 @@ impl<'src> Lowerer<'src> {
         if let Some(case_node) = node.as_case_node() {
             return self.lower_case(node, &case_node);
         }
+        if let Some(case_match) = node.as_case_match_node() {
+            return self.lower_case_match(node, &case_match);
+        }
         if let Some(return_node) = node.as_return_node() {
             let value = self.lower_control_arguments(return_node.arguments());
             return self.push_expr(node, ExprKind::Return(value));
@@ -999,6 +1002,9 @@ impl<'src> Lowerer<'src> {
         // keeps the owned CFG path precise without a parser fallback.
         if node.as_source_line_node().is_some() {
             return self.push_expr(node, ExprKind::Literal(Literal::Integer("0".to_owned())));
+        }
+        if node.as_source_encoding_node().is_some() {
+            return self.push_expr(node, ExprKind::Literal(Literal::Encoding));
         }
         if let Some(local) = node.as_local_variable_read_node() {
             let local = self.local(&prism::constant_name(local.name()));
@@ -1169,6 +1175,136 @@ impl<'src> Lowerer<'src> {
                 else_body,
             }),
         )
+    }
+
+    fn lower_case_match(
+        &mut self,
+        node: &Node<'_>,
+        case_match: &ruby_prism::CaseMatchNode<'_>,
+    ) -> ExprId {
+        let scrutinee = case_match
+            .predicate()
+            .map(|predicate| self.lower_node(&predicate));
+        let arms = case_match
+            .conditions()
+            .into_iter()
+            .filter_map(|condition| {
+                let in_node = condition.as_in_node()?;
+                let pattern = in_node.pattern();
+                let conditions = self.lower_pattern_conditions(&pattern);
+                let body = in_node
+                    .statements()
+                    .map(|statements| self.lower_node(&statements.as_node()))
+                    .unwrap_or_else(|| self.nil(&condition));
+                let body = scrutinee
+                    .and_then(|scrutinee| {
+                        let captures = self.lower_pattern_captures(&pattern, scrutinee);
+                        (!captures.is_empty()).then(|| {
+                            let mut expressions = captures;
+                            expressions.push(body);
+                            self.push_expr_with_span(
+                                self.span(&condition),
+                                ExprKind::Sequence(expressions),
+                            )
+                        })
+                    })
+                    .unwrap_or(body);
+                Some(CaseArm {
+                    conditions,
+                    body,
+                    span: self.span(&condition),
+                })
+            })
+            .collect();
+        let else_body = case_match.else_clause().map(|else_clause| {
+            else_clause
+                .statements()
+                .map(|statements| self.lower_node(&statements.as_node()))
+                .unwrap_or_else(|| self.nil(&else_clause.as_node()))
+        });
+        self.push_expr(
+            node,
+            ExprKind::Case(CaseExpr {
+                scrutinee,
+                arms,
+                else_body,
+            }),
+        )
+    }
+
+    fn lower_pattern_conditions(&mut self, pattern: &Node<'_>) -> Vec<ExprId> {
+        if let Some(alternation) = pattern.as_alternation_pattern_node() {
+            let mut conditions = self.lower_pattern_conditions(&alternation.left());
+            conditions.extend(self.lower_pattern_conditions(&alternation.right()));
+            return conditions;
+        }
+        let type_name = if pattern.as_array_pattern_node().is_some() {
+            Some("Array")
+        } else if pattern.as_hash_pattern_node().is_some() {
+            Some("Hash")
+        } else if let Some(capture) = pattern.as_capture_pattern_node() {
+            return self.lower_pattern_conditions(&capture.value());
+        } else {
+            None
+        };
+        if let Some(type_name) = type_name {
+            return vec![self.push_expr_with_span(
+                self.span(pattern),
+                ExprKind::Read(Read::Constant(ConstantPath::new(type_name))),
+            )];
+        }
+        vec![self.lower_node(pattern)]
+    }
+
+    fn lower_pattern_captures(&mut self, pattern: &Node<'_>, scrutinee: ExprId) -> Vec<ExprId> {
+        let Some(hash) = pattern.as_hash_pattern_node() else {
+            return Vec::new();
+        };
+        hash.elements()
+            .into_iter()
+            .filter_map(|element| {
+                let assoc = element.as_assoc_node()?;
+                let name = if let Some(capture) = assoc.value().as_capture_pattern_node() {
+                    prism::constant_name(capture.target().name())
+                } else {
+                    // Hash-pattern captures written as `key: value` use a
+                    // local-variable target directly in Prism rather than a
+                    // CapturePatternNode (the latter is used for `value =>
+                    // target`). Both forms bind the value stored at `key`.
+                    let target = assoc.value().as_local_variable_target_node()?;
+                    prism::constant_name(target.name())
+                };
+                let key_text = self.text(&assoc.key());
+                let key = key_text.trim().trim_end_matches(':');
+                let key = self.push_expr_with_span(
+                    self.span(&assoc.key()),
+                    ExprKind::Literal(Literal::Symbol(key.to_owned())),
+                );
+                let value = self.push_expr_with_span(
+                    self.span(pattern),
+                    ExprKind::Call(Call {
+                        receiver: Receiver::Explicit(scrutinee),
+                        name: Name::new("[]"),
+                        arguments: vec![Argument::Positional(key)],
+                        argument_groups: vec![1],
+                        argument_spans: vec![self.span(&assoc.key())],
+                        block: None,
+                        safe_navigation: false,
+                        span: self.span(pattern),
+                    }),
+                );
+                let local = self.local(&name);
+                Some(self.push_expr_with_span(
+                    self.span(pattern),
+                    ExprKind::Assign {
+                        target: AssignTarget::Local(local),
+                        value,
+                        operator: AssignOperator::Set,
+                        target_span: self.span(&assoc.value()),
+                    },
+                ))
+            })
+            .collect()
     }
 
     fn lower_assignment(
@@ -1682,6 +1818,20 @@ impl<'src> Lowerer<'src> {
         kind: ParameterKind,
         required_name: bool,
     ) {
+        if node.as_multi_target_node().is_some() {
+            let pattern = self
+                .lower_parameter_pattern(node)
+                .expect("multi-target parameter pattern");
+            parameters.parameters.push(Parameter {
+                local: None,
+                name: None,
+                kind,
+                span: self.span(node),
+                pattern: Some(pattern),
+                default_body: None,
+            });
+            return;
+        }
         let name = node
             .as_required_parameter_node()
             .map(|parameter| prism::constant_name(parameter.name()))
@@ -1730,8 +1880,41 @@ impl<'src> Lowerer<'src> {
             name: name.map(Name::new),
             kind,
             span: self.span(node),
+            pattern: None,
             default_body,
         });
+    }
+
+    fn lower_parameter_pattern(&mut self, node: &Node<'_>) -> Option<ParameterPattern> {
+        if let Some(target) = node.as_multi_target_node() {
+            let lower_list = |lowerer: &mut Self, nodes: ruby_prism::NodeList<'_>| {
+                nodes
+                    .into_iter()
+                    .filter_map(|node| lowerer.lower_parameter_pattern(&node))
+                    .collect::<Vec<_>>()
+            };
+            return Some(ParameterPattern::Tuple {
+                lefts: lower_list(self, target.lefts()),
+                rest: target
+                    .rest()
+                    .and_then(|node| self.lower_parameter_pattern(&node))
+                    .map(Box::new),
+                rights: lower_list(self, target.rights()),
+            });
+        }
+        let name = node
+            .as_local_variable_target_node()
+            .map(|target| prism::constant_name(target.name()))
+            .or_else(|| {
+                node.as_required_parameter_node()
+                    .map(|parameter| prism::constant_name(parameter.name()))
+            })
+            .or_else(|| {
+                node.as_rest_parameter_node()
+                    .and_then(|parameter| parameter.name())
+                    .map(prism::constant_name)
+            })?;
+        Some(ParameterPattern::Local(self.new_local(&name)))
     }
 
     fn lower_parameter_default(&mut self, node: Node<'_>) -> BodyId {

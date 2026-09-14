@@ -71,7 +71,7 @@ pub(super) fn narrow_pattern_value(
                 if truthy {
                     analyzer.meet_predicate_type(&source_type, &expected)
                 } else {
-                    source_type.without(&expected)
+                    without_predicate_type(analyzer, &source_type, &expected)
                 }
             }
         }
@@ -83,6 +83,15 @@ pub(super) fn narrow_pattern_value(
         .cloned()
         .unwrap_or(narrowed);
     state.set_value(value, narrowed.clone());
+    let source_hash_shape = pattern_source_place
+        .and_then(|place| super::assignment::hash_shape_key(analyzer, place))
+        .and_then(|key| {
+            state
+                .environment
+                .hash_shape(&key)
+                .cloned()
+                .map(|shape| (key, shape))
+        });
     if let Some(source_place) = pattern_source_place {
         let is_discriminator = case_has_type_discriminator(analyzer, pattern);
         if !is_discriminator || discriminated.as_ref().is_some_and(Option::is_some) {
@@ -103,6 +112,9 @@ pub(super) fn narrow_pattern_value(
             }
         }
     }
+    if let Some((key, shape)) = source_hash_shape {
+        state.environment.set_hash_shape(key, Some(shape));
+    }
     if matches!(
         pattern,
         cfg::Pattern::Truthy | cfg::Pattern::LogicalAnd | cfg::Pattern::LogicalOr
@@ -115,6 +127,18 @@ pub(super) fn narrow_pattern_value(
             &mut state.environment,
             truthy == source.truthy,
         );
+    }
+}
+
+fn without_predicate_type(analyzer: &Analyzer<'_>, current: &Type, excluded: &Type) -> Type {
+    match current {
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|member| without_predicate_type(analyzer, member, excluded)),
+        ),
+        _ if analyzer.is_assignable(current, excluded) => Type::Never,
+        _ => current.without(excluded),
     }
 }
 

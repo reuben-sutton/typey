@@ -117,7 +117,6 @@ fn dispatches_object_methods_on_open_generic_values() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -137,7 +136,6 @@ fn correlates_acts_like_self_aliases_across_legacy_and_cfg_flow() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -266,7 +264,6 @@ fn honors_respond_to_guards_in_legacy_and_cfg_flow() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -281,7 +278,6 @@ fn checks_sorbet_sig_calls() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -302,7 +298,6 @@ T.reveal_type(gem("library"))
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -318,7 +313,6 @@ fn transfers_source_line_through_owned_hir() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -334,7 +328,6 @@ fn transfers_rescue_modifier_through_owned_hir() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -350,7 +343,6 @@ fn transfers_back_reference_reads_through_owned_hir() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -366,7 +358,6 @@ fn transfers_multi_write_call_targets_through_owned_hir() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -388,7 +379,6 @@ fn transfers_alias_keyword_through_owned_hir() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -407,7 +397,6 @@ fn preserves_unresolved_super_gradual_result() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -422,17 +411,8 @@ fn preserves_unresolved_super_gradual_result() {
 #[test]
 fn transfers_global_intrinsic_contracts_through_owned_hir() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_global_intrinsics.rb").unwrap();
-    let baseline = check(&source, CheckerConfig::default());
-    let cfg = check(
-        &source,
-        CheckerConfig {
-            enable_cfg: true,
-            ..CheckerConfig::default()
-        },
-    );
-    assert_eq!(cfg.diagnostics, baseline.diagnostics);
-    assert_eq!(cfg.types, baseline.types);
-    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    let result = check(&source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
 }
 
 #[test]
@@ -442,7 +422,6 @@ fn transfers_implicit_union_receiver_calls_through_owned_hir() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -454,23 +433,12 @@ fn transfers_implicit_union_receiver_calls_through_owned_hir() {
 #[test]
 fn transfers_lambda_outcomes_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_lambda_outcomes.rb").unwrap();
-    let baseline = check(&source, CheckerConfig::default());
-    let cfg = check(
-        &source,
-        CheckerConfig {
-            enable_cfg: true,
-            ..CheckerConfig::default()
-        },
-    );
-    assert!(baseline
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.message.contains("T.untyped")));
-    assert!(cfg
+    let result = check(&source, CheckerConfig::default());
+    assert!(result
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.message.contains("Integer")));
-    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
 }
 
 #[test]
@@ -480,7 +448,6 @@ fn transfers_mixin_calls_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -492,20 +459,9 @@ fn transfers_mixin_calls_through_owned_cfg() {
 #[test]
 fn transfers_dynamic_alias_methods_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_dynamic_alias_method.rb").unwrap();
-    let baseline = check(&source, CheckerConfig::default());
-    let cfg = check(
-        &source,
-        CheckerConfig {
-            enable_cfg: true,
-            ..CheckerConfig::default()
-        },
-    );
-    assert!(baseline
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.message.contains("does not exist")));
-    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
-    assert!(cfg
+    let result = check(&source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
@@ -518,7 +474,6 @@ fn destructures_homogeneous_array_elements_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -541,7 +496,6 @@ fn keeps_owned_keyword_diagnostics_on_the_value_span() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -563,28 +517,17 @@ fn preserves_positional_hash_argument_shape_through_hir_calls() {
 fn preserves_keyword_shorthand_types_through_owned_hir() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_keyword_shorthand.rb").expect("fixture");
-    let baseline = check_fixture("tests/fixtures/cfg_keyword_shorthand.rb");
-    let cfg = check(
-        &source,
-        CheckerConfig {
-            enable_cfg: true,
-            ..CheckerConfig::default()
-        },
-    );
-    assert!(baseline
-        .diagnostics
-        .iter()
-        .any(|diagnostic| { diagnostic.message.contains("Revealed type: `T.untyped`") }));
-    assert!(cfg.diagnostics.iter().any(|diagnostic| {
+    let result = check(&source, CheckerConfig::default());
+    assert!(result.diagnostics.iter().any(|diagnostic| {
         diagnostic
             .message
             .contains("Revealed type: `T.nilable(String)`")
     }));
-    assert!(cfg
+    assert!(result
         .diagnostics
         .iter()
         .any(|diagnostic| { diagnostic.message.contains("Revealed type: `String`") }));
-    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
 }
 
 #[test]
@@ -595,7 +538,6 @@ fn transfers_owned_builtin_receiver_contracts() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -612,7 +554,6 @@ fn respects_respond_to_method_guards_in_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -627,7 +568,6 @@ fn infers_set_constructor_element_types_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -657,7 +597,6 @@ end
     let cfg = check_workspace(
         &files,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -708,7 +647,6 @@ fn preserves_proc_constructor_instance_dispatch_through_owned_cfg() {
     let cfg = check_workspace(
         &files,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -742,7 +680,6 @@ fn widens_inferred_boolean_returns_when_a_subclass_overrides_them() {
     let result = check_workspace(
         &files,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -774,7 +711,6 @@ fn transfers_union_enumerable_predicates_through_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -798,7 +734,6 @@ fn transfers_self_as_assertions_into_cfg_body_context() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -815,7 +750,6 @@ fn transfers_constructor_ivars_through_included_initializer_methods() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -831,11 +765,18 @@ fn preserves_literal_hash_key_types_through_cfg_reads() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
-    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    assert!(
+        cfg.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Expected `T.any(FalseClass, String)`, but found `Integer`")
+        }),
+        "missing hash value-contract diagnostic: {:#?}",
+        cfg.diagnostics
+    );
     let start = source
         .find("options[:relative_file_paths]")
         .expect("hash lookup");
@@ -858,7 +799,6 @@ fn compiles_cfg_bodies_without_changing_checker_results() {
     let result = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -882,7 +822,6 @@ T.reveal_type(maybe.nil?)
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -898,7 +837,6 @@ fn transfers_hir_predicate_refinements_without_parser_walks() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -915,7 +853,6 @@ fn joins_type_predicate_facts_across_cfg_logical_or() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -931,7 +868,6 @@ fn transfers_cfg_conditionals_without_changing_flow_results() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -946,7 +882,6 @@ fn transfers_owned_literals_and_reads_without_changing_results() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -963,7 +898,6 @@ fn transfers_interpolated_values_without_recursive_child_evaluation() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -980,7 +914,6 @@ fn applies_safe_navigation_assertions_after_paths_join() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -996,7 +929,6 @@ fn transfers_logical_values_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1012,7 +944,6 @@ fn preserves_definite_falsy_logical_values() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1046,7 +977,6 @@ fn advances_after_logical_keyword_splat_values_in_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1073,7 +1003,6 @@ fn advances_after_logical_positional_splat_values_in_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1089,7 +1018,6 @@ fn does_not_freeze_mutable_accessor_ivars_to_constructor_literals_in_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1105,7 +1033,6 @@ fn preserves_optional_parameter_defaults_in_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1120,7 +1047,6 @@ fn keeps_open_inferred_parameters_reachable_in_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1133,7 +1059,6 @@ fn keeps_until_loop_bodies_reachable_in_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1147,7 +1072,6 @@ fn transfers_star_forwarding_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1159,69 +1083,38 @@ fn transfers_star_forwarding_through_owned_cfg() {
 fn transfers_mixed_forwarding_through_owned_cfg() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_mixed_forwarding.rb").expect("fixture");
-    let baseline = check(&source, CheckerConfig::default());
-    let cfg = check(
-        &source,
-        CheckerConfig {
-            enable_cfg: true,
-            ..CheckerConfig::default()
-        },
-    );
+    let result = check(&source, CheckerConfig::default());
     assert!(
-        baseline
+        result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.message.contains("Revealed type: `T.untyped`")),
-        "legacy forwarding baseline unexpectedly became concrete: {:?}",
-        baseline.diagnostics
-    );
-    assert!(
-        cfg.diagnostics
-            .iter()
             .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")),
-        "CFG did not retain the explicit prefix type through forwarding: {:?}",
-        cfg.diagnostics
+        "forwarding did not retain the explicit prefix type: {:?}",
+        result.diagnostics
     );
-    assert!(!cfg
+    assert!(!result
         .diagnostics
         .iter()
         .any(|diagnostic| { diagnostic.message.contains("Revealed type: `T.untyped`") }));
-    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
 }
 
 #[test]
 fn transfers_static_undef_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_undef.rb").expect("fixture");
-    let baseline = check(&source, CheckerConfig::default());
-    let cfg = check(
-        &source,
-        CheckerConfig {
-            enable_cfg: true,
-            ..CheckerConfig::default()
-        },
-    );
-    assert_eq!(cfg.diagnostics, baseline.diagnostics);
+    let result = check(&source, CheckerConfig::default());
     let undef_start = source.find("undef :removed").expect("undef expression");
     let undef_end = undef_start + "undef :removed".len();
     assert!(
-        baseline.types.iter().any(|inferred| {
-            inferred.start == undef_start
-                && inferred.end == undef_end
-                && inferred.type_ == Type::Any
-        }),
-        "legacy undef result unexpectedly became concrete: {:?}",
-        baseline.types
-    );
-    assert!(
-        cfg.types.iter().any(|inferred| {
+        result.types.iter().any(|inferred| {
             inferred.start == undef_start
                 && inferred.end == undef_end
                 && inferred.type_ == Type::Nil
         }),
-        "CFG did not give undef its concrete nil result: {:?}",
-        cfg.types
+        "undef did not give its concrete nil result: {:?}",
+        result.types
     );
-    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
 }
 
 #[test]
@@ -1231,7 +1124,6 @@ fn transfers_constant_class_predicates_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1247,7 +1139,6 @@ fn refines_inferred_parameters_inside_class_predicates() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1263,7 +1154,6 @@ fn narrows_case_assignment_scrutinees_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1279,7 +1169,6 @@ fn refines_double_bang_operands_in_owned_logical_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1311,7 +1200,6 @@ inferred_negation("value")
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1326,7 +1214,6 @@ fn transfers_owned_collection_trees_without_prism_child_evaluation() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1353,7 +1240,6 @@ fn transfers_global_array_coercion_through_shared_intrinsic_semantics() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1375,7 +1261,6 @@ T.reveal_type(always_raises)
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1412,7 +1297,6 @@ end
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1429,7 +1313,6 @@ fn transfers_known_dynamic_instance_variables_through_owned_calls() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1445,7 +1328,6 @@ fn transfers_straight_line_method_bodies_without_changing_results() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1471,7 +1353,6 @@ fn transfers_normal_inline_block_completion_without_erasing_generic_results() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1487,7 +1368,6 @@ fn transfers_optional_rbs_blocks_through_owned_proc_calls() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1503,7 +1383,6 @@ fn dispatches_runtime_constant_indexers_through_owned_signatures() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1519,7 +1398,6 @@ fn transfers_rescue_after_noreturn_calls_without_losing_normal_completion() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1536,7 +1414,6 @@ fn analyzes_rescue_handlers_after_normally_returning_calls() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1552,7 +1429,6 @@ fn preserves_struct_alias_identity_in_cfg_constructor_calls() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1569,7 +1445,6 @@ fn transfers_dynamic_struct_constant_identity_in_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1590,7 +1465,6 @@ fn keeps_non_nil_refinement_across_and_operands_in_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1606,7 +1480,6 @@ fn narrows_loop_assignment_targets_in_cfg_predicates() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1622,7 +1495,6 @@ fn transfers_union_callable_calls_without_recursive_fallback() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1642,7 +1514,6 @@ fn transfers_index_splat_writes_from_owned_operands() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1663,7 +1534,6 @@ fn transfers_logical_writes_for_owned_storage_places() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1679,7 +1549,6 @@ fn preserves_ivar_or_assignment_narrowing_in_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1697,7 +1566,6 @@ fn keeps_index_logical_assignment_rhs_reachable_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1724,7 +1592,6 @@ fn preserves_tuple_component_types_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1741,7 +1608,6 @@ fn does_not_treat_namespaced_class_constants_as_type_tests() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1769,7 +1635,6 @@ fn transfers_rescue_handlers_and_unwind_edges_without_changing_results() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1785,7 +1650,6 @@ fn transfers_ensure_on_normal_and_exceptional_paths_without_changing_results() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1802,7 +1666,6 @@ fn preserves_possible_nil_for_locals_before_ensure_assignments_complete() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1817,7 +1680,6 @@ fn transfers_retry_back_to_the_protected_body_without_changing_results() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1833,7 +1695,6 @@ fn transfers_symbol_passed_blocks_with_their_method_return_type() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1849,7 +1710,6 @@ fn transfers_loop_bodies_through_the_owned_cfg_graph() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1865,7 +1725,6 @@ fn transfers_for_bodies_through_owned_collection_iteration() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1881,7 +1740,6 @@ fn transfers_explicit_method_returns_through_the_owned_cfg_graph() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1897,7 +1755,6 @@ fn transfers_nonlocal_block_returns_and_ensure_outcomes() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1913,19 +1770,8 @@ fn transfers_nonlocal_block_returns_and_ensure_outcomes() {
 fn transfers_inline_callbacks_after_a_nonlocal_return_path() {
     let source =
         std::fs::read_to_string("tests/fixtures/cfg_unreachable_inline_callback.rb").unwrap();
-    let baseline = check(&source, CheckerConfig::default());
-    let cfg = check(
-        &source,
-        CheckerConfig {
-            enable_cfg: true,
-            ..CheckerConfig::default()
-        },
-    );
-
-    assert!(!baseline.diagnostics.iter().any(|diagnostic| diagnostic
-        .message
-        .contains("Expected `String`, but found `Integer`")));
-    assert!(cfg.diagnostics.iter().any(|diagnostic| diagnostic
+    let result = check(&source, CheckerConfig::default());
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
         .message
         .contains("Expected `String`, but found `Integer`")));
 }
@@ -1943,7 +1789,6 @@ fn widens_captured_truthiness_after_lambda_creation() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1959,7 +1804,6 @@ fn merges_possible_rescue_local_state() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -1975,7 +1819,6 @@ fn accepts_calls_handled_by_method_missing() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2000,7 +1843,6 @@ fn transfers_case_patterns_through_the_owned_cfg_graph() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2028,7 +1870,6 @@ box.value
     let result = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2041,7 +1882,6 @@ fn cfg_opt_in_preserves_loop_and_rescue_fixture() {
     let result = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2118,7 +1958,6 @@ fn narrows_proc_arity_in_zero_arity_branch() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2130,7 +1969,7 @@ fn narrows_proc_arity_in_zero_arity_branch() {
 }
 
 #[test]
-fn keeps_unannotated_optional_parameters_untyped() {
+fn keeps_unannotated_optional_parameter_defaults_concrete() {
     let path = "tests/fixtures/default_parameter_flow.rb";
     let source = std::fs::read_to_string(path).expect("fixture");
     let result = check_fixture(path);
@@ -2141,9 +1980,9 @@ fn keeps_unannotated_optional_parameters_untyped() {
             inferred.is_send
                 && inferred.start == start
                 && inferred.end == start + send.len()
-                && inferred.type_ == Type::Any
+                && inferred.type_ == Type::Integer
         }),
-        "default parameter send was not preserved as untyped: {:?}",
+        "default parameter send was not inferred concretely: {:?}",
         result.types
     );
 }
@@ -2194,7 +2033,6 @@ fn transfers_open_array_appends_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2228,7 +2066,6 @@ fn transfers_dynamic_eval_blocks_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2248,7 +2085,6 @@ fn accepts_dynamic_splats_after_required_arguments_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2333,7 +2169,6 @@ fn transfers_multi_assignment_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2350,7 +2185,6 @@ fn transfers_typed_tuple_call_destructuring_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2409,7 +2243,6 @@ fn preserves_missing_method_diagnostics_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2425,7 +2258,6 @@ fn preserves_ractor_class_storage_dispatch_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2452,7 +2284,6 @@ fn reschedules_only_dependents_when_a_late_include_resolves_a_call() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2614,7 +2445,6 @@ fn models_accessors_declared_on_singleton_class_receivers() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -2826,7 +2656,6 @@ fn narrows_nominal_predicates_to_unreachable_when_classes_are_disjoint() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3102,7 +2931,6 @@ fn transfers_inline_record_indexes_through_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3144,7 +2972,6 @@ fn transfers_nominal_generic_collection_methods_through_owned_cfg() {
     let result = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3192,7 +3019,6 @@ T.reveal_type(set - set)
     let result = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3226,7 +3052,6 @@ fn transfers_each_with_object_accumulator_types_through_owned_cfg() {
     let result = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3272,7 +3097,6 @@ T.reveal_type(OptionParser.new.parse!(["--name", "value"]))
     let result = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3530,7 +3354,6 @@ end
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3557,7 +3380,6 @@ value ||= "default".upcase #: as String
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3581,7 +3403,6 @@ fn keeps_non_type_case_patterns_reachable_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3630,7 +3451,6 @@ fn transfers_nested_generic_hash_constructor_types_through_owned_cfg() {
     let result = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3682,7 +3502,6 @@ fn narrows_nilable_locals_after_safe_navigation_guards() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3722,7 +3541,6 @@ fn permits_safe_navigation_through_mutable_accessor_forwarders() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3737,7 +3555,6 @@ fn preserves_safe_navigation_diagnostics_through_owned_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3753,7 +3570,6 @@ fn keeps_owned_cfg_transfer_after_invalid_yield() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3770,7 +3586,6 @@ fn narrows_unions_for_equality_predicates() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3790,7 +3605,6 @@ fn preserves_unreachable_branch_products_through_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3867,7 +3681,6 @@ end
     let cfg_result = check_workspace(
         &files,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3882,7 +3695,6 @@ fn preserves_nil_for_locals_assigned_only_in_unreached_rescues() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3935,19 +3747,9 @@ fn preserves_enumerator_entries_element_types_through_owned_cfg() {
 values = T.let(T.unsafe(nil), T::Enumerator[Integer])
 T.reveal_type(values.entries[1])
 "#;
-    let baseline = check(source, CheckerConfig::default());
-    let cfg = check(
-        source,
-        CheckerConfig {
-            enable_cfg: true,
-            ..CheckerConfig::default()
-        },
-    );
-    assert!(baseline.diagnostics.iter().any(|diagnostic| diagnostic
-        .message
-        .contains("Method `entries` does not exist")));
-    assert!(!cfg.has_errors(), "{:#?}", cfg.diagnostics);
-    assert!(cfg
+    let result = check(source, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.message.contains("T.nilable(Integer)")));
@@ -3963,7 +3765,6 @@ T.reveal_type(values[1])
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -3984,7 +3785,6 @@ fn checks_array_comparison_return_contracts() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4004,7 +3804,6 @@ fn transfers_range_literals_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4034,7 +3833,6 @@ fn transfers_random_formatter_keywords_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4068,10 +3866,11 @@ T.reveal_type(["unknown"].to_s)
 fn models_array_to_set() {
     let result = check_fixture("tests/fixtures/array_to_set.rb");
     assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|diagnostic| { diagnostic.message.contains("Revealed type: `Set[String]`") }),
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Set[String]`")
+        }),
         "{:?}",
         result.diagnostics
     );
@@ -4134,7 +3933,6 @@ fn preserves_symbol_block_diagnostics_through_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4150,7 +3948,6 @@ fn preserves_passed_block_contract_diagnostics_through_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4176,7 +3973,6 @@ fn preserves_metatype_diagnostics_through_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4216,7 +4012,6 @@ fn preserves_builtin_models_through_owned_cfg_transfer() {
         let cfg = check(
             &source,
             CheckerConfig {
-                enable_cfg: true,
                 ..CheckerConfig::default()
             },
         );
@@ -4233,7 +4028,6 @@ fn preserves_attached_class_intrinsics_through_owned_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4249,7 +4043,6 @@ fn preserves_enumerable_assignability_through_owned_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4265,7 +4058,6 @@ fn preserves_setter_assignment_types_through_owned_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4281,7 +4073,6 @@ fn preserves_dynamic_class_eval_through_owned_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4297,7 +4088,6 @@ fn preserves_nonempty_array_extrema_through_owned_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4348,7 +4138,6 @@ fn preserves_optional_blocks_inside_owned_closures() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4429,7 +4218,6 @@ fn widens_recursive_inferred_returns_to_a_finite_concrete_type() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -4706,7 +4494,6 @@ fn refines_pattern_matches_and_exception_edges() {
         .collect::<Vec<_>>();
     for expected in [
         "Revealed type: `Integer`",
-        "Revealed type: `T.nilable(String)`",
         "Revealed type: `String`",
         "Revealed type: `Integer`",
     ] {
@@ -4720,7 +4507,7 @@ fn refines_pattern_matches_and_exception_edges() {
             .iter()
             .filter(|message| message.contains("Revealed type: `String`"))
             .count(),
-        2,
+        3,
         "{notes:?}"
     );
 }
@@ -5516,7 +5303,6 @@ fn keeps_deferred_callbacks_from_terminating_the_creator() {
     let cfg = check_workspace(
         &cfg_files,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -5574,7 +5360,6 @@ T.reveal_type(map[:key])
     let cfg = check_workspace(
         &files,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6321,7 +6106,7 @@ T.reveal_type("text".to_c)
         .map(|diagnostic| diagnostic.message.as_str())
         .collect::<Vec<_>>();
     for expected in [
-        "Revealed type: `T::Array[[Integer, String]]`",
+        "Revealed type: `T::Array[[Integer, T.nilable(String)]]`",
         "Revealed type: `T::Array[String]`",
         "Revealed type: `Integer`",
         "Revealed type: `Float`",
@@ -6380,7 +6165,6 @@ fn transfers_source_file_pseudo_expression_through_owned_hir() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6535,7 +6319,6 @@ T.reveal_type(Mapper.new.to_h { |value| [value, value.length] })
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6550,7 +6333,6 @@ fn transfers_nested_map_inside_generic_to_h_block_through_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6760,7 +6542,6 @@ fn transfers_common_class_method_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6777,7 +6558,6 @@ fn transfers_common_object_methods_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6802,7 +6582,6 @@ end
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6817,7 +6596,6 @@ fn transfers_tap_blocks_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6833,7 +6611,6 @@ fn transfers_inline_blocks_on_unknown_receivers_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6852,7 +6629,6 @@ fn transfers_inline_blocks_without_a_block_contract_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6874,7 +6650,6 @@ fn transfers_blocks_on_modeled_implicit_globals_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -6902,7 +6677,6 @@ fn splits_union_generic_class_objects_in_owned_dispatch() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -7522,7 +7296,6 @@ fn infers_implicit_block_parameters() {
     for config in [
         CheckerConfig::default(),
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     ] {
@@ -7573,7 +7346,6 @@ end
 T.reveal_type(apply { |value| value.to_s })
 "#,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -7595,7 +7367,6 @@ fn publishes_passed_block_returns_to_owned_callees() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -7627,7 +7398,6 @@ fn publishes_nested_forwarded_block_returns_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -7650,7 +7420,6 @@ fn preserves_forwarded_block_contracts_through_local_aliases() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -7675,7 +7444,6 @@ fn publishes_forwarded_symbol_block_returns_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -7912,7 +7680,6 @@ end
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -7942,7 +7709,6 @@ end
     let cfg = check_workspace(
         &files,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -8287,7 +8053,7 @@ T.reveal_type(values.bsearch { |value| value > 0 })
         "Revealed type: `T.nilable(Integer)`",
         "Revealed type: `T::Array[Integer]`",
         "Revealed type: `String`",
-        "Revealed type: `Enumerator`",
+        "Revealed type: `T::Enumerator[T::Array[Integer]]`",
         "Revealed type: `T.nilable(T::Array[Integer])`",
     ] {
         assert!(
@@ -8476,7 +8242,7 @@ T.reveal_type(Counter.class_total)
             .iter()
             .filter(|message| message.contains("Revealed type: `T.any(Float, Integer)`"))
             .count(),
-        4,
+        3,
         "{notes:?}"
     );
     assert_eq!(
@@ -8540,7 +8306,15 @@ T.reveal_type(hash["missing"] ||= "fallback")
 "#,
         CheckerConfig::default(),
     );
-    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Expected `Integer`, but found `Float`")
+        }),
+        "missing hash value-contract diagnostic: {:?}",
+        result.diagnostics
+    );
     let notes = result
         .diagnostics
         .iter()
@@ -9431,7 +9205,6 @@ T.reveal_type(Registry.configure)
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -9569,7 +9342,6 @@ fn transfers_rbi_constant_aliases_through_owned_cfg() {
     let result = check_workspace(
         &files,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -9635,7 +9407,6 @@ T.reveal_type(extract(AST::Node.new))
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -9900,7 +9671,6 @@ end
     let cfg = check(
         source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10071,7 +9841,6 @@ fn traverses_direct_define_method_bodies() {
     let cfg_result = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10093,7 +9862,6 @@ fn transfers_inline_dynamic_method_bodies_through_cfg() {
     let result = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10118,7 +9886,6 @@ fn compares_passed_dynamic_method_blocks_through_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10142,7 +9909,6 @@ fn transfers_passed_dynamic_method_body_with_bound_receiver() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10173,7 +9939,6 @@ fn transfers_passed_dynamic_singleton_method_body_with_bound_receiver() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10212,7 +9977,6 @@ fn preserves_unreachable_statement_diagnostics_through_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10227,7 +9991,6 @@ fn preserves_inferred_raising_unreachable_diagnostics_through_cfg_transfer() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10252,7 +10015,6 @@ fn preserves_symbol_discriminator_narrowing_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10500,7 +10262,6 @@ fn transfers_standard_collection_contracts_through_owned_cfg() {
     let result = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10551,8 +10312,14 @@ T.reveal_type(inflections)
 fn records_compound_assignments_as_send_sites() {
     let source = r#"
 class Example
+  CONSTANT = 1
+  @@class_var = 1
+
   def update(value)
     local = 1
+    @instance = 1
+    $global = 1
+    values = [1]
     local += value
     @instance += value
     @@class_var += value
@@ -10564,15 +10331,25 @@ class Example
 end
 "#;
     let result = check(source, CheckerConfig::default());
-    let send_count = result
-        .types
-        .iter()
-        .filter(|inferred| inferred.is_send)
-        .count();
-    assert!(
-        send_count >= 8,
-        "expected compound assignment send sites, got {send_count}"
-    );
+    for assignment in [
+        "local += value",
+        "@instance += value",
+        "@@class_var += value",
+        "$global += value",
+        "CONSTANT += value",
+        "self.value += value",
+        "values[0] += value",
+    ] {
+        let start = source.find(assignment).expect("compound assignment");
+        assert!(
+            result
+                .types
+                .iter()
+                .any(|inferred| inferred.is_send && inferred.start == start),
+            "missing send site for {assignment}: {:?}",
+            result.types
+        );
+    }
 }
 
 #[test]
@@ -10768,7 +10545,6 @@ fn transfers_defined_operands_through_owned_cfg() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );
@@ -10785,7 +10561,6 @@ fn preserves_lexical_self_inside_tap_blocks() {
     let cfg = check(
         &source,
         CheckerConfig {
-            enable_cfg: true,
             ..CheckerConfig::default()
         },
     );

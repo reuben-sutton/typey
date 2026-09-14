@@ -93,15 +93,32 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             if !reported.insert(expression_id) {
                 continue;
             }
-            let Some(expression) = self.analyzer.program.hir_program.expression(expression_id)
+            let Some((span, synthetic)) = self
+                .analyzer
+                .program
+                .hir_program
+                .expression(expression_id)
+                .map(|expression| (expression.span, expression.synthetic))
             else {
                 continue;
             };
-            if expression.synthetic {
+            if synthetic {
                 continue;
             }
+            if matches!(operation.kind, cfg::OperationKind::Call { .. }) {
+                // A call after a statically terminating operation is still a
+                // source send site. It has no reachable value in this body,
+                // so publish the honest gradual type for metrics and source
+                // accounting without pretending that the call was executed.
+                self.analyzer.record_at(
+                    SourceSite::from_span(span, Some(expression_id)),
+                    Type::Any,
+                    true,
+                    Some(super::super::UntypedOrigin::Propagated),
+                );
+            }
             self.analyzer.error_at(
-                SourceSite::from_span(expression.span, Some(expression_id)),
+                SourceSite::from_span(span, Some(expression_id)),
                 "This expression appears after an unconditional return",
             );
         }
@@ -126,6 +143,55 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
     }
 
     fn should_report_unreachable_branch(&self, expression: hir::ExprId) -> bool {
+        let is_required_block_guard = self
+            .analyzer
+            .program
+            .hir_program
+            .expression(expression)
+            .is_some_and(|expr| {
+                let condition = match &expr.kind {
+                    hir::ExprKind::Call(call) if call.name.as_str() == "block_given?" => {
+                        Some(expression)
+                    }
+                    hir::ExprKind::If { condition, .. } => Some(*condition),
+                    _ => None,
+                };
+                let Some(condition) = condition else {
+                    return false;
+                };
+                let Some(hir::ExprKind::Call(call)) = self
+                    .analyzer
+                    .program
+                    .hir_program
+                    .expression(condition)
+                    .map(|condition| &condition.kind)
+                else {
+                    return false;
+                };
+                if call.name.as_str() == "block_given?" {
+                    return true;
+                }
+                let hir::Receiver::Explicit(receiver) = call.receiver else {
+                    return false;
+                };
+                self.analyzer
+                    .program
+                    .hir_program
+                    .expression(receiver)
+                    .is_some_and(|receiver| {
+                        matches!(
+                            &receiver.kind,
+                            hir::ExprKind::Call(call) if call.name.as_str() == "block_given?"
+                        )
+                    })
+            });
+        if is_required_block_guard {
+            // The required-block idiom intentionally has an unreachable
+            // fallback branch once the enclosing signature supplies a block.
+            // Sorbet uses that fact for return inference without reporting
+            // the fallback body as dead code.
+            return false;
+        }
         let Some(start) = self
             .analyzer
             .program
@@ -302,6 +368,15 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
         truthy: cfg::BlockId,
         falsy: cfg::BlockId,
     ) -> Result<(bool, bool), String> {
+        // Ruby's loop expressions may complete without entering the body,
+        // even when the current condition value looks decisive. Preserve the
+        // implicit nil exit used by Sorbet's loop model so a `break` value is
+        // joined with Nil rather than making the loop result unconditional.
+        if graph.conditionals.iter().any(|conditional| {
+            conditional.loop_condition && conditional.truthy == truthy && conditional.falsy == falsy
+        }) {
+            return Ok((true, true));
+        }
         let (source_id, pattern) = self.branch_operands(block, condition);
         let source_place = source_id.and_then(|source_id| pattern_source_place(graph, source_id));
         let source = state
@@ -873,11 +948,46 @@ impl<'src> Analyzer<'src> {
                 .get(region.entry.0 as usize)
                 .is_some_and(Option::is_some);
             if region.may_raise && !handler_reached && !transfer.probe_normal_type.is_never() {
+                let handler_type = transfer.probe_normal_type.clone();
                 normal_type = if normal_type.is_never() {
-                    transfer.probe_normal_type.clone()
+                    handler_type.clone()
                 } else {
-                    normal_type.join(&transfer.probe_normal_type)
+                    normal_type.join(&handler_type)
                 };
+                if let Some(mut exit_state) = worklist
+                    .states
+                    .get(region.exit.0 as usize)
+                    .and_then(Option::as_ref)
+                    .cloned()
+                {
+                    if let Some(parameter) = graph
+                        .block(region.exit)
+                        .and_then(|block| block.parameters.first())
+                    {
+                        let current = exit_state
+                            .value(parameter.value)
+                            .unwrap_or(Type::Never)
+                            .join(&handler_type);
+                        exit_state.set_value(parameter.value, current);
+                        transfer.branch_results.clear();
+                        if let Err(error) =
+                            cfg::transfer::run_from(&graph, &mut transfer, region.exit, exit_state)
+                        {
+                            if transfer.analyzer.config.debug {
+                                eprintln!(
+                                    "[typey] CFG rescue suffix transfer stopped at {:?}: {error:?}",
+                                    (body_site.start, body_site.end)
+                                );
+                            }
+                            drop(worklist);
+                            drop(transfer);
+                            if let Some(snapshot) = snapshot {
+                                self.restore_cfg_transfer_snapshot(snapshot);
+                            }
+                            return Ok(Eval::value(Type::Anything));
+                        }
+                    }
+                }
             }
         }
         transfer.normal_type = normal_type;
@@ -965,7 +1075,18 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
             // Their combined top-level graph can still contain parser-shaped
             // operations such as `undef` or placeholder assignments; ignore
             // those operations just as declaration bodies are ignored.
-            if self.analyzer.is_rbi_offset(operation.span.start as usize) {
+            let execute_rbi_top_level = match &operation.kind {
+                cfg::OperationKind::Const { .. }
+                | cfg::OperationKind::Read { .. }
+                | cfg::OperationKind::ReadSpecial { .. }
+                | cfg::OperationKind::BuildArray { .. }
+                | cfg::OperationKind::BuildHash { .. } => true,
+                cfg::OperationKind::Call { name, .. } => name.as_str() == "reveal_type",
+                _ => false,
+            };
+            let skip_rbi_operation = self.analyzer.is_rbi_offset(operation.span.start as usize)
+                && (!self.context.top_level || !execute_rbi_top_level);
+            if skip_rbi_operation {
                 if let Some(result) = operation.result {
                     next.set_value(result, Type::Nil);
                 }

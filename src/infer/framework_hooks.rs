@@ -72,6 +72,7 @@ impl<'src> Analyzer<'src> {
             let Some(signature) = self.observe_call(&hook, &hook_arguments, false) else {
                 continue;
             };
+            self.fixpoint.known_module_hooks.insert(hook.clone());
             self.record_method_dependency(&hook, environment);
             let receiver_type = Self::class_object_type(&module_name);
             let _ = self.invoke_signature_at(

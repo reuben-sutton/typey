@@ -547,6 +547,7 @@ impl<'src> Analyzer<'src> {
         }
 
         self.report_inference_gaps();
+        self.coalesce_reveal_diagnostics();
         let types = Self::deduplicate_types(std::mem::take(&mut self.reporting.types));
         let mut seen_diagnostics = BTreeSet::new();
         self.reporting.diagnostics.retain(|diagnostic| {
@@ -659,6 +660,41 @@ impl<'src> Analyzer<'src> {
             diagnostics: self.reporting.diagnostics.clone(),
             types,
         }
+    }
+
+    /// A reveal expression can be evaluated once per reachable CFG
+    /// environment. Publish one assertion for its source span, joining the
+    /// types from those environments, instead of exposing an implementation
+    /// detail of path-sensitive traversal as duplicate notes.
+    fn coalesce_reveal_diagnostics(&mut self) {
+        let mut first_by_site = BTreeMap::<(usize, usize), usize>::new();
+        let mut reveal_types = BTreeMap::<(usize, usize), Type>::new();
+        let mut diagnostics = Vec::with_capacity(self.reporting.diagnostics.len());
+
+        for diagnostic in std::mem::take(&mut self.reporting.diagnostics) {
+            let reveal_type = (diagnostic.severity == Severity::Note)
+                .then(|| diagnostic.message.strip_prefix("Revealed type: `"))
+                .flatten()
+                .and_then(|message| message.strip_suffix('`'));
+            let Some(reveal_type) = reveal_type else {
+                diagnostics.push(diagnostic);
+                continue;
+            };
+
+            let key = (diagnostic.start, diagnostic.end);
+            let inferred = signature::parse_type(reveal_type);
+            if let Some(index) = first_by_site.get(&key).copied() {
+                if let Some(current) = reveal_types.get_mut(&key) {
+                    *current = current.join(&inferred);
+                    diagnostics[index].message = format!("Revealed type: `{current}`");
+                }
+            } else {
+                first_by_site.insert(key, diagnostics.len());
+                reveal_types.insert(key, inferred);
+                diagnostics.push(diagnostic);
+            }
+        }
+        self.reporting.diagnostics = diagnostics;
     }
 
     fn cfg_signature_body_count(&self) -> usize {

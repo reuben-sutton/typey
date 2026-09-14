@@ -209,7 +209,21 @@ impl Type {
                 Some(Self::Tuple(
                     left.iter()
                         .zip(right)
-                        .map(|(left, right)| left.join(right))
+                        .map(|(left, right)| match (left, right) {
+                            // Empty array literals are represented as
+                            // `Array[Any]` until a concrete branch supplies
+                            // their element type.  A tuple produced by a
+                            // conditional must retain that branch evidence;
+                            // treating the placeholder as an absorbing
+                            // unknown would erase the typed tuple position.
+                            (Self::Array(left), Self::Array(right)) if left.is_any() => {
+                                Self::Array(right.clone())
+                            }
+                            (Self::Array(left), Self::Array(right)) if right.is_any() => {
+                                Self::Array(left.clone())
+                            }
+                            (left, right) => left.join(right),
+                        })
                         .collect(),
                 ))
             }

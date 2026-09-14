@@ -140,21 +140,45 @@ pub(super) fn transfer_implicit_call(
             });
         }
     }
-    if let Some(type_) = analyzer.global_call_type(input.name.as_str(), &arguments.argument_types) {
+    let key = analyzer.implicit_method_key(input.name.as_str(), environment);
+    if input.name.as_str() == "strongly_connected_components"
+        && Analyzer::named_type_name(receiver)
+            .is_some_and(|owner| analyzer.nominal_subtype(&owner, "TSort"))
+    {
+        let result = super::dispatch::transfer_receiver_call(
+            analyzer,
+            input,
+            receiver,
+            arguments,
+            values,
+            environment,
+            None,
+        )?;
         return Ok(ContextTransfer {
-            type_,
-            // Structural global contracts such as Kernel#each and
-            // Kernel#to_enum do not carry a callback signature. Ruby still
-            // type-checks an inline block supplied to them, so preserve the
-            // owned traversal even though the call result is known here.
-            block_result: transfer_inline_block_without_contract(analyzer, input, environment),
-            untyped_origin: UntypedOrigin::Propagated,
+            type_: result.type_,
+            block_result: result.block_result,
+            untyped_origin: result.untyped_origin,
         });
     }
+    let use_global_contract =
+        input.name.as_str() != "block_given?" || analyzer.resolve_method_key(&key).is_none();
+    if use_global_contract {
+        if let Some(type_) =
+            analyzer.global_call_type(input.name.as_str(), &arguments.argument_types)
+        {
+            return Ok(ContextTransfer {
+                type_,
+                // Structural global contracts such as Kernel#each and
+                // Kernel#to_enum do not carry a callback signature. Ruby still
+                // type-checks an inline block supplied to them, so preserve the
+                // owned traversal even though the call result is known here.
+                block_result: transfer_inline_block_without_contract(analyzer, input, environment),
+                untyped_origin: UntypedOrigin::Propagated,
+            });
+        }
+    }
 
-    if let Some(signature) =
-        analyzer.random_formatter_signature(None, receiver, input.name.as_str())
-    {
+    if let Some(signature) = analyzer.random_formatter_signature(receiver, input.name.as_str()) {
         let type_ = analyzer.invoke_signature_at(
             input.site,
             input.name.as_str(),
@@ -170,7 +194,6 @@ pub(super) fn transfer_implicit_call(
         });
     }
 
-    let key = analyzer.implicit_method_key(input.name.as_str(), environment);
     if let Some(dynamic_receiver) =
         analyzer.dynamic_missing_implicit_receiver(input.name.as_str(), environment)
     {
