@@ -15,7 +15,7 @@ ForwardedBlockLegacy.pass { |value| value.to_s }
 class FilterRequiredParameterNames
   def self.call(parameters)
     names = parameters.filter_map { |type, name| name if type == :req }
-    names << "&"
+    names << "&" # error: T.nilable(Symbol)
     names.join(", ")
   end
 end

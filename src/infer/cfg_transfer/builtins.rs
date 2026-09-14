@@ -758,6 +758,22 @@ fn transfer_array_builtin(
             Some(Type::Array(Box::new(element.clone())))
         }
         "push" | "<<" | "prepend" => {
+            for (index, argument) in arguments.argument_types.iter().enumerate() {
+                let argument_for_check = arguments
+                    .literal_tuple_arguments
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .unwrap_or(argument);
+                if !analyzer.is_assignable(argument_for_check, element) {
+                    let site = arguments
+                        .argument_sites
+                        .get(index)
+                        .copied()
+                        .unwrap_or(input.site);
+                    let actual = owned_literal_type_description(analyzer, site, argument_for_check);
+                    analyzer.error_at(site, format!("Expected `{element}` but found `{actual}`"));
+                }
+            }
             let element = arguments
                 .argument_types
                 .iter()
@@ -852,6 +868,28 @@ fn transfer_array_builtin(
         }
         "==" | "!=" => Some(Type::bool()),
         _ => None,
+    }
+}
+
+fn owned_literal_type_description(
+    analyzer: &Analyzer<'_>,
+    site: super::super::SourceSite,
+    type_: &Type,
+) -> String {
+    let Some(expression) = site
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+    else {
+        return type_.to_string();
+    };
+    match (&expression.kind, type_) {
+        (hir::ExprKind::Literal(hir::Literal::String(value)), Type::String) => {
+            format!("String(\"{value}\")")
+        }
+        (hir::ExprKind::Literal(hir::Literal::Integer(value)), Type::Integer) => {
+            format!("Integer({value})")
+        }
+        _ => type_.to_string(),
     }
 }
 

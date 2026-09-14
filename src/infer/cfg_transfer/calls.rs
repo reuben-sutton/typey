@@ -119,22 +119,29 @@ pub(super) fn transfer_call(
     let receiver_type = compound_assignment_receiver(analyzer, &input, receiver_type);
     let static_type_receiver = cfg_static_type_receiver(analyzer, &input);
     let type_expression_receiver = cfg_type_expression_receiver(analyzer, &input);
-    if let Some(description) = static_type_receiver.as_deref().map(cfg_type_description) {
-        if !matches!(
-            input.name.as_str(),
-            "new"
-                | "valid?"
-                | "recursively_valid?"
-                | "subtype_of?"
-                | "describe_obj"
-                | "error_message_for_obj"
-                | "error_message_for_obj_recursive"
-                | "validate!"
-                | "params"
-                | "returns"
-                | "void"
-                | "bind"
-        ) {
+    if let Some(description) = static_type_receiver
+        .as_deref()
+        .map(|source| cfg_type_description(source, &receiver_type))
+    {
+        let runtime_array_operation = matches!(input.name.as_str(), "first" | "last")
+            && cfg_runtime_array_receiver(analyzer, &input);
+        if !runtime_array_operation
+            && !matches!(
+                input.name.as_str(),
+                "new"
+                    | "valid?"
+                    | "recursively_valid?"
+                    | "subtype_of?"
+                    | "describe_obj"
+                    | "error_message_for_obj"
+                    | "error_message_for_obj_recursive"
+                    | "validate!"
+                    | "params"
+                    | "returns"
+                    | "void"
+                    | "bind"
+            )
+        {
             analyzer.error_at(
                 input.site,
                 format!(
@@ -326,12 +333,25 @@ fn cfg_static_type_receiver(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> 
         return None;
     };
     let receiver = analyzer.program.hir_program.expression(receiver)?;
-    cfg_static_type_value(analyzer, receiver).then(|| {
-        let source = String::from_utf8_lossy(
-            &analyzer.program.source[receiver.span.start as usize..receiver.span.end as usize],
-        );
-        source.trim().to_owned()
-    })
+    cfg_static_type_value(analyzer, receiver)
+        .then(|| cfg_static_type_description(analyzer, receiver))
+}
+
+fn cfg_runtime_array_receiver(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> bool {
+    let expression = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression));
+    let Some(hir::ExprKind::Call(call)) = expression.map(|expression| &expression.kind) else {
+        return false;
+    };
+    let hir::Receiver::Explicit(receiver) = call.receiver else {
+        return false;
+    };
+    analyzer
+        .program
+        .hir_program
+        .expression(receiver)
+        .is_some_and(|receiver| matches!(receiver.kind, hir::ExprKind::Array(_)))
 }
 
 fn cfg_type_expression_receiver(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<()> {
@@ -383,6 +403,17 @@ fn cfg_type_expression_value(analyzer: &Analyzer<'_>, expression: &hir::Expr) ->
 
 fn cfg_static_type_value(analyzer: &Analyzer<'_>, expression: &hir::Expr) -> bool {
     match &expression.kind {
+        hir::ExprKind::Array(elements) => {
+            !elements.is_empty()
+                && elements.iter().all(|element| match element {
+                    hir::ArrayElement::Value(value) => analyzer
+                        .program
+                        .hir_program
+                        .expression(*value)
+                        .is_some_and(|expression| cfg_static_type_value(analyzer, expression)),
+                    hir::ArrayElement::Splat { .. } => false,
+                })
+        }
         hir::ExprKind::Read(hir::Read::Constant(path)) => matches!(
             path.as_str(),
             "T.untyped"
@@ -457,8 +488,33 @@ fn cfg_static_type_value(analyzer: &Analyzer<'_>, expression: &hir::Expr) -> boo
     }
 }
 
-fn cfg_type_description(source: &str) -> String {
-    if source.contains("T.self_type") {
+fn cfg_static_type_description(analyzer: &Analyzer<'_>, expression: &hir::Expr) -> String {
+    if let hir::ExprKind::Call(call) = &expression.kind {
+        if matches!(call.name.as_str(), "first" | "last") {
+            if let hir::Receiver::Explicit(receiver) = call.receiver {
+                if let Some(receiver) = analyzer.program.hir_program.expression(receiver) {
+                    if let hir::ExprKind::Array(elements) = &receiver.kind {
+                        if let [hir::ArrayElement::Value(value)] = elements.as_slice() {
+                            if let Some(element) = analyzer.program.hir_program.expression(*value) {
+                                return cfg_static_type_description(analyzer, element);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    String::from_utf8_lossy(
+        &analyzer.program.source[expression.span.start as usize..expression.span.end as usize],
+    )
+    .trim()
+    .to_owned()
+}
+
+fn cfg_type_description(source: &str, receiver: &Type) -> String {
+    if matches!(receiver, Type::AttachedClassOf(_)) {
+        receiver.to_string()
+    } else if source.contains("T.self_type") {
         "T.untyped".to_owned()
     } else {
         source.to_owned()

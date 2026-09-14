@@ -5,7 +5,9 @@
 //! method, while an implicit call first checks parser-independent global
 //! contracts and then the current method's owner.
 
-use super::super::{Analyzer, CallArguments, Environment, Eval, OwnedCallInput, UntypedOrigin};
+use super::super::{
+    Analyzer, CallArguments, Environment, Eval, MethodKey, OwnedCallInput, UntypedOrigin,
+};
 use crate::cfg;
 use crate::hir;
 use crate::types::Type;
@@ -129,16 +131,23 @@ pub(super) fn transfer_implicit_call(
         });
     }
     if matches!(input.name.as_str(), "lambda" | "proc") {
-        if let Some(cfg::BlockOperand::Inline(closure)) = input.block.as_ref() {
-            let type_ = analyzer
+        let type_ = match input.block.as_ref() {
+            Some(cfg::BlockOperand::Inline(closure)) => analyzer
                 .cfg_owned_closure_type(*closure, environment)
-                .ok_or_else(|| "proc/lambda closure transfer failed".to_owned())?;
-            return Ok(ContextTransfer {
-                type_,
-                block_result: None,
-                untyped_origin: UntypedOrigin::Propagated,
-            });
-        }
+                .ok_or_else(|| "proc/lambda closure transfer failed".to_owned())?,
+            Some(cfg::BlockOperand::Passed(value)) => values
+                .get(value.0 as usize)
+                .cloned()
+                .flatten()
+                .and_then(|type_| super::super::optional_proc_type(&type_))
+                .unwrap_or(Type::Any),
+            None => Type::Any,
+        };
+        return Ok(ContextTransfer {
+            type_,
+            block_result: None,
+            untyped_origin: UntypedOrigin::Propagated,
+        });
     }
     let key = analyzer.implicit_method_key(input.name.as_str(), environment);
     if input.name.as_str() == "strongly_connected_components"
@@ -257,8 +266,22 @@ pub(super) fn transfer_implicit_call(
             environment,
             None,
         )?;
-        let type_ = if input.name.as_str() == "new" {
-            Type::AttachedClassOf(owner.clone())
+        if result.missing_method {
+            analyzer.report_missing_method_if_needed_at(
+                input.site,
+                &class_object,
+                input.name.as_str(),
+                false,
+            );
+        }
+        let explicit_new =
+            input.name.as_str() == "new" && has_explicit_singleton_method(analyzer, owner, "new");
+        let type_ = if input.name.as_str() == "new" && !explicit_new {
+            if bound_block_matches_receiver(environment, owner) {
+                Type::named(owner.clone())
+            } else {
+                Type::AttachedClassOf(owner.clone())
+            }
         } else {
             result.type_
         };
@@ -278,9 +301,25 @@ pub(super) fn transfer_implicit_call(
             environment,
             None,
         )?;
+        if result.missing_method {
+            analyzer.report_missing_method_if_needed_at(
+                input.site,
+                receiver,
+                input.name.as_str(),
+                false,
+            );
+        }
         let type_ = if input.name.as_str() == "new" {
             Analyzer::class_object_owner(receiver)
-                .map(Type::AttachedClassOf)
+                .map(|owner| {
+                    if has_explicit_singleton_method(analyzer, &owner, "new") {
+                        result.type_.clone()
+                    } else if bound_block_matches_receiver(environment, &owner) {
+                        Type::named(owner)
+                    } else {
+                        Type::AttachedClassOf(owner)
+                    }
+                })
                 .unwrap_or(result.type_)
         } else {
             result.type_
@@ -380,6 +419,26 @@ pub(super) fn transfer_implicit_call(
         block_result,
         untyped_origin: UntypedOrigin::FallbackCall,
     })
+}
+
+fn has_explicit_singleton_method(analyzer: &Analyzer<'_>, owner: &str, name: &str) -> bool {
+    let key = MethodKey {
+        owner: Some(owner.to_owned()),
+        name: name.to_owned(),
+        singleton: true,
+    };
+    analyzer
+        .declarations
+        .methods
+        .get(&key)
+        .is_some_and(|state| state.explicit)
+}
+
+fn bound_block_matches_receiver(environment: &Environment, owner: &str) -> bool {
+    environment
+        .method_key
+        .as_ref()
+        .is_some_and(|key| key.name == "<bound-block>" && key.owner.as_deref() == Some(owner))
 }
 
 fn transfer_inline_block_without_contract(

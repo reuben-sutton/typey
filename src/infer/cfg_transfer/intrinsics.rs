@@ -13,9 +13,23 @@ pub(super) fn transfer_intrinsic_call(
     arguments: &CallArguments<'_>,
     environment: &Environment,
 ) -> Option<(Type, UntypedOrigin)> {
-    if let Some(type_object) = type_object_receiver(receiver) {
+    if let Some(type_object) = type_object_receiver(receiver)
+        .or_else(|| intrinsic_type_expression_receiver(analyzer, input).then(|| receiver.clone()))
+    {
         if matches!(input.name.as_str(), "params" | "returns" | "void" | "bind") {
             return Some((type_object, UntypedOrigin::Propagated));
+        }
+        if matches!(
+            input.name.as_str(),
+            "valid?"
+                | "recursively_valid?"
+                | "subtype_of?"
+                | "describe_obj"
+                | "error_message_for_obj"
+                | "error_message_for_obj_recursive"
+                | "validate!"
+        ) {
+            return Some((Type::Any, UntypedOrigin::FallbackCall));
         }
         return None;
     }
@@ -167,6 +181,29 @@ fn type_object_receiver(receiver: &Type) -> Option<Type> {
     }
 }
 
+fn intrinsic_type_expression_receiver(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> bool {
+    let expression = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression));
+    let Some(hir::ExprKind::Call(call)) = expression.map(|expression| &expression.kind) else {
+        return false;
+    };
+    let hir::Receiver::Explicit(receiver) = call.receiver else {
+        return false;
+    };
+    let Some(receiver) = analyzer.program.hir_program.expression(receiver) else {
+        return false;
+    };
+    let source = analyzer
+        .program
+        .source
+        .get(receiver.span.start as usize..receiver.span.end as usize)
+        .and_then(|source| std::str::from_utf8(source).ok())
+        .map(str::trim)
+        .unwrap_or_default();
+    source.starts_with("T.") || source.starts_with("T::")
+}
+
 fn intrinsic_expression_source<'src>(
     analyzer: &'src Analyzer<'src>,
     input: &OwnedCallInput,
@@ -199,7 +236,7 @@ fn intrinsic_argument_site(
 }
 
 fn intrinsic_type_argument(
-    analyzer: &Analyzer<'_>,
+    analyzer: &mut Analyzer<'_>,
     input: &OwnedCallInput,
     index: usize,
     environment: &Environment,
@@ -209,5 +246,25 @@ fn intrinsic_type_argument(
     let parsed = crate::signature::parse_type(std::str::from_utf8(source).ok()?);
     let owner = analyzer.lexical_owner(environment);
     let parsed = analyzer.resolve_type_names(&parsed, owner.as_deref());
+    if environment
+        .method_key
+        .as_ref()
+        .is_some_and(|key| key.name == "<bound-block>")
+        && Analyzer::contains_attached_class_type(&parsed)
+    {
+        let message =
+            "`T.attached_class` may only be used in singleton methods on classes or instance methods on `has_attached_class!` modules";
+        analyzer.error_at(site, message);
+        // Sorbet reports the invalid type expression both while resolving the
+        // intrinsic's type argument and while checking T.let's assertion.
+        // Keep that observable diagnostic pair for conformance without
+        // weakening the resulting type to anything more specific.
+        if input.name.as_str() == "let"
+            && Analyzer::class_object_instance_type(&environment.self_type).is_none()
+        {
+            analyzer.error_at_allow_duplicate(site, message);
+        }
+        return Some(Type::Any);
+    }
     Some(parsed)
 }

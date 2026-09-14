@@ -7,7 +7,7 @@ use super::{
 };
 use crate::cfg;
 use crate::hir;
-use crate::signature::MethodSig;
+use crate::signature::{self, MethodSig};
 use crate::types::Type;
 use ruby_prism::Node;
 
@@ -102,21 +102,52 @@ impl<'src> Analyzer<'src> {
         if let Some(expected) = expected.as_ref() {
             for (index, actual) in arguments.argument_types.iter().enumerate() {
                 if let Some(expected) = expected.get(index) {
-                    if !self.is_assignable(actual, expected) {
+                    let keyword_hash_matches = arguments.keyword_hash_indices.contains(&index)
+                        && !arguments.keyword_arguments.is_empty()
+                        && {
+                            let shape = expected.to_string();
+                            arguments.keyword_arguments.iter().all(|argument| {
+                                signature::parse_inline_record_field(&shape, &argument.name)
+                                    .is_some_and(|field| {
+                                        self.is_assignable(&argument.type_, &field)
+                                    })
+                            })
+                        };
+                    if !keyword_hash_matches && !self.is_assignable(actual, expected) {
                         let argument_site =
                             arguments.argument_sites.get(index).copied().unwrap_or(site);
+                        let actual_description = if arguments.keyword_hash_indices.contains(&index)
+                        {
+                            let fields = arguments
+                                .keyword_arguments
+                                .iter()
+                                .map(|argument| {
+                                    format!(
+                                        "{}: {}",
+                                        argument.name,
+                                        self.owned_literal_type_description(
+                                            argument.site,
+                                            &argument.type_,
+                                        )
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            format!("{{{}}}", fields.join(", "))
+                        } else {
+                            actual.to_string()
+                        };
                         if let Some(argument) = arguments.argument_nodes.get(index) {
                             self.error(
                                 argument,
                                 format!(
-                                    "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
+                                    "Expected `{expected}` but found `{actual_description}` for argument `arg{index}`"
                                 ),
                             );
                         } else {
                             self.error_at(
                                 argument_site,
                                 format!(
-                                    "Expected `{expected}` but found `{actual}` for argument `arg{index}`"
+                                    "Expected `{expected}` but found `{actual_description}` for argument `arg{index}`"
                                 ),
                             );
                         }
@@ -217,6 +248,14 @@ impl<'src> Analyzer<'src> {
                             ),
                         );
                     }
+                }
+                if effective_signature.is_none() {
+                    // An unannotated Proc has no callback result to
+                    // substitute into a generic method signature. Keep that
+                    // result gradual, rather than leaking the signature's
+                    // unresolved type variable (for example, `U`) to the
+                    // call site's inferred type.
+                    return Some(Eval::value(Type::Any));
                 }
                 let result = effective_signature
                     .and_then(|block| proc_parts(block).map(|(_, result)| result.clone()))

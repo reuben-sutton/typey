@@ -7,6 +7,36 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
+    pub(super) fn owned_literal_type_description(&self, site: SourceSite, type_: &Type) -> String {
+        if let Some(expression) = site
+            .expression
+            .and_then(|expression| self.program.hir_program.expression(expression))
+        {
+            match (&expression.kind, type_) {
+                (hir::ExprKind::Literal(hir::Literal::String(value)), Type::String) => {
+                    return format!("String(\"{value}\")");
+                }
+                (hir::ExprKind::Literal(hir::Literal::Integer(value)), Type::Integer) => {
+                    return format!("Integer({value})");
+                }
+                _ => {}
+            }
+        }
+        if let Some(source) = self.program.source.get(site.start..site.end) {
+            let Some(source) = std::str::from_utf8(source).ok().map(str::trim) else {
+                return type_.to_string();
+            };
+            if matches!(type_, Type::Integer)
+                && source
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'-' || byte == b'_')
+            {
+                return format!("Integer({source})");
+            }
+        }
+        type_.to_string()
+    }
+
     pub(super) fn block_value_type(result: &Eval) -> Type {
         let type_ = result
             .normal_type
@@ -124,8 +154,74 @@ impl<'src> Analyzer<'src> {
             false,
             false,
         );
-        self.transfer_owned_symbol_call(&input, receiver, &arguments, environment)
-            .ok()
+        let previous_suppression = self.reporting.suppress_diagnostics;
+        // A resolved symbol method gets its own Sorbet-shaped contract
+        // diagnostics below. An unresolved symbol method, however, must use
+        // ordinary union/component dispatch so `&:missing` still reports the
+        // concrete receiver (including nilable components).
+        self.reporting.suppress_diagnostics = initial_signature.is_some();
+        let result = self
+            .transfer_owned_symbol_call(&input, receiver, &arguments, environment)
+            .ok();
+        self.reporting.suppress_diagnostics = previous_suppression;
+        if let Some(signature) = initial_signature.as_ref() {
+            self.report_symbol_method_call_errors(site, receiver, name, signature, &arguments);
+        }
+        result
+    }
+
+    fn report_symbol_method_call_errors(
+        &mut self,
+        site: SourceSite,
+        receiver: &Type,
+        name: &str,
+        signature: &MethodSig,
+        arguments: &CallArguments<'_>,
+    ) {
+        let Some(owner) = Self::named_type_name(receiver) else {
+            return;
+        };
+        let method = format!("{}#{}", owner, name);
+        if !signature.accepts_rest && arguments.argument_types.len() > signature.params.len() {
+            self.error_at(
+                site,
+                format!(
+                    "Too many positional arguments provided for method `{method}`. Expected: `{}`, got: `{}`",
+                    signature.params.len(),
+                    arguments.argument_types.len()
+                ),
+            );
+        }
+        if !arguments.forwards_arguments && !arguments.has_keyword_splat {
+            for (keyword, parameter) in &signature.keywords {
+                if parameter.required
+                    && !arguments
+                        .keyword_arguments
+                        .iter()
+                        .any(|argument| argument.name == *keyword)
+                {
+                    self.error_at(
+                        site,
+                        format!(
+                            "Missing required keyword argument `{keyword}` for method `{method}`"
+                        ),
+                    );
+                }
+            }
+            for argument in &arguments.keyword_arguments {
+                if let Some(parameter) = signature.keywords.get(&argument.name) {
+                    if !self.is_assignable(&argument.type_, &parameter.type_) {
+                        self.error_at(
+                            argument.site,
+                            format!(
+                                "Expected `{}` but found `{}` for argument `{}`",
+                                parameter.type_, argument.type_, argument.name
+                            ),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn symbol_method_arguments(

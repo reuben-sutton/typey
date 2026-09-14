@@ -143,6 +143,14 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
     }
 
     fn should_report_unreachable_branch(&self, expression: hir::ExprId) -> bool {
+        // Rescue handlers are analyzed from a synthetic exception entry. The
+        // seed environment cannot prove that a value assigned in the
+        // protected body was absent when the exception occurred, so branch
+        // reachability in this probe is not a sound basis for a dead-code
+        // diagnostic.
+        if self.probe_exit.is_some() {
+            return false;
+        }
         let is_required_block_guard = self
             .analyzer
             .program
@@ -206,6 +214,81 @@ impl<'analyzer, 'src> BodyTransfer<'analyzer, 'src> {
             .rev()
             .find(|byte| !byte.is_ascii_whitespace())
             .is_none_or(|byte| *byte != b'=')
+    }
+
+    fn conditional_assertion_belongs_to_parent(
+        &self,
+        graph: &cfg::Cfg,
+        condition: hir::ExprId,
+    ) -> bool {
+        graph.conditionals.iter().any(|conditional| {
+            let condition_expression_id = if conditional.condition == condition {
+                condition
+            } else {
+                let Some(hir::ExprKind::Call(call)) = self
+                    .analyzer
+                    .program
+                    .hir_program
+                    .expression(conditional.condition)
+                    .map(|expression| &expression.kind)
+                else {
+                    return false;
+                };
+                let hir::Receiver::Explicit(receiver) = call.receiver else {
+                    return false;
+                };
+                if call.name.as_str() != "!" || receiver != condition {
+                    return false;
+                }
+                receiver
+            };
+            let Some(condition_expression) = self
+                .analyzer
+                .program
+                .hir_program
+                .expression(condition_expression_id)
+            else {
+                return false;
+            };
+            let Some(parent_expression) = self
+                .analyzer
+                .program
+                .hir_program
+                .expression(conditional.expression)
+            else {
+                return false;
+            };
+            let condition_assertion =
+                self.analyzer
+                    .inline_assertion_for_site(SourceSite::from_span(
+                        condition_expression.span,
+                        Some(condition),
+                    ));
+            let parent_assertion = self
+                .analyzer
+                .inline_assertion_for_site(SourceSite::from_span(
+                    parent_expression.span,
+                    Some(conditional.expression),
+                ));
+            let modifier_syntax = self
+                .analyzer
+                .program
+                .source
+                .get(..condition_expression.span.start as usize)
+                .and_then(|source| {
+                    let line_start = source
+                        .iter()
+                        .rposition(|byte| *byte == b'\n')
+                        .map_or(0, |offset| offset + 1);
+                    std::str::from_utf8(&source[line_start..]).ok()
+                })
+                .is_some_and(|prefix| prefix.contains(" if ") || prefix.contains(" unless "));
+            let has_parent_assertion = parent_assertion.is_some();
+            let same_assertion = condition_assertion.is_some_and(|condition| {
+                parent_assertion.is_some_and(|parent| condition.offset == parent.offset)
+            });
+            same_assertion || (modifier_syntax && has_parent_assertion)
+        })
     }
 
     fn report_unreachable_branch(
@@ -919,15 +1002,20 @@ impl<'src> Analyzer<'src> {
             transfer.probe_normal_type = Type::Never;
             transfer.branch_results.clear();
             let probe_result = cfg::transfer::run_from(&graph, &mut transfer, region.entry, probe);
+            if probe_result.is_ok() {
+                // The handler probe starts from a synthetic exception edge.
+                // Report its branch facts while the probe marker is still
+                // present; otherwise an assignment that is only conditionally
+                // available in the protected body can look like sound dead
+                // code after the marker is cleared.
+                transfer.report_stable_unreachable_branches(&graph);
+            }
             transfer.probe_exit = None;
             transfer.probe_protected_entry = None;
             transfer.abrupt = main_abrupt;
             transfer.terminal_flow = main_terminal_flow;
             transfer.final_environment = main_final_environment;
             transfer.top_level_terminated = main_top_level_terminated;
-            if probe_result.is_ok() {
-                transfer.report_stable_unreachable_branches(&graph);
-            }
             if let Err(error) = probe_result {
                 drop(worklist);
                 drop(transfer);
@@ -1304,7 +1392,7 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                         .ok_or_else(|| format!("unsupported for target at {:?}", operation.span))?
                     }
                     cfg::OperationKind::Call { .. } => {
-                        let call_input =
+                        let mut call_input =
                             OwnedCallInput::from_operation(operation).ok_or_else(|| {
                                 format!("missing owned call input at {:?}", operation.span)
                             })?;
@@ -1317,7 +1405,16 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                                 })
                                 .or_insert_with(|| next.environment.clone());
                         }
-                        let mut result = super::calls::transfer_call(
+                        let defer_conditional_assertion =
+                            call_input.expression.is_some_and(|expression| {
+                                self.conditional_assertion_belongs_to_parent(graph, expression)
+                            });
+                        let previous_defer = self.analyzer.defer_inline_assertions;
+                        if defer_conditional_assertion {
+                            self.analyzer.defer_inline_assertions = true;
+                            call_input.defer_inline_assertion = true;
+                        }
+                        let transfer_result = super::calls::transfer_call(
                             self.analyzer,
                             call_input,
                             &next.values,
@@ -1325,7 +1422,9 @@ impl<'analyzer, 'src> cfg::transfer::BlockTransfer for BodyTransfer<'analyzer, '
                             &mut next.hash_shapes,
                             &mut next.environment,
                         )
-                        .map_err(|reason| format!("call transfer failed: {reason}"))?;
+                        .map_err(|reason| format!("call transfer failed: {reason}"));
+                        self.analyzer.defer_inline_assertions = previous_defer;
+                        let mut result = transfer_result?;
                         if self.context.method.is_none()
                             && block.unwind.is_none()
                             && result.flow.contains(FlowKind::Raise)

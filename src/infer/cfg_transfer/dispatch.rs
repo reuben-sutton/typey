@@ -14,6 +14,7 @@ use super::super::{
     MethodKey, OwnedCallInput, SourceSite, UntypedOrigin,
 };
 use crate::cfg;
+use crate::hir;
 use crate::types::Type;
 
 pub(super) struct ReceiverTransfer {
@@ -640,8 +641,19 @@ fn transfer_receiver_call_with_substitution(
                         environment,
                     );
                     analyzer.observe_struct_constructor(&owner, arguments);
+                    let type_ = if name == "new"
+                        && cfg_explicit_self_receiver(analyzer, input)
+                        && environment
+                            .method_key
+                            .as_ref()
+                            .is_some_and(|key| key.singleton)
+                    {
+                        Type::AttachedClassOf(owner.clone())
+                    } else {
+                        analyzer.instantiate_generic_class(instance)
+                    };
                     return Ok(ReceiverTransfer {
-                        type_: analyzer.instantiate_generic_class(instance),
+                        type_,
                         block_result,
                         untyped_origin: UntypedOrigin::InferredMethod,
                         missing_method: false,
@@ -719,8 +731,10 @@ fn transfer_receiver_call_with_substitution(
     // overload. Prefer the structural contract so an integer index retains
     // its nilable result instead of trusting a generic summary that loses the
     // out-of-bounds path.
-    if matches!(name, "[]" | "<=>" | "min" | "max")
-        && matches!(receiver, Type::Array(_) | Type::Tuple(_))
+    if matches!(
+        name,
+        "[]" | "<=>" | "min" | "max" | "push" | "<<" | "prepend"
+    ) && matches!(receiver, Type::Array(_) | Type::Tuple(_))
     {
         if let Some((type_, block_result)) = super::builtins::transfer_builtin_call(
             analyzer,
@@ -1232,6 +1246,28 @@ fn is_generic_type_application(analyzer: &Analyzer<'_>, input: &OwnedCallInput) 
                     && expression.span.end <= argument.span.end
             })
         })
+}
+
+fn cfg_explicit_self_receiver(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> bool {
+    let Some(expression) = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+    else {
+        return false;
+    };
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return false;
+    };
+    let hir::Receiver::Explicit(receiver) = call.receiver else {
+        return false;
+    };
+    matches!(
+        analyzer.program.hir_program.expression(receiver),
+        Some(hir::Expr {
+            kind: hir::ExprKind::Read(hir::Read::SelfValue),
+            ..
+        })
+    )
 }
 
 fn owned_constant_name(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> Option<String> {

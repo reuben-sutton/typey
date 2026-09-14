@@ -1132,15 +1132,13 @@ impl<'program> Builder<'program> {
         let reachable = then_flow.reachable || else_flow.reachable;
         if reachable {
             self.record_abrupt_values(expression, &abrupt_values);
-            self.emit(
+            let asserted = self.emit(
                 join,
                 self.span(expression),
-                OperationKind::Record {
-                    value: Some(joined),
-                },
-                false,
+                OperationKind::ApplyAssertion { value: joined },
+                true,
             );
-            self.normal_with_abrupt(expression, join, Some(joined), abrupt_values)
+            self.normal_with_abrupt(expression, join, asserted, abrupt_values)
         } else {
             self.record_abrupt_values(expression, &abrupt_values);
             self.abrupt_with_values(expression, join, abrupt_values)

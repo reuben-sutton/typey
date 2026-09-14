@@ -550,13 +550,30 @@ impl<'src> Analyzer<'src> {
         self.coalesce_reveal_diagnostics();
         let types = Self::deduplicate_types(std::mem::take(&mut self.reporting.types));
         let mut seen_diagnostics = BTreeSet::new();
+        let preserve_duplicate_diagnostics = self.reporting.preserve_duplicate_diagnostics.clone();
+        let mut preserved_diagnostic_counts = BTreeMap::new();
         self.reporting.diagnostics.retain(|diagnostic| {
-            seen_diagnostics.insert((
+            let key = (
                 matches!(diagnostic.severity, Severity::Note),
                 diagnostic.start,
                 diagnostic.end,
                 diagnostic.message.clone(),
-            ))
+            );
+            if let Some(limit) = preserve_duplicate_diagnostics.get(&(
+                diagnostic.start,
+                diagnostic.end,
+                diagnostic.message.clone(),
+            )) {
+                let count = preserved_diagnostic_counts.entry(key.clone()).or_insert(0);
+                if *count < *limit {
+                    *count += 1;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                seen_diagnostics.insert(key)
+            }
         });
         self.reporting.diagnostics.sort_by(|left, right| {
             left.start

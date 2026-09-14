@@ -132,6 +132,10 @@ pub(super) fn narrow_pattern_value(
 
 fn without_predicate_type(analyzer: &Analyzer<'_>, current: &Type, excluded: &Type) -> Type {
     match current {
+        // `T.untyped` can contain either branch of a runtime type test. It is
+        // therefore safe to narrow the matching path, but we cannot prove
+        // that the non-matching path excludes the tested class.
+        Type::Any | Type::Anything => current.clone(),
         Type::Union(members) => Type::union(
             members
                 .iter()

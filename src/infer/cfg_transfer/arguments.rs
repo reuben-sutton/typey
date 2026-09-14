@@ -337,6 +337,10 @@ impl<'src> Analyzer<'src> {
             call_arguments.argument_indices.push(argument_index);
             call_arguments.positional_indices.push(argument_index);
             call_arguments.positional_types.push(type_);
+            if let Some(expression) = self.program.hir_program.expression(hir_value) {
+                call_arguments.argument_sites[argument_index] =
+                    SourceSite::from_span(expression.span, Some(hir_value));
+            }
             operand_index += 1;
             group_start = *group_end;
         }

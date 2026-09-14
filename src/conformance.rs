@@ -218,7 +218,22 @@ fn expectation_matches(expectation: &InlineExpectation, actual: &str) -> bool {
         .strip_prefix("Revealed type:")
         .map_or(expectation.message.as_str(), str::trim);
     let expected_type = expected_type.trim_matches('`');
-    actual == format!("Revealed type: `{expected_type}`")
+    let expected_message = format!("Revealed type: `{expected_type}`");
+    if actual == expected_message {
+        return true;
+    }
+    let Some(actual_type) = actual
+        .strip_prefix("Revealed type:")
+        .map(str::trim)
+        .map(|type_| type_.trim_matches('`'))
+    else {
+        return false;
+    };
+    // Sorbet's conformance fixtures use `T.class_of(X)`, while Typey's public
+    // algebra prints the equivalent runtime class object as `Class[X]`.
+    // Compare the parsed semantic types for this representation-only
+    // difference; keep ordinary reveal mismatches exact.
+    crate::signature::parse_type(expected_type) == crate::signature::parse_type(actual_type)
 }
 
 /// Find Ruby fixtures recursively below `root` in stable path order.
@@ -265,6 +280,20 @@ mod tests {
         assert!(!expectation_matches(
             &expectation,
             "Revealed type: `T.nilable(String)`"
+        ));
+    }
+
+    #[test]
+    fn reveal_expectations_accept_equivalent_class_object_spelling() {
+        let expectation = InlineExpectation {
+            severity: Severity::Note,
+            line: 1,
+            message: "Revealed type: `T.class_of(Example)`".to_owned(),
+            reveal_type: true,
+        };
+        assert!(expectation_matches(
+            &expectation,
+            "Revealed type: `Class[Example]`"
         ));
     }
 }

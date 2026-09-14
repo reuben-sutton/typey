@@ -34,6 +34,7 @@ pub(super) struct ReportingState {
     pub(super) report: bool,
     pub(super) suppress_diagnostics: bool,
     pub(super) diagnostics: Vec<Diagnostic>,
+    pub(super) preserve_duplicate_diagnostics: BTreeMap<(usize, usize, String), usize>,
     pub(super) types: Vec<InferredType>,
     pub(super) untyped_origins: BTreeMap<(usize, usize), UntypedOrigin>,
 }
@@ -44,6 +45,7 @@ impl ReportingState {
             report: true,
             suppress_diagnostics: false,
             diagnostics,
+            preserve_duplicate_diagnostics: BTreeMap::new(),
             types: Vec::new(),
             untyped_origins: BTreeMap::new(),
         }
@@ -213,7 +215,10 @@ impl<'src> Analyzer<'src> {
             site,
             receiver,
             resolved,
-            format!("Method `{name}` does not exist on `{receiver}`"),
+            format!(
+                "Method `{name}` does not exist on `{}`",
+                sorbet_receiver_description(receiver)
+            ),
         );
     }
 
@@ -501,6 +506,30 @@ impl<'src> Analyzer<'src> {
             ));
     }
 
+    pub(super) fn error_at_allow_duplicate(
+        &mut self,
+        site: SourceSite,
+        message: impl Into<String>,
+    ) {
+        if !self.reporting.report || self.reporting.suppress_diagnostics {
+            return;
+        }
+        let message = message.into();
+        self.reporting
+            .preserve_duplicate_diagnostics
+            .entry((site.start, site.end, message.clone()))
+            .or_insert(2);
+        self.reporting
+            .diagnostics
+            .push(Diagnostic::error_with_line_map(
+                self.program.source,
+                &self.program.line_map,
+                message,
+                site.start,
+                site.end,
+            ));
+    }
+
     pub(super) fn note_at(&mut self, site: SourceSite, message: impl Into<String>) {
         if !self.reporting.report || self.reporting.suppress_diagnostics {
             return;
@@ -514,5 +543,14 @@ impl<'src> Analyzer<'src> {
                 site.start,
                 site.end,
             ));
+    }
+}
+
+fn sorbet_receiver_description(receiver: &Type) -> String {
+    match receiver {
+        Type::Named(name, arguments) if name == "Class" && arguments.len() == 1 => {
+            format!("T.class_of({})", arguments[0])
+        }
+        _ => receiver.to_string(),
     }
 }
