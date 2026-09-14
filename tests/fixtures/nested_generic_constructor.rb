@@ -23,6 +23,12 @@ module Spoom
 
       @elements[value] = Element.new(value) #: Element[E]
     end
+
+    #: (E value) -> Element[E]
+    def add_and_read(value)
+      T.reveal_type(add_element(value))
+      add_element(value)
+    end
   end
 end
 

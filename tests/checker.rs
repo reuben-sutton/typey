@@ -2728,9 +2728,15 @@ fn specializes_namespaced_generic_members_at_dispatch() {
 
 #[test]
 fn preserves_outer_generic_members_in_nested_constructors() {
-    assert_no_errors(
-        &std::fs::read_to_string("tests/fixtures/nested_generic_constructor.rb")
-            .expect("fixture exists"),
+    let result = check_fixture("tests/fixtures/nested_generic_constructor.rb");
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `Spoom::Poset::Element[Spoom::Poset::E]`")
+        }),
+        "{:?}",
+        result.diagnostics
     );
 }
 

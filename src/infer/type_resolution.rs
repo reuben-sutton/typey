@@ -249,7 +249,21 @@ impl<'src> Analyzer<'src> {
             // the parent and child summaries and prevent the fixpoint from
             // converging. Module bodies are handled above because their
             // runtime host really is supplied by each including class.
-            Type::named(owner)
+            let Some(info) = self.declarations.classes.get(owner) else {
+                return Type::named(owner);
+            };
+            if info.type_members.is_empty() {
+                Type::named(owner)
+            } else {
+                let mut arguments = vec![Type::Any; info.type_members.len()];
+                for (name, member) in &info.type_members {
+                    arguments[member.index] = member.fixed.as_ref().map_or_else(
+                        || Type::TypeVar(format!("{owner}::{name}")),
+                        |fixed| self.resolve_type_names(fixed, Some(owner)),
+                    );
+                }
+                Type::Named(owner.to_owned(), arguments)
+            }
         };
         self.instance_self_type_cache
             .borrow_mut()
