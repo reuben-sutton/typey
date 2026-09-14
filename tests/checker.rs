@@ -6876,6 +6876,21 @@ T.reveal_type(entries.to_h { |entry| [entry.key, entry] })
 }
 
 #[test]
+fn preserves_array_to_h_block_inference_in_fixture() {
+    let result = check_fixture("tests/fixtures/array_to_h_block.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Hash[String, Entry]`")
+        }),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn preserves_set_element_types_through_set_difference() {
     let result = check(
         r#"

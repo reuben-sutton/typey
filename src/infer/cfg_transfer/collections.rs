@@ -77,6 +77,12 @@ pub(super) fn transfer_collection_call(
         ),
         CollectionKind::Hash(_, _) => true,
     };
+    // Array#to_h has a block form that converts each element into a key/value
+    // pair. It is not an ordinary collection iterator, so keep it out of the
+    // general block list above while still routing its block through the
+    // structural model.
+    let requires_block =
+        requires_block || (name == "to_h" && matches!(kind, CollectionKind::Array));
     let block_is_nil = matches!(input.block, Some(cfg::BlockOperand::Passed(value))
         if values.get(value.0 as usize).and_then(Option::as_ref).is_some_and(Type::is_nil));
     if input.block.is_none() || block_is_nil {
