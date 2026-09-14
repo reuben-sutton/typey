@@ -10353,6 +10353,14 @@ T.reveal_type(files)
 }
 
 #[test]
+fn contextualizes_empty_arrays_in_indexed_logical_assignments() {
+    let result = check_fixture("tests/fixtures/hash_logical_append.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `T::Array[String]`")));
+}
+
+#[test]
 fn transfers_standard_collection_contracts_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_standard_collection_contracts.rb")
         .expect("fixture");

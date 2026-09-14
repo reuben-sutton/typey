@@ -75,6 +75,61 @@ fn compound_assignment_receiver(
     }
 }
 
+fn is_empty_array_expression(analyzer: &Analyzer<'_>, expression: hir::ExprId) -> bool {
+    analyzer
+        .program
+        .hir_program
+        .expression(expression)
+        .is_some_and(|expression| {
+            matches!(&expression.kind, hir::ExprKind::Array(elements) if elements.is_empty())
+        })
+}
+
+fn is_empty_array_assignment(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> bool {
+    let Some(expression) = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+    else {
+        return false;
+    };
+    match &expression.kind {
+        hir::ExprKind::Assign { value, .. } => is_empty_array_expression(analyzer, *value),
+        hir::ExprKind::Call(call) => call
+            .arguments
+            .iter()
+            .rev()
+            .find_map(|argument| match argument {
+                hir::Argument::Positional(value) => {
+                    Some(is_empty_array_expression(analyzer, *value))
+                }
+                _ => None,
+            })
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn contextual_empty_collection_assignment(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    receiver: &Type,
+    actual: Type,
+) -> Type {
+    if input.name.as_str() != "[]=" || !is_empty_array_assignment(analyzer, input) {
+        return actual;
+    }
+    let expected = match receiver {
+        Type::Array(element) | Type::Hash(_, element) => element.as_ref(),
+        _ => return actual,
+    };
+    match (actual, expected) {
+        (Type::Array(actual_element), Type::Array(expected_element)) if actual_element.is_any() => {
+            Type::Array(expected_element.clone())
+        }
+        (actual, _) => actual,
+    }
+}
+
 pub(super) fn transfer_call(
     analyzer: &mut Analyzer<'_>,
     input: OwnedCallInput<'_>,
@@ -289,11 +344,16 @@ pub(super) fn transfer_call(
         && !matches!(input.name.as_str(), "==" | "!=" | "<=" | ">=" | "===")
         && (call_arguments.argument_types.len() == 1 || input.name.as_str() == "[]=")
     {
-        call_arguments
-            .argument_types
-            .last()
-            .cloned()
-            .unwrap_or(type_)
+        contextual_empty_collection_assignment(
+            analyzer,
+            &input,
+            &receiver_type,
+            call_arguments
+                .argument_types
+                .last()
+                .cloned()
+                .unwrap_or(type_),
+        )
     } else {
         type_
     };
