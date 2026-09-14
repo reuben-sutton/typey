@@ -46,6 +46,7 @@ pub(super) fn transfer_intrinsic_call(
         .unwrap_or(Type::Any);
     let result = match input.name.as_str() {
         "proc" => (Type::named("T::Types::Proc"), UntypedOrigin::Propagated),
+        "type_alias" => (Type::Nil, UntypedOrigin::Propagated),
         "reveal_type" => {
             let site = intrinsic_argument_site(analyzer, input, 0).unwrap_or(input.site);
             let description = actual.to_string();

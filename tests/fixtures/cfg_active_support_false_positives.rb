@@ -13,6 +13,8 @@ class Array
 end
 
 class CfgActiveSupportPredicate
+  extend T::Sig
+
   sig { type_parameters(:V).params(value: T.type_parameter(:V)).returns(String) }
   def self.hash_value(value)
     if value.is_a?(Hash)

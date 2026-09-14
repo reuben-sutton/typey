@@ -13,6 +13,8 @@ class CfgGenericPackage
 end
 
 class CfgGenericPackageSet
+  extend T::Sig
+
   #: (String) -> CfgGenericPackage?
   def fetch(name)
     nil

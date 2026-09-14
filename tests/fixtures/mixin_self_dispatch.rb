@@ -8,6 +8,7 @@ end
 
 class Host
   include PathMethods
+  extend T::Sig
 
   sig { returns(String) }
   def root

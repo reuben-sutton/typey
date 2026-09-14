@@ -1,9 +1,13 @@
 # typed: true
 
+extend T::Sig
+
 class CacheResult
 end
 
 class Cache
+  extend T::Sig
+
   sig { params(path: String, block: T.proc.returns(T::Array[String])).returns(T::Array[String]) }
   def with_cache(path, &block)
     yield

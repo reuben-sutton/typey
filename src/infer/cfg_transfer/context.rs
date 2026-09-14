@@ -106,6 +106,13 @@ pub(super) fn transfer_implicit_call(
     values: &[Option<Type>],
     environment: &mut Environment,
 ) -> Result<ContextTransfer, String> {
+    if input.name.as_str() == "sig" && analyzer.sorbet_sig_available(environment) {
+        return Ok(ContextTransfer {
+            type_: Type::Nil,
+            block_result: None,
+            untyped_origin: UntypedOrigin::Propagated,
+        });
+    }
     if let Some(result) = analyzer.cfg_dynamic_eval_call(input, receiver, values, environment) {
         let type_ = result.type_.clone();
         return Ok(ContextTransfer {
@@ -449,7 +456,7 @@ fn transfer_inline_block_without_contract(
     // `sig { ... }` is a declaration block. Its calls describe a method
     // signature during registration and are not a runtime callback that the
     // CFG should evaluate as Ruby expressions.
-    if input.name.as_str() == "sig" {
+    if input.name.as_str() == "sig" && analyzer.sorbet_sig_available(environment) {
         return None;
     }
     match input.block.as_ref() {

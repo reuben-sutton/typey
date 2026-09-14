@@ -286,6 +286,11 @@ fn checks_sorbet_sig_calls() {
 }
 
 #[test]
+fn checks_sorbet_sig_scope() {
+    check_fixture("tests/fixtures/sorbet_sig_scope.rb");
+}
+
+#[test]
 fn transfers_kernel_require_calls_through_owned_hir() {
     let source = r#"
 T.reveal_type(require("library"))
@@ -4416,6 +4421,8 @@ fn substitutes_self_type_and_builtin_exception_subtypes() {
     assert_no_errors(
         r#"
 class Box
+  extend T::Sig
+
   sig { returns(T.nilable(T.self_type)) }
   def presence
     self if true
@@ -4423,6 +4430,8 @@ class Box
 end
 
 class Reporter
+  extend T::Sig
+
   sig { params(error: Exception).void }
   def report(error); end
 
@@ -4441,6 +4450,8 @@ fn binds_rescue_splats_to_exception_instances() {
     assert_no_errors(
         r#"
 class Reporter
+  extend T::Sig
+
   sig { params(error: Exception).void }
   def report(error); end
 
@@ -4462,6 +4473,8 @@ fn evaluates_implicit_enumerable_blocks_for_flow() {
     assert_no_errors(
         r#"
 module Enumerable
+  extend T::Sig
+
   sig { returns(Elem) }
   def sole
     result = nil
@@ -6257,6 +6270,8 @@ fn selects_find_without_fallback_when_optional_argument_is_omitted() {
     let result = check(
         r#"
 class Finder
+  extend T::Sig
+
   sig do
     type_parameters(:U).params(
       ifnone: T.proc.returns(T.type_parameter(:U)),
@@ -6290,6 +6305,8 @@ T.reveal_type(Finder.new.find { |value| value.length > 0 })
 fn infers_generic_block_returns_through_nilable_block_signatures() {
     let source = r#"
 class Mapper
+  extend T::Sig
+
   sig do
     type_parameters(:U, :V).params(
       blk: T.nilable(
@@ -6346,6 +6363,8 @@ fn preserves_pair_tuples_for_hash_from_collection_blocks() {
         r#"
 class HashBuilder
   class << self
+    extend T::Sig
+
     sig do
       type_parameters(:U, :V).params(
         entries: T.any(
@@ -9093,7 +9112,9 @@ fn ast_annotation_collection_ignores_fixture_text() {
 
 #[test]
 fn checks_rbs_and_sorbet_keyword_arguments_by_name() {
-    let source = r#"#: (value: String, ?suffix: String) -> String
+    let source = r#"extend T::Sig
+
+#: (value: String, ?suffix: String) -> String
 def rbs_join(value:, suffix: "")
   value + suffix
 end

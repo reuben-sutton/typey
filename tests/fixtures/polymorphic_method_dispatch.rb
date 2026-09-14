@@ -1,6 +1,8 @@
 # typed: true
 
 class StringVariant
+  extend T::Sig
+
   sig { returns(String) }
   def value
     "string"
@@ -8,6 +10,8 @@ class StringVariant
 end
 
 class IntegerVariant
+  extend T::Sig
+
   sig { returns(Integer) }
   def value
     1
@@ -18,6 +22,8 @@ union = T.let(T.unsafe(nil), T.any(StringVariant, IntegerVariant))
 T.reveal_type(union.value) # note: T.any(Integer, String)
 
 class NameProvider
+  extend T::Sig
+
   sig { returns(String) }
   def name
     "name"
@@ -25,6 +31,8 @@ class NameProvider
 end
 
 class LocationProvider
+  extend T::Sig
+
   sig { returns(Integer) }
   def location
     1

@@ -3,6 +3,8 @@
 extend T::Sig
 
 class SymbolBlockDispatch
+  extend T::Sig
+
   sig { params(values: T::Array[Integer]).void }
   def missing_method(values)
     values.map(&:even) # error: Method `even` does not exist on `Integer`

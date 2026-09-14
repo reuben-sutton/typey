@@ -11,6 +11,8 @@ module Minitest
     include Assertions
 
     class << self
+      extend T::Sig
+
       sig { params(name: String, "&": T.proc.bind(T.self_type).void).returns(NilClass) } # error: Unknown parameter name `&`
       def test(name, &block); end # error: Malformed `sig`. Type not specified for parameter `block`
     end

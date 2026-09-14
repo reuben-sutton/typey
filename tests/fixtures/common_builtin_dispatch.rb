@@ -2,6 +2,8 @@
 
 module Envelope
   class Payload
+    extend T::Sig
+
     sig { returns(String) }
     def text
       "text"
@@ -14,6 +16,8 @@ end
 
 module First
   class Shared
+    extend T::Sig
+
     sig { returns(String) }
     def label
       "first"

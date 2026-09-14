@@ -1,5 +1,7 @@
 # typed: true
 
+extend T::Sig
+
 sig { params(first: Integer, values: T.untyped).void }
 def accepts_rest_after_required(first, *values)
 end

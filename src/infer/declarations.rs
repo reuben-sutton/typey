@@ -36,6 +36,10 @@ pub(super) struct ClassInfo {
     pub(super) includes: Vec<String>,
     pub(super) prepends: Vec<String>,
     pub(super) extends: Vec<String>,
+    /// Modules extended from a `class << self` body. These methods are
+    /// available on the singleton-class object, not in the ordinary class
+    /// body.
+    pub(super) singleton_extends: Vec<String>,
     pub(super) class_methods: Vec<String>,
     pub(super) requires_ancestors: Vec<String>,
     pub(super) type_members: BTreeMap<String, GenericMember>,
@@ -69,6 +73,7 @@ pub(super) struct DeclarationState {
     pub(super) definition_states: BTreeMap<usize, MethodState>,
     pub(super) parameter_shapes: BTreeMap<usize, ParameterShape>,
     pub(super) classes: BTreeMap<String, ClassInfo>,
+    pub(super) top_level_extends: Vec<String>,
     pub(super) class_name_set: HashSet<String>,
     pub(super) class_name_suffixes: BTreeMap<String, Vec<String>>,
     pub(super) aliases: BTreeMap<MethodKey, MethodKey>,
@@ -733,6 +738,22 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
     }
 
     fn visit_call_node(&mut self, node: &CallNode<'pr>) {
+        if self.method_depth == 0
+            && self.class_stack.is_empty()
+            && self.singleton_stack.is_empty()
+            && node.receiver().is_none()
+            && prism::constant_name(node.name()) == "extend"
+            && node.arguments().is_some_and(|arguments| {
+                arguments
+                    .arguments()
+                    .iter()
+                    .any(|argument| self.scope_reference(&argument) == "T::Sig")
+            })
+        {
+            self.declarations
+                .top_level_extends
+                .push("T::Sig".to_owned());
+        }
         // Mixins are often applied from a top-level setup file rather than
         // inside the class body (`Minitest::Test.extend(TestMacro)`). Keep
         // those constant-receiver calls in the class graph so later method
@@ -893,7 +914,10 @@ impl<'pr> Visit<'pr> for MethodRegistrar<'_> {
                             "extend" if module == "self" && info.is_module => {
                                 info.extend_self = true;
                             }
-                            "extend" => info.extends.push(module),
+                            "extend" if self.singleton_stack.is_empty() => {
+                                info.extends.push(module)
+                            }
+                            "extend" => info.singleton_extends.push(module),
                             "mixes_in_class_methods" => info.class_methods.push(module),
                             _ => unreachable!("mixin names are checked above"),
                         }

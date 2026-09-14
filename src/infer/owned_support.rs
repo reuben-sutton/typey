@@ -424,11 +424,11 @@ impl<'src> Analyzer<'src> {
             "sleep" | "id" | "object_id" | "hash" => Some(Type::Integer),
             "const_get" => Some(Type::Object),
             "raise" | "fail" | "abort" | "exit" | "exit!" | "throw" => Some(Type::Never),
-            "sig" => Some(Type::Nil),
             "private_class_method"
             | "has_attached_class!"
             | "type_member"
             | "type_template"
+            | "type_alias"
             | "mixes_in_class_methods"
             | "each"
             | "alias_method"

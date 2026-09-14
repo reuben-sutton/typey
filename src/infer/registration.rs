@@ -71,6 +71,7 @@ impl<'src> Analyzer<'src> {
 
     pub(super) fn register_methods<'node>(&mut self, root: &Node<'node>) {
         self.declarations.methods.clear();
+        self.declarations.top_level_extends.clear();
         self.declarations.type_aliases = self.program.annotations.type_aliases.clone();
         let mut registrar = MethodRegistrar::new(
             self.program.source,

@@ -1,4 +1,6 @@
 module NullableBlockFactory
+  extend T::Sig
+
   sig do
     params(
       value: String,

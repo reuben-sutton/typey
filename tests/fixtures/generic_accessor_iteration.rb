@@ -10,6 +10,8 @@ class IndexedValues
 end
 
 class SignedIndexedValues
+  extend T::Sig
+
   sig { returns(T::Hash[String, T::Array[Integer]]) }
   def values
     {"numbers" => [1]}

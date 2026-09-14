@@ -1,5 +1,7 @@
 # typed: true
 
+extend T::Sig
+
 sig { params(name: T.any(String, Symbol)).void }
 def accepts_name(name); end
 

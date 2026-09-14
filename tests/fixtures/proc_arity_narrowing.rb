@@ -1,6 +1,8 @@
 # typed: true
 
 module Tryable
+  extend T::Sig
+
   sig { params(blk: T.proc.returns(T.untyped)).returns(T.untyped) }
   def evaluate(&blk); end
 

@@ -1,5 +1,7 @@
 # typed: true
 
+extend T::Sig
+
 sig do
   params(
     value: T.any(String, Integer)

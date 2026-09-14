@@ -1,6 +1,8 @@
 # typed: true
 # conformance: cfg
 
+extend T::Sig
+
 def terminate_with_callback(&block)
   block.call
 end

@@ -7,6 +7,70 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
+    /// Whether a bare `sig` call is provided by Sorbet's `T::Sig` DSL in the
+    /// current namespace body. Sorbet does not make `sig` a globally accepted
+    /// declaration: an ordinary class body and a `class << self` body have
+    /// separate extension scopes.
+    pub(super) fn sorbet_sig_available(&self, environment: &Environment) -> bool {
+        let Some(method_key) = environment.method_key.as_ref() else {
+            return self
+                .declarations
+                .top_level_extends
+                .iter()
+                .any(|module| module == "T::Sig");
+        };
+        let Some(owner) = method_key.owner.as_deref() else {
+            return self
+                .declarations
+                .top_level_extends
+                .iter()
+                .any(|module| module == "T::Sig");
+        };
+        let singleton_body = match method_key.name.as_str() {
+            "<class-body>" => false,
+            "<singleton-body>" => true,
+            _ => return false,
+        };
+
+        let mut current = Some(owner.to_owned());
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(name) = current {
+            if !visited.insert(name.clone()) {
+                break;
+            }
+            let Some(info) = self.declarations.classes.get(&name) else {
+                break;
+            };
+            let extensions = if singleton_body {
+                &info.singleton_extends
+            } else {
+                &info.extends
+            };
+            if extensions.iter().any(|module| module == "T::Sig") {
+                return true;
+            }
+            current = info.superclass.clone();
+        }
+
+        // `include T::Sig` on Module is another Sorbet-supported way to make
+        // `sig` available on class objects, since Class inherits from Module.
+        let mut current = Some("Class".to_owned());
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(name) = current {
+            if !visited.insert(name.clone()) {
+                break;
+            }
+            let Some(info) = self.declarations.classes.get(&name) else {
+                break;
+            };
+            if info.includes.iter().any(|module| module == "T::Sig") {
+                return true;
+            }
+            current = info.superclass.clone();
+        }
+        false
+    }
+
     pub(super) fn observe_mixin_hook_owned(
         &mut self,
         site: SourceSite,

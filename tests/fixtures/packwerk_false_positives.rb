@@ -1,5 +1,7 @@
 # typed: true
 
+extend T::Sig
+
 module Minitest
   class Runnable
     def name

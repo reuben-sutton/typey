@@ -7,6 +7,8 @@ module TestAssertions
 end
 
 module TestDsl
+  extend T::Sig
+
   sig { params(name: String, block: T.proc.bind(T.self_type).void).returns(NilClass) }
   def test(name, &block)
     nil

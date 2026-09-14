@@ -7,6 +7,8 @@ class Object
 end
 
 class LegacyPredicateUnion
+  extend T::Sig
+
   sig { type_parameters(:V).params(value: T.type_parameter(:V)).returns(String) }
   def self.convert(value)
     [value].filter_map { |element|
@@ -17,6 +19,8 @@ class LegacyPredicateUnion
 end
 
 class GenericObjectProtocol
+  extend T::Sig
+
   sig { type_parameters(:V).params(value: T.type_parameter(:V)).returns(String) }
   def self.string_value(value)
     value.to_s
