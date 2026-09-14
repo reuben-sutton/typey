@@ -71,7 +71,10 @@ pub(super) fn transfer_collection_call(
             | "transform_keys"
             | "transform_values"
     ) && match &kind {
-        CollectionKind::Array => !matches!(name, "each_pair" | "each_key" | "each_value"),
+        CollectionKind::Array => !matches!(
+            name,
+            "each_pair" | "each_key" | "each_value" | "transform_keys" | "transform_values"
+        ),
         CollectionKind::Hash(_, _) => true,
     };
     let block_is_nil = matches!(input.block, Some(cfg::BlockOperand::Passed(value))
@@ -87,6 +90,9 @@ pub(super) fn transfer_collection_call(
             return None;
         }
         return requires_block.then(|| (Type::named("Enumerator"), None));
+    }
+    if !requires_block {
+        return None;
     }
 
     let callback_parameters = if name == "each_with_object" {
