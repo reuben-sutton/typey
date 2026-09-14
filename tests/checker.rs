@@ -6378,6 +6378,16 @@ fn transfers_array_count_block_parameter_types() {
 }
 
 #[test]
+fn preserves_declared_types_for_optional_defaults() {
+    let result = check_fixture("tests/fixtures/declared_optional_default_types.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `T::Boolean`")));
+}
+
+#[test]
 fn preserves_pair_tuples_for_hash_from_collection_blocks() {
     let result = check(
         r#"

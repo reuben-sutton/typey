@@ -243,7 +243,29 @@ impl<'src> Analyzer<'src> {
                     .map(|name| name.as_str().to_owned())
                     .or_else(|| parameter.name.as_ref().map(|name| name.as_str().to_owned()));
                 if let Some(name) = name {
-                    default_environment.bind(name, default_type.clone());
+                    // An explicit signature is the contract for both the
+                    // supplied and omitted forms.  The default expression is
+                    // still checked below, but its provisional literal type
+                    // must not replace a declared type such as
+                    // `Array[String]` with `Array[T.untyped]` for `[]`.
+                    let type_ = if state.explicit {
+                        match parameter.kind {
+                            hir::ParameterKind::Optional => body_signature
+                                .params
+                                .get(parameter_positional_index)
+                                .cloned(),
+                            hir::ParameterKind::OptionalKeyword => parameter
+                                .name
+                                .as_ref()
+                                .and_then(|name| body_signature.keywords.get(name.as_str()))
+                                .map(|parameter| parameter.type_.clone()),
+                            _ => None,
+                        }
+                        .unwrap_or_else(|| default_type.clone())
+                    } else {
+                        default_type.clone()
+                    };
+                    default_environment.bind(name, type_);
                 }
                 self.observe_owned_default_parameter(
                     &key,
