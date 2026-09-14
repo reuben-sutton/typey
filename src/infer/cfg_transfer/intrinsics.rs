@@ -100,6 +100,15 @@ pub(super) fn transfer_intrinsic_call(
             }
         }
         "must" => (actual.without(&Type::Nil), UntypedOrigin::Propagated),
+        "absurd" => {
+            if !actual.is_never() {
+                analyzer.error_at(
+                    input.site,
+                    format!("Expected `T.noreturn`, but found `{actual}`"),
+                );
+            }
+            (Type::Never, UntypedOrigin::Propagated)
+        }
         "unsafe" => (Type::Any, UntypedOrigin::Unsafe),
         "attached_class" => {
             let owner = environment

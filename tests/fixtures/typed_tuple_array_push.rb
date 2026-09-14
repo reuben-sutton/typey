@@ -15,4 +15,6 @@ class Collector
   end
 end
 
-Collector.new.add("value")
+collector = Collector.new
+collector.add("value")
+T.reveal_type(collector.items) # note: T::Array[[String, Integer]]

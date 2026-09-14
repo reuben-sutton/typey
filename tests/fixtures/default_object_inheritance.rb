@@ -13,4 +13,4 @@ end
 class DefaultObjectChild
 end
 
-DefaultObjectChild.new.default_kernel_method
+T.reveal_type(DefaultObjectChild.new.default_kernel_method) # note: String

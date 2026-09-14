@@ -5,4 +5,4 @@ def symbol_name(symbol)
   symbol.name
 end
 
-symbol_name(:version)
+T.reveal_type(symbol_name(:version)) # note: String

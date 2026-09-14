@@ -326,7 +326,9 @@ impl<'src> Analyzer<'src> {
         }
         if self.ivars.get(&key) != Some(&next) {
             self.ivars.insert(key.clone(), next);
-            self.fixpoint.changed_shared.insert(SharedKey::Ivar(key));
+            self.fixpoint
+                .changed_shared
+                .insert(SharedKey::Ivar(key.clone()));
         }
     }
 
@@ -760,33 +762,6 @@ impl<'src> Analyzer<'src> {
             self.declarations.struct_fields.entry(key).or_insert(fields);
         }
         Some(Type::named(self.constant_key(environment, constant_name)))
-    }
-
-    pub(super) fn eval_dynamic_struct_block<'node>(
-        &mut self,
-        value: &Node<'node>,
-        struct_type: &Type,
-        environment: &mut Environment,
-    ) {
-        let Some(call) = value.as_call_node() else {
-            return;
-        };
-        if prism::constant_name(call.name()) != "new"
-            || call
-                .receiver()
-                .and_then(|receiver| self.constant_reference_name(&receiver))
-                .is_none_or(|name| name.trim_start_matches("::") != "Struct")
-        {
-            return;
-        }
-        let Some(block) = call.block() else {
-            return;
-        };
-        let Some(owner) = Self::named_type_name(struct_type) else {
-            return;
-        };
-        let receiver = Self::class_object_type(&owner);
-        let _ = self.eval_bound_block_node(&block, &[], &receiver, environment);
     }
 
     pub(super) fn observe_constant(

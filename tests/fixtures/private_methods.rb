@@ -17,4 +17,5 @@ class Parent
   end
 end
 
+T.reveal_type(Parent.make) # note: Parent
 Parent.consume(Parent.new) # error: Non-private call to private method `consume`

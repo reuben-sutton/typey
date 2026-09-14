@@ -7,5 +7,6 @@ def accepts_name(name); end
 def forwards_name(names)
   return if names.empty?
 
+  T.reveal_type(names.first) # note: Symbol
   accepts_name(names.first)
 end

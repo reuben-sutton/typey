@@ -40,4 +40,4 @@ def cfg_generic_edges(package_set)
   end
 end
 
-T.reveal_type(cfg_generic_edges(CfgGenericPackageSet.new))
+T.reveal_type(cfg_generic_edges(CfgGenericPackageSet.new)) # note: Revealed type: `T::Hash[String, T::Array[T.nilable(String)]]`

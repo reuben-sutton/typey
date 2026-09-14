@@ -3,6 +3,7 @@
 def build_strings
   values = []
   values << "value"
+  T.reveal_type(values) # note: T::Array[String]
   values
 end
 
@@ -10,6 +11,8 @@ def build_pair
   class_methods, methods = [], []
   class_methods << "method"
   methods << "other"
+  T.reveal_type(class_methods) # note: T::Array[String]
+  T.reveal_type(methods) # note: T::Array[String]
   [class_methods, methods]
 end
 
@@ -17,6 +20,7 @@ def build_modifiers(flag)
   modifiers = []
   modifiers << :nx if flag
   modifiers << :px << (1000 * 1)
+  T.reveal_type(modifiers) # note: T::Array[T.any(Integer, Symbol)]
   modifiers
 end
 
