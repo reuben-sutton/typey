@@ -10361,6 +10361,14 @@ fn contextualizes_empty_arrays_in_indexed_logical_assignments() {
 }
 
 #[test]
+fn preserves_set_element_types_through_splats_in_flat_map() {
+    let result = check_fixture("tests/fixtures/flat_map_splat_element_types.rb");
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `T::Array[T.nilable(String)]`")));
+}
+
+#[test]
 fn transfers_standard_collection_contracts_through_owned_cfg() {
     let source = std::fs::read_to_string("tests/fixtures/cfg_standard_collection_contracts.rb")
         .expect("fixture");

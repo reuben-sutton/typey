@@ -1240,6 +1240,11 @@ impl<'src> Analyzer<'src> {
             Type::Named(name, arguments) if name_matches(name, "Array") => {
                 arguments.first().cloned().unwrap_or(Type::Any)
             }
+            Type::Named(name, arguments)
+                if name_matches(name, "Set") || name_matches(name, "Enumerable") =>
+            {
+                arguments.first().cloned().unwrap_or(Type::Any)
+            }
             Type::Tuple(elements) => {
                 let element = elements
                     .iter()
