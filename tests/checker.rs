@@ -10376,6 +10376,22 @@ fn models_rexml_mutator_return_types() {
 }
 
 #[test]
+fn models_thor_class_dsl_returns() {
+    let result = check_fixture("tests/fixtures/thor_dsl_returns.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    for type_name in ["String", "FalseClass", "Thor::Option"] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(type_name)),
+            "missing {type_name}: {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn infers_empty_each_with_object_hash_accumulators() {
     let result = check(
         r#"

@@ -394,7 +394,10 @@ fn transfer_receiver_call_with_substitution(
     ) || matches!(
         receiver,
         Type::Array(_) | Type::Tuple(_) | Type::Hash(_, _)
-    ) || matches!(receiver, Type::Named(class, _) if analyzer.nominal_subtype(class, "TSort"));
+    ) || matches!(receiver, Type::Named(class, _) if analyzer.nominal_subtype(class, "TSort"))
+        || Analyzer::class_object_instance_type(receiver).is_some_and(|instance| {
+            matches!(instance, Type::Named(class, _) if analyzer.nominal_subtype(&class, "Thor"))
+        });
     if standard_builtin_receiver {
         if let Some((type_, block_result)) = super::builtins::transfer_builtin_call(
             analyzer,

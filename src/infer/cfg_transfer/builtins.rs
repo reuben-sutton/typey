@@ -149,6 +149,21 @@ pub(super) fn transfer_builtin_call(
                 };
                 return Some((type_, None));
             }
+            if analyzer.nominal_subtype(class, "Thor") {
+                let type_ = match name {
+                    "default_command" | "default_task" => Type::String,
+                    "desc" => {
+                        if arguments.argument_types.len() > 2 {
+                            Type::union([Type::False, Type::String])
+                        } else {
+                            Type::False
+                        }
+                    }
+                    "option" | "class_option" => Type::named("Thor::Option"),
+                    _ => return None,
+                };
+                return Some((type_, None));
+            }
             if name_matches(class, "Set") && name == "new" {
                 let element = arguments
                     .argument_types
