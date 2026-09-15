@@ -962,7 +962,7 @@ fn owned_range_starts_at_zero(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -
     )
 }
 
-fn known_nonempty_string_receiver(
+pub(super) fn known_nonempty_string_receiver(
     analyzer: &Analyzer<'_>,
     input: &OwnedCallInput,
     environment: &Environment,

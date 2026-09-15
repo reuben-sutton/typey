@@ -766,6 +766,33 @@ fn transfer_receiver_call_with_substitution(
         }
     }
 
+    // The core RBI describes String#[] as nilable for arbitrary indices. A
+    // path which has already proved a String non-empty makes an integer index
+    // total, however. Apply that structural refinement before the generic RBI
+    // declaration so a loaded core contract cannot erase the flow fact.
+    if name == "[]"
+        && matches!(receiver, Type::String)
+        && arguments.argument_types.first() == Some(&Type::Integer)
+        && super::builtins::known_nonempty_string_receiver(analyzer, input, environment)
+    {
+        if let Some((type_, block_result)) = super::builtins::transfer_builtin_call(
+            analyzer,
+            input,
+            receiver,
+            arguments,
+            values,
+            environment,
+            hash_shape,
+        ) {
+            return Ok(ReceiverTransfer {
+                type_,
+                block_result,
+                untyped_origin: UntypedOrigin::FallbackCall,
+                missing_method: false,
+            });
+        }
+    }
+
     // `[]` is also ordinary Ruby method dispatch. Only proc-like receivers
     // use the callable shorthand; a nominal receiver must still resolve its
     // declared `[]` method here.

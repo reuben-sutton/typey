@@ -2006,7 +2006,7 @@ fn knows_extrema_of_a_nonempty_array_are_non_nil() {
             .iter()
             .filter(|message| message.contains("Revealed type: `Integer`"))
             .count(),
-        2,
+        3,
         "{reveals:?}"
     );
     assert!(
@@ -10624,6 +10624,46 @@ fn block_parameter_shadowing_does_not_escape_the_block() {
 fn narrows_string_indexing_after_nonempty_guard() {
     let result = check_fixture("tests/fixtures/nonempty_string_index.rb");
     assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+}
+
+#[test]
+fn narrows_string_indexing_inside_transform_blocks() {
+    let result = check_fixture("tests/fixtures/nonempty_string_block_index.rb");
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `String`"))
+            .count(),
+        3,
+        "{:#?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn preserves_nonempty_string_index_refinement_over_core_rbi_contracts() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/nonempty_string_index.rb").expect("fixture exists");
+    let contract = r#"# typed: true
+
+class String
+  #: (Integer) -> String?
+  def [](_index)
+  end
+end
+"#;
+    let mut files =
+        load_workspace_paths(&builtin_rbi_paths().expect("builtins exist")).expect("builtins load");
+    files.push(WorkspaceFile::new("string_index_contract.rb", contract));
+    files.push(WorkspaceFile::new("nonempty_string_index.rb", source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .diagnostic
+        .message
+        .contains("Revealed type: `String`")));
 }
 
 #[test]
