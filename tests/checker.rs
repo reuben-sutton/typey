@@ -10351,6 +10351,15 @@ fn infers_set_constructor_element_types() {
 }
 
 #[test]
+fn models_ruby_argv_as_strings() {
+    let result = check_fixture("tests/fixtures/argv_type.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `T::Array[String]`")));
+}
+
+#[test]
 fn infers_empty_each_with_object_hash_accumulators() {
     let result = check(
         r#"

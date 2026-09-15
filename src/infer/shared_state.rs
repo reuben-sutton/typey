@@ -918,8 +918,14 @@ impl<'src> Analyzer<'src> {
         }
         if let Some(index) = selected {
             if let Some(type_) = self.declarations.constants.get(&candidates[index]) {
+                if name == "ARGV" && type_.contains_any() {
+                    return Type::Array(Box::new(Type::String));
+                }
                 return self.resolve_type_names(type_, result_owner.as_deref());
             }
+        }
+        if name == "ARGV" {
+            return Type::Array(Box::new(Type::String));
         }
         if resolved != name
             || self.declarations.classes.contains_key(&resolved)

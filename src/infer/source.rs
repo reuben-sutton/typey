@@ -293,6 +293,9 @@ impl<'src> Analyzer<'src> {
         if name == "T" || name.starts_with("T::") {
             return true;
         }
+        if name == "ARGV" {
+            return true;
+        }
         let owner = self.lexical_owner(environment);
         let resolved = self.resolve_name(name, owner.as_deref());
         self.declarations.classes.contains_key(&resolved)
