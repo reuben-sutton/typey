@@ -164,7 +164,10 @@ pub(super) fn transfer_builtin_call(
                 };
                 return Some((type_, None));
             }
-            if name_matches(class, "Set") && name == "new" {
+            if name_matches(class, "Set")
+                && name == "new"
+                && (arguments.argument_types.first().is_some() || input.block.is_some())
+            {
                 let element = arguments
                     .argument_types
                     .first()

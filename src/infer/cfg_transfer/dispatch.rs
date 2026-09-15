@@ -590,7 +590,9 @@ fn transfer_receiver_call_with_substitution(
 
     if name == "new" {
         if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
-            if matches!(&instance, Type::Named(owner, _) if name_matches(owner, "Set")) {
+            if matches!(&instance, Type::Named(owner, _) if name_matches(owner, "Set"))
+                && (arguments.argument_types.first().is_some() || input.block.is_some())
+            {
                 let source_element = arguments
                     .argument_types
                     .first()
