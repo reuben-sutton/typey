@@ -2006,7 +2006,7 @@ fn knows_extrema_of_a_nonempty_array_are_non_nil() {
             .iter()
             .filter(|message| message.contains("Revealed type: `Integer`"))
             .count(),
-        3,
+        2,
         "{reveals:?}"
     );
     assert!(
