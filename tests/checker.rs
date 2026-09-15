@@ -10570,6 +10570,43 @@ fn evaluates_string_transform_blocks() {
 }
 
 #[test]
+fn reports_missing_methods_on_nilable_inline_block_components() {
+    check_fixture("tests/fixtures/string_index_nilability.rb");
+}
+
+#[test]
+fn resolves_object_methods_on_structural_collections() {
+    let result = check_fixture("tests/fixtures/object_method_on_collections.rb");
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
+fn resolves_superclasses_through_enclosing_namespaces() {
+    let result = check_fixture("tests/fixtures/nested_superclass_resolution.rb");
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+}
+
+#[test]
+fn uses_explicit_accessor_types_for_direct_inherited_ivar_reads() {
+    let result = check_fixture("tests/fixtures/explicit_inherited_ivar_type.rb");
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+}
+
+#[test]
+fn preserves_explicit_inherited_ivar_types_when_storage_is_observed_on_child() {
+    let result = check_fixture("tests/fixtures/inherited_initialized_ivar.rb");
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `Project`")));
+}
+
+#[test]
 fn evaluates_call_assignment_rhs_calls() {
     let source = r#"
 class Box

@@ -1347,15 +1347,12 @@ impl MethodRegistrar<'_> {
         } else if raw.contains("::") || self.class_stack.is_empty() {
             raw.to_owned()
         } else {
-            let candidate = format!(
-                "{}::{raw}",
-                self.class_stack.last().expect("stack is not empty")
-            );
-            if self.declarations.classes.contains_key(&candidate) {
-                candidate
-            } else {
-                raw.to_owned()
-            }
+            self.class_stack
+                .iter()
+                .rev()
+                .map(|scope| format!("{scope}::{raw}"))
+                .find(|candidate| self.declarations.classes.contains_key(candidate))
+                .unwrap_or_else(|| raw.to_owned())
         }
     }
 

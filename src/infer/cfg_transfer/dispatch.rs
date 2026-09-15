@@ -164,6 +164,7 @@ fn transfer_receiver_call_with_substitution(
         let mut joined_environment: Option<Environment> = None;
         let mut missing_method = false;
         let mut all_members_missing = true;
+        let mut missing_members = Vec::new();
         for member in members {
             // Calling an optional block is a normal-path operation on the
             // callable member. The nil member raises at runtime and must not
@@ -194,12 +195,23 @@ fn transfer_receiver_call_with_substitution(
             untyped_origin = join_untyped_origin(untyped_origin, result.untyped_origin);
             missing_method |= result.missing_method;
             all_members_missing &= result.missing_method;
+            if result.missing_method {
+                missing_members.push(member.clone());
+            }
         }
         if let Some(joined_environment) = joined_environment {
             *environment = joined_environment;
         }
-        if missing_method && all_members_missing {
-            analyzer.report_missing_method_if_needed_at(input.site, receiver, name, false);
+        if missing_method {
+            if all_members_missing {
+                analyzer.report_missing_method_if_needed_at(input.site, receiver, name, false);
+            } else {
+                for member in missing_members {
+                    analyzer.report_missing_method_component_if_needed_at(
+                        input.site, &member, name, receiver,
+                    );
+                }
+            }
         }
         return Ok(ReceiverTransfer {
             type_: result_type,

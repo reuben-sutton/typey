@@ -513,6 +513,7 @@ impl<'src> Analyzer<'src> {
             vec![key.owner.clone()]
         };
         let mut writable_type = None;
+        let mut declared_reader_type = None;
         let mut visited = BTreeSet::new();
         while let Some(owner_name) = pending.pop() {
             if !visited.insert(owner_name.clone()) {
@@ -523,6 +524,13 @@ impl<'src> Analyzer<'src> {
                 singleton: key.singleton,
                 name: key.name.clone(),
             };
+            if let Some(type_) = self.accessor_reader_type(&owner_name, name, key.singleton) {
+                declared_reader_type = Some(
+                    declared_reader_type
+                        .take()
+                        .map_or(type_.clone(), |current: Type| current.join(&type_)),
+                );
+            }
             if let Some(type_) = self.accessor_writer_type(&owner_name, name, key.singleton) {
                 writable_type = Some(
                     writable_type
@@ -533,6 +541,16 @@ impl<'src> Analyzer<'src> {
             if let Some(type_) = self.ivars.get(&candidate).cloned() {
                 self.record_shared_read(SharedKey::Ivar(candidate.clone()), environment);
                 let type_ = self.ivar_type_with_initialization(&candidate, type_);
+                let declared_reader_type = declared_reader_type.or_else(|| {
+                    self.resolved_accessor_reader_type(&key.owner, name, key.singleton)
+                });
+                if let Some(declared) = declared_reader_type.as_ref() {
+                    if !Self::is_known_non_nil(declared) || type_.without(&Type::Nil) == type_ {
+                        return writable_type
+                            .map_or(type_.clone(), |writable| type_.join(&writable));
+                    }
+                    return declared.clone();
+                }
                 return writable_type.map_or(type_.clone(), |writable| type_.join(&writable));
             }
             if let Some(info) = self.declarations.classes.get(&owner_name) {
@@ -569,7 +587,44 @@ impl<'src> Analyzer<'src> {
         // Reading an uninitialized Ruby instance variable yields nil. Keep
         // that concrete fact instead of letting an unknown ivar poison
         // `@value ||= ...` expressions with T.untyped.
+        if let Some(declared) = declared_reader_type {
+            return declared;
+        }
         writable_type.map_or(Type::Nil, |writable| Type::Nil.join(&writable))
+    }
+
+    fn accessor_reader_type(&self, owner: &str, ivar: &str, singleton: bool) -> Option<Type> {
+        let name = ivar.trim_start_matches('@');
+        let key = MethodKey {
+            owner: Some(owner.to_owned()),
+            name: name.to_owned(),
+            singleton,
+        };
+        if self.declarations.accessors.get(&key) != Some(&AccessorKind::Reader) {
+            return None;
+        }
+        let state = self.declarations.methods.get(&key)?;
+        state.explicit.then(|| state.call_signature().return_type)
+    }
+
+    fn is_known_non_nil(type_: &Type) -> bool {
+        !type_.is_any() && !matches!(type_, Type::Anything) && type_.without(&Type::Nil) == *type_
+    }
+
+    fn resolved_accessor_reader_type(
+        &self,
+        owner: &str,
+        ivar: &str,
+        singleton: bool,
+    ) -> Option<Type> {
+        let name = ivar.trim_start_matches('@');
+        let key = MethodKey {
+            owner: Some(owner.to_owned()),
+            name: name.to_owned(),
+            singleton,
+        };
+        let resolved = self.resolve_method_key(&key)?;
+        self.accessor_reader_type(resolved.owner.as_deref()?, ivar, resolved.singleton)
     }
 
     fn accessor_writer_type(&self, owner: &str, ivar: &str, singleton: bool) -> Option<Type> {

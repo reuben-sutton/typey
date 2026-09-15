@@ -248,6 +248,12 @@ impl<'src> Analyzer<'src> {
             if let Some(superclass) = &info.superclass {
                 self.append_method_candidates(superclass, name, singleton, visited, candidates);
             }
+        } else if !singleton && owner != "Object" && owner != "BasicObject" {
+            // Core classes are modeled structurally by the owned dispatcher,
+            // so their class declarations may not be present in this
+            // workspace. They still inherit instance methods added to Object
+            // by the application or a loaded gem.
+            self.append_method_candidates("Object", name, false, visited, candidates);
         }
     }
 
