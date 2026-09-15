@@ -605,11 +605,14 @@ impl<'src> Analyzer<'src> {
                 if name == "empty?" {
                     if let Some(local) = receiver.as_local_variable_read_node() {
                         let local_name = prism::constant_name(local.name());
-                        if matches!(
-                            environment.get(&local_name),
-                            Type::Array(_) | Type::Tuple(_)
-                        ) {
-                            environment.set_known_nonempty_array(&local_name, !truthy);
+                        match environment.get(&local_name) {
+                            Type::Array(_) | Type::Tuple(_) => {
+                                environment.set_known_nonempty_array(&local_name, !truthy);
+                            }
+                            Type::String => {
+                                environment.set_known_nonempty_string(&local_name, !truthy);
+                            }
+                            _ => {}
                         }
                         return;
                     }

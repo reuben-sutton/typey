@@ -526,8 +526,14 @@ impl<'src> Analyzer<'src> {
             }
             "!=" if argument.is_some() => current.meet(&argument_type),
             "empty?" if argument.is_none() => {
-                if matches!(current, Type::Array(_) | Type::Tuple(_)) {
-                    environment.set_known_nonempty_array(&local_name, !truthy);
+                match current {
+                    Type::Array(_) | Type::Tuple(_) => {
+                        environment.set_known_nonempty_array(&local_name, !truthy);
+                    }
+                    Type::String => {
+                        environment.set_known_nonempty_string(&local_name, !truthy);
+                    }
+                    _ => {}
                 }
                 return;
             }

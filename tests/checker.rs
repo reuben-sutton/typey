@@ -10621,6 +10621,12 @@ fn block_parameter_shadowing_does_not_escape_the_block() {
 }
 
 #[test]
+fn narrows_string_indexing_after_nonempty_guard() {
+    let result = check_fixture("tests/fixtures/nonempty_string_index.rb");
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+}
+
+#[test]
 fn evaluates_call_assignment_rhs_calls() {
     let source = r#"
 class Box

@@ -32,6 +32,7 @@ pub struct Environment {
     pub(super) block_parameters: CowState<BTreeSet<String>>,
     pub(super) open_array_locals: CowState<BTreeSet<String>>,
     pub(super) known_nonempty_arrays: CowState<BTreeSet<String>>,
+    pub(super) known_nonempty_strings: CowState<BTreeSet<String>>,
     pub(super) predicate_aliases: CowState<BTreeMap<String, PredicateAlias>>,
     pub(super) known_truthiness: CowState<BTreeMap<String, bool>>,
     /// Methods proven available by a path-sensitive `respond_to?` guard.
@@ -66,6 +67,7 @@ impl Default for Environment {
             block_parameters: CowState::new(BTreeSet::new()),
             open_array_locals: CowState::new(BTreeSet::new()),
             known_nonempty_arrays: CowState::new(BTreeSet::new()),
+            known_nonempty_strings: CowState::new(BTreeSet::new()),
             predicate_aliases: CowState::new(BTreeMap::new()),
             known_truthiness: CowState::new(BTreeMap::new()),
             known_respond_to: CowState::new(BTreeSet::new()),
@@ -93,6 +95,7 @@ impl Environment {
         let name = name.into();
         self.open_array_locals.remove(&name);
         self.known_nonempty_arrays.remove(&name);
+        self.known_nonempty_strings.remove(&name);
         self.inferred_locals.remove(&name);
         self.provisional_locals.remove(&name);
         self.block_parameters.remove(&name);
@@ -111,6 +114,7 @@ impl Environment {
         self.block_parameters.remove(name);
         self.open_array_locals.remove(name);
         self.known_nonempty_arrays.remove(name);
+        self.known_nonempty_strings.remove(name);
         self.predicate_aliases.remove(name);
         self.known_truthiness.remove(name);
         self.clear_known_respond_to(&format!("\u{1}local:{name}"));
@@ -189,6 +193,7 @@ impl Environment {
         let name = name.into();
         self.open_array_locals.remove(&name);
         self.known_nonempty_arrays.remove(&name);
+        self.known_nonempty_strings.remove(&name);
         self.inferred_locals.remove(&name);
         self.provisional_locals.remove(&name);
         self.locals.insert(name.clone(), type_);
@@ -280,6 +285,19 @@ impl Environment {
         self.known_nonempty_arrays.contains(name)
     }
 
+    pub(super) fn set_known_nonempty_string(&mut self, name: impl Into<String>, nonempty: bool) {
+        let name = name.into();
+        if nonempty {
+            self.known_nonempty_strings.insert(name);
+        } else {
+            self.known_nonempty_strings.remove(&name);
+        }
+    }
+
+    pub(super) fn known_nonempty_string(&self, name: &str) -> bool {
+        self.known_nonempty_strings.contains(name)
+    }
+
     /// Widen an array local whose empty literal was kept open for later
     /// appends. Empty arrays start with an `Any` element in the ordinary
     /// aggregate type, but that `Any` is only a placeholder until the first
@@ -313,6 +331,8 @@ impl Environment {
             && self.open_array_locals.contains(name) == other.open_array_locals.contains(name)
             && self.known_nonempty_arrays.contains(name)
                 == other.known_nonempty_arrays.contains(name)
+            && self.known_nonempty_strings.contains(name)
+                == other.known_nonempty_strings.contains(name)
             && self.predicate_alias(name) == other.predicate_alias(name)
             && self.known_truthiness(name) == other.known_truthiness(name)
             && self.known_respond_to_facts(name) == other.known_respond_to_facts(name)
@@ -423,6 +443,19 @@ impl Environment {
                 CowState::new(
                     self.known_nonempty_arrays
                         .intersection(&other.known_nonempty_arrays)
+                        .cloned()
+                        .collect(),
+                )
+            },
+            known_nonempty_strings: if self
+                .known_nonempty_strings
+                .shares_storage(&other.known_nonempty_strings)
+            {
+                self.known_nonempty_strings.clone()
+            } else {
+                CowState::new(
+                    self.known_nonempty_strings
+                        .intersection(&other.known_nonempty_strings)
                         .cloned()
                         .collect(),
                 )

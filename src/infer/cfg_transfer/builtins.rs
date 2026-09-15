@@ -172,7 +172,16 @@ pub(super) fn transfer_builtin_call(
             "to_sym" | "intern" => Some(Type::Symbol),
             "bytes" | "codepoints" => Some(Type::Array(Box::new(Type::Integer))),
             "chars" | "lines" | "split" => Some(Type::Array(Box::new(Type::String))),
-            "[]" | "slice" | "byteslice" => Some(Type::union([Type::Nil, Type::String])),
+            "[]" | "slice" | "byteslice" => {
+                if name == "[]"
+                    && arguments.argument_types.first() == Some(&Type::Integer)
+                    && known_nonempty_string_receiver(analyzer, input, environment)
+                {
+                    Some(Type::String)
+                } else {
+                    Some(Type::union([Type::Nil, Type::String]))
+                }
+            }
             "match" => Some(Type::union([Type::Nil, Type::named("MatchData")])),
             "=~" | "index" | "rindex" => Some(Type::union([Type::Nil, Type::Integer])),
             "<=>" => {
@@ -951,4 +960,34 @@ fn owned_range_starts_at_zero(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -
         analyzer.program.hir_program.expression(left).map(|expression| &expression.kind),
         Some(hir::ExprKind::Literal(hir::Literal::Integer(value))) if value == "0"
     )
+}
+
+fn known_nonempty_string_receiver(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    environment: &Environment,
+) -> bool {
+    let Some(expression) = input
+        .expression
+        .and_then(|expression| analyzer.program.hir_program.expression(expression))
+    else {
+        return false;
+    };
+    let hir::ExprKind::Call(call) = &expression.kind else {
+        return false;
+    };
+    let hir::Receiver::Explicit(receiver) = call.receiver else {
+        return false;
+    };
+    let Some(receiver) = analyzer.program.hir_program.expression(receiver) else {
+        return false;
+    };
+    let hir::ExprKind::Read(hir::Read::Local(local)) = &receiver.kind else {
+        return false;
+    };
+    analyzer
+        .program
+        .hir_program
+        .local_name(*local)
+        .is_some_and(|name| environment.known_nonempty_string(name.as_str()))
 }
