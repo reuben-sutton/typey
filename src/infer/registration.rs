@@ -155,6 +155,55 @@ impl<'src> Analyzer<'src> {
             });
         }
 
+        // `T::Struct` subclasses declare their constructor contract through
+        // `prop`/`const`, rather than a Ruby `initialize` definition.  The
+        // property registrar already records the generated accessors and the
+        // field names, so synthesize the keyword initializer here.  Without
+        // this declaration, method lookup falls through to `Struct#initialize`
+        // and rejects a valid `Person.new(name: ..., age: ...)` call.
+        let t_struct_subclasses = self
+            .declarations
+            .struct_fields
+            .iter()
+            .filter_map(|(owner, fields)| {
+                self.declarations
+                    .classes
+                    .get(owner)
+                    .is_some_and(|info| {
+                        info.superclass.as_deref().is_some_and(|superclass| {
+                            superclass.trim_start_matches("::") == "T::Struct"
+                        })
+                    })
+                    .then(|| (owner.clone(), fields.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (owner, fields) in t_struct_subclasses {
+            let mut state = MethodState::inferred(None);
+            let mut keywords = BTreeMap::new();
+            for field in &fields {
+                let type_ = self
+                    .declarations
+                    .methods
+                    .get(&MethodKey {
+                        owner: Some(owner.clone()),
+                        name: field.clone(),
+                        singleton: false,
+                    })
+                    .map(|method| method.call_signature().return_type)
+                    .unwrap_or(Type::Any);
+                keywords.insert(field.clone(), Some(type_));
+            }
+            state.required_keywords = Arc::new(fields.iter().cloned().collect());
+            state.keywords = Arc::new(keywords);
+            state.return_type = Some(Type::Nil);
+            let key = MethodKey {
+                owner: Some(owner.clone()),
+                name: "initialize".to_owned(),
+                singleton: false,
+            };
+            self.declarations.methods.entry(key).or_insert(state);
+        }
+
         // Attribute annotations are registered while walking the AST, before
         // the analyzer has its final class table. Resolve their relative
         // names just like method annotations once all declarations are known.

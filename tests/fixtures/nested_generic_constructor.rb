@@ -26,7 +26,7 @@ module Spoom
 
     #: (E value) -> Element[E]
     def add_and_read(value)
-      T.reveal_type(add_element(value))
+      T.reveal_type(add_element(value)) # note: Revealed type: `Spoom::Poset::Element[Spoom::Poset::E]`
       add_element(value)
     end
   end

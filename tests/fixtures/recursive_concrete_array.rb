@@ -21,10 +21,10 @@ def recursive_names(node)
 end
 
 T.reveal_type(
-  recursive_names(
+  recursive_names( # note: Revealed type: `T::Array[String]`
     RecursiveConcreteArrayNode.new(
       "root",
       [RecursiveConcreteArrayNode.new("leaf", [])]
     )
   )
-) # note: T::Array[String]
+)

@@ -47,14 +47,15 @@ pub fn expectations(source: &str) -> Vec<InlineExpectation> {
             if let Some((_, message)) = comment.split_once(marker) {
                 let message = message.trim();
                 if !message.is_empty() {
+                    let reveal_type = prefix.contains("T.reveal_type")
+                        && (severity == Severity::Note
+                            || message.starts_with("Revealed type:")
+                            || message.starts_with('`'));
                     // Sorbet renders `T.reveal_type` as an error diagnostic in
                     // its test harness. Typey's public diagnostic model keeps
                     // reveals as notes, so accept either fixture spelling as
                     // the same semantic expectation.
-                    let severity = if severity == Severity::Error
-                        && (message.starts_with("Revealed type:")
-                            || prefix.contains("T.reveal_type"))
-                    {
+                    let severity = if severity == Severity::Error && reveal_type {
                         Severity::Note
                     } else {
                         severity
@@ -88,7 +89,7 @@ pub fn expectations(source: &str) -> Vec<InlineExpectation> {
                         severity,
                         line,
                         message: message.to_owned(),
-                        reveal_type: prefix.contains("T.reveal_type"),
+                        reveal_type,
                     });
                 }
             }
@@ -295,5 +296,15 @@ mod tests {
             &expectation,
             "Revealed type: `Class[Example]`"
         ));
+    }
+
+    #[test]
+    fn ordinary_errors_on_reveal_expressions_are_not_reclassified_as_notes() {
+        let parsed = expectations(
+            "T.reveal_type(value) # error: Method `missing` does not exist on `String`\n",
+        );
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].severity, Severity::Error);
+        assert!(!parsed[0].reveal_type);
     }
 }

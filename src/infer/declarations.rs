@@ -267,7 +267,7 @@ impl MethodRegistrar<'_> {
             name: field.clone(),
             singleton: false,
         };
-        let reader_signature = MethodSig::new(Vec::new(), type_);
+        let reader_signature = MethodSig::new(Vec::new(), type_.clone());
         self.declarations
             .accessors
             .insert(reader.clone(), AccessorKind::Reader);
@@ -289,6 +289,19 @@ impl MethodRegistrar<'_> {
                 MethodState::explicit_overloads(std::slice::from_ref(&writer_signature))
             });
         }
+
+        let fields = self
+            .declarations
+            .struct_fields
+            .entry(owner.clone())
+            .or_default();
+        if !fields.contains(&field) {
+            fields.push(field.clone());
+        }
+        self.declarations
+            .struct_field_types
+            .entry((owner.clone(), field.clone()))
+            .or_insert_with(|| type_.clone());
 
         // `prop` and `const` are DSL calls on the class object. Register a
         // permissive declaration for the DSL itself so the class body is not
