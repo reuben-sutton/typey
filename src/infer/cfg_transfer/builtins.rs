@@ -128,6 +128,11 @@ pub(super) fn transfer_builtin_call(
                     None,
                 ));
             }
+            if name_matches(class, "Prism")
+                && matches!(name, "parse" | "parse_comments" | "parse_file")
+            {
+                return Some((Type::named("Prism::ParseResult"), None));
+            }
         }
     }
 

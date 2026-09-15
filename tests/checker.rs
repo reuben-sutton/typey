@@ -10305,6 +10305,26 @@ T.reveal_type(specification)
 }
 
 #[test]
+fn models_prism_parser_return_types() {
+    let result = check_fixture("tests/fixtures/stdlib_parser_returns.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type:"))
+            .count(),
+        3,
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(result
+        .diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.message.contains("Prism::ParseResult")));
+}
+
+#[test]
 fn infers_empty_each_with_object_hash_accumulators() {
     let result = check(
         r#"
