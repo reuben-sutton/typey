@@ -10369,7 +10369,7 @@ fn preserves_set_element_types_through_splats_in_flat_map() {
 }
 
 #[test]
-fn widens_open_arrays_through_concat() {
+fn widens_open_arrays_through_concat_and_unshift() {
     let result = check_fixture("tests/fixtures/open_array_concat.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
         .message

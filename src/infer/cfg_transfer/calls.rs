@@ -12,7 +12,10 @@ fn open_array_append_local(
     input: &OwnedCallInput,
     environment: &Environment,
 ) -> Option<String> {
-    if !matches!(input.name.as_str(), "push" | "<<" | "prepend" | "concat") {
+    if !matches!(
+        input.name.as_str(),
+        "push" | "<<" | "prepend" | "unshift" | "concat"
+    ) {
         return None;
     }
     let mut expression = input
@@ -40,7 +43,10 @@ fn open_array_append_local(
                     .then_some(name);
             }
             hir::ExprKind::Call(call)
-                if matches!(call.name.as_str(), "push" | "<<" | "prepend" | "concat") => {}
+                if matches!(
+                    call.name.as_str(),
+                    "push" | "<<" | "prepend" | "unshift" | "concat"
+                ) => {}
             _ => return None,
         }
     }
