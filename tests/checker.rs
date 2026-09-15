@@ -10371,9 +10371,16 @@ fn preserves_set_element_types_through_splats_in_flat_map() {
 #[test]
 fn widens_open_arrays_through_concat_and_unshift() {
     let result = check_fixture("tests/fixtures/open_array_concat.rb");
-    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
-        .message
-        .contains("Revealed type: `T::Array[String]`")));
+    let reveals = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+        })
+        .count();
+    assert_eq!(reveals, 2, "{:?}", result.diagnostics);
 }
 
 #[test]

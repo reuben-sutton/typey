@@ -241,6 +241,14 @@ impl Environment {
             .contains(&(receiver.to_owned(), method.to_owned()))
     }
 
+    pub(super) fn known_respond_to_facts(&self, receiver: &str) -> BTreeSet<String> {
+        self.known_respond_to
+            .iter()
+            .filter(|(known_receiver, _)| known_receiver == receiver)
+            .map(|(_, method)| method.clone())
+            .collect()
+    }
+
     fn clear_known_respond_to(&mut self, receiver: &str) {
         self.known_respond_to
             .retain(|(known_receiver, _)| known_receiver != receiver);
@@ -295,6 +303,22 @@ impl Environment {
         let type_ = Type::Array(Box::new(element));
         self.locals.insert(name.to_owned(), type_.clone());
         Some(type_)
+    }
+
+    pub(super) fn local_facts_unchanged(&self, other: &Self, name: &str) -> bool {
+        self.get(name) == other.get(name)
+            && self.is_inferred(name) == other.is_inferred(name)
+            && self.is_provisional(name) == other.is_provisional(name)
+            && self.is_block_parameter(name) == other.is_block_parameter(name)
+            && self.open_array_locals.contains(name) == other.open_array_locals.contains(name)
+            && self.known_nonempty_arrays.contains(name)
+                == other.known_nonempty_arrays.contains(name)
+            && self.predicate_alias(name) == other.predicate_alias(name)
+            && self.known_truthiness(name) == other.known_truthiness(name)
+            && self.known_respond_to_facts(name) == other.known_respond_to_facts(name)
+            && self.hash_shape(name) == other.hash_shape(name)
+            && self.hash_shape(&format!("\u{1}local:{name}"))
+                == other.hash_shape(&format!("\u{1}local:{name}"))
     }
 
     /// Refine a hash local from an index write.  Empty hash literals enter

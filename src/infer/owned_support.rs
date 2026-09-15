@@ -306,6 +306,9 @@ impl<'src> Analyzer<'src> {
         block: &Environment,
     ) {
         for name in captured.locals.keys() {
+            if captured.local_facts_unchanged(block, name) {
+                continue;
+            }
             outer.bind(name.clone(), captured.get(name).join(&block.get(name)));
         }
     }
