@@ -157,6 +157,28 @@ fn transfer_write_inner<'src>(
             };
             let type_ =
                 preserve_typed_empty_array_ivar(analyzer, environment, &name, expression, type_);
+            let refinement = ivar_refinement_key(&name);
+            // Once an instance variable has been assigned a value containing
+            // `T.untyped`, later concrete writes must not narrow that shared
+            // contract. This is common for lazily populated options hashes:
+            // the declaration establishes `Hash[K, untyped]`, while the
+            // implementation subsequently writes concrete values per key.
+            // Preserve the gradual boundary in both the local CFG state and
+            // the shared ivar summary.
+            let type_ = if environment.contains(&refinement) {
+                let current = environment.get(&refinement);
+                if current.contains_any() {
+                    if type_.is_nil() {
+                        current
+                    } else {
+                        current.without(&Type::Nil)
+                    }
+                } else {
+                    type_
+                }
+            } else {
+                type_
+            };
             let type_ = if logical {
                 type_.without(&Type::Nil)
             } else {
@@ -178,7 +200,6 @@ fn transfer_write_inner<'src>(
                 })
                 .is_some_and(|name| environment.is_provisional(name.as_str()));
             analyzer.observe_ivar(environment, name.clone(), &type_, provisional);
-            let refinement = ivar_refinement_key(&name);
             environment.bind(&refinement, type_.clone());
             environment.set_hash_shape(refinement, hash_shape);
             type_

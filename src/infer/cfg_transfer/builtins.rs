@@ -337,8 +337,9 @@ pub(super) fn transfer_builtin_call(
                 let literal_key = owned_hash_key(analyzer, input);
                 Some(match (literal_key, hash_shape) {
                     (Some(key), Some(hash_shape))
-                        if hash_shape.entries.contains_key(&key)
-                            || hash_shape.unknown_value.is_some() =>
+                        if !value.is_any()
+                            && (hash_shape.entries.contains_key(&key)
+                                || hash_shape.unknown_value.is_some()) =>
                     {
                         hash_shape.value_for(&key)
                     }

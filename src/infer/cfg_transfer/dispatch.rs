@@ -761,7 +761,13 @@ fn transfer_receiver_call_with_substitution(
     // A literal hash carries a flow-local key/value refinement alongside its
     // aggregate `Type::Hash`. Use that refinement before ordinary RBI method
     // lookup, whose generic `Hash#[]` contract necessarily loses the key.
-    if name == "[]" && matches!(receiver, Type::Hash(_, _)) {
+    // An explicitly gradual hash contract is an information boundary. A
+    // literal shape may know more about the initializer, but callers of
+    // `Hash[K, untyped]` must observe the declared value type rather than a
+    // union reconstructed from the current literal entries. Otherwise an
+    // annotated options hash can spuriously reject ordinary calls such as
+    // `options[:paths].empty?`.
+    if name == "[]" && matches!(receiver, Type::Hash(_, value) if !value.is_any()) {
         if let Some(hash_shape) = hash_shape {
             if let Some(key) = super::builtins::owned_hash_key(analyzer, input) {
                 return Ok(ReceiverTransfer {

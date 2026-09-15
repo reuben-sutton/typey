@@ -2681,6 +2681,12 @@ fn checks_splat_call_shapes() {
 }
 
 #[test]
+fn preserves_explicit_untyped_ivar_boundaries() {
+    let result = check_fixture("tests/fixtures/explicit_untyped_ivar_boundary.rb");
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+}
+
+#[test]
 fn dispatches_declared_methods_through_polymorphic_receivers() {
     let result = check_fixture("tests/fixtures/polymorphic_method_dispatch.rb");
     let notes = result
