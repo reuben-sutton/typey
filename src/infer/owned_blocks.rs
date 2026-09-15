@@ -243,7 +243,7 @@ impl<'src> Analyzer<'src> {
                 false,
             )
             .ok()?;
-        self.propagate_block_locals(outer, &captured, &closure_environment);
+        self.propagate_block_locals(outer, &captured, &closure_environment, &parameters);
         Some(Type::Proc(signature.params, Box::new(body_result.type_)))
     }
 
@@ -567,7 +567,7 @@ impl<'src> Analyzer<'src> {
         );
         self.expected_return_type = previous_expected_return;
         let body_result = body_result.ok()?;
-        self.propagate_block_locals(outer, &captured, &closure_environment);
+        self.propagate_block_locals(outer, &captured, &closure_environment, &closure.parameters);
         Some((body_result, closure_environment))
     }
 }

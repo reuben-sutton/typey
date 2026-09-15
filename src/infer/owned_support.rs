@@ -304,12 +304,57 @@ impl<'src> Analyzer<'src> {
         outer: &mut Environment,
         captured: &Environment,
         block: &Environment,
+        parameters: &hir::Parameters,
     ) {
+        let mut block_parameters = std::collections::BTreeSet::new();
+        for parameter in &parameters.parameters {
+            if let Some(name) = &parameter.name {
+                block_parameters.insert(name.as_str().to_owned());
+            }
+            if let Some(pattern) = &parameter.pattern {
+                self.collect_parameter_pattern_names(pattern, &mut block_parameters);
+            }
+        }
         for name in captured.locals.keys() {
+            // Block parameters are block-local even when they shadow a local
+            // from the enclosing method. Their inferred types must not be
+            // joined back into the enclosing scope after the callback.
+            if block_parameters.contains(name) {
+                continue;
+            }
             if captured.local_facts_unchanged(block, name) {
                 continue;
             }
             outer.bind(name.clone(), captured.get(name).join(&block.get(name)));
+        }
+    }
+
+    fn collect_parameter_pattern_names(
+        &self,
+        pattern: &hir::ParameterPattern,
+        names: &mut std::collections::BTreeSet<String>,
+    ) {
+        match pattern {
+            hir::ParameterPattern::Local(local) => {
+                if let Some(name) = self.program.hir_program.local_name(*local) {
+                    names.insert(name.as_str().to_owned());
+                }
+            }
+            hir::ParameterPattern::Tuple {
+                lefts,
+                rest,
+                rights,
+            } => {
+                for pattern in lefts {
+                    self.collect_parameter_pattern_names(pattern, names);
+                }
+                if let Some(pattern) = rest {
+                    self.collect_parameter_pattern_names(pattern, names);
+                }
+                for pattern in rights {
+                    self.collect_parameter_pattern_names(pattern, names);
+                }
+            }
         }
     }
 

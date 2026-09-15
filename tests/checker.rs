@@ -10607,6 +10607,20 @@ fn preserves_explicit_inherited_ivar_types_when_storage_is_observed_on_child() {
 }
 
 #[test]
+fn block_parameter_shadowing_does_not_escape_the_block() {
+    let result = check_fixture("tests/fixtures/block_parameter_shadowing.rb");
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `Integer`")));
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+}
+
+#[test]
 fn evaluates_call_assignment_rhs_calls() {
     let source = r#"
 class Box
