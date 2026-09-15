@@ -1,7 +1,9 @@
 //! Shared call-specific semantics for owned CFG transfer.
 
 use super::super::hash_shape::{HashKey, HashShape};
-use super::super::{Analyzer, Environment, Eval, OwnedCallInput, UntypedOrigin};
+use super::super::{
+    name_matches, Analyzer, CallArguments, Environment, Eval, OwnedCallInput, UntypedOrigin,
+};
 use crate::cfg;
 use crate::hir;
 use crate::types::Type;
@@ -91,7 +93,21 @@ fn is_empty_array_expression(analyzer: &Analyzer<'_>, expression: hir::ExprId) -
         })
 }
 
-fn is_empty_array_assignment(analyzer: &Analyzer<'_>, input: &OwnedCallInput) -> bool {
+fn is_empty_array_assignment(
+    analyzer: &Analyzer<'_>,
+    input: &OwnedCallInput,
+    arguments: &CallArguments<'_>,
+) -> bool {
+    // Owned CFG calls may not retain the original HIR expression.  Preserve
+    // the empty literal shape separately so indexed writes can still receive
+    // the receiver's element type in that path.
+    if arguments
+        .literal_tuple_arguments
+        .last()
+        .is_some_and(|type_| matches!(type_, Some(Type::Tuple(elements)) if elements.is_empty()))
+    {
+        return true;
+    }
     let Some(expression) = input
         .expression
         .and_then(|expression| analyzer.program.hir_program.expression(expression))
@@ -120,17 +136,25 @@ fn contextual_empty_collection_assignment(
     input: &OwnedCallInput,
     receiver: &Type,
     actual: Type,
+    arguments: &CallArguments<'_>,
 ) -> Type {
-    if input.name.as_str() != "[]=" || !is_empty_array_assignment(analyzer, input) {
+    if input.name.as_str() != "[]=" || !is_empty_array_assignment(analyzer, input, arguments) {
         return actual;
     }
     let expected = match receiver {
-        Type::Array(element) | Type::Hash(_, element) => element.as_ref(),
+        Type::Array(element)
+            if arguments.argument_types.first().is_some_and(
+                |type_| matches!(type_, Type::Named(name, _) if name_matches(name, "Range")),
+            ) =>
+        {
+            Type::Array(element.clone())
+        }
+        Type::Array(element) | Type::Hash(_, element) => element.as_ref().clone(),
         _ => return actual,
     };
     match (actual, expected) {
         (Type::Array(actual_element), Type::Array(expected_element)) if actual_element.is_any() => {
-            Type::Array(expected_element.clone())
+            Type::Array(expected_element)
         }
         (actual, _) => actual,
     }
@@ -367,6 +391,7 @@ pub(super) fn transfer_call(
                 .last()
                 .cloned()
                 .unwrap_or(type_),
+            &call_arguments,
         )
     } else {
         type_

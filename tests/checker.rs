@@ -10361,6 +10361,21 @@ fn contextualizes_empty_arrays_in_indexed_logical_assignments() {
 }
 
 #[test]
+fn contextualizes_empty_arrays_in_indexed_range_assignments() {
+    let result = check_fixture("tests/fixtures/array_index_assignment.rb");
+    let reveals = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic
+                .message
+                .contains("Revealed type: `T::Array[String]`")
+        })
+        .count();
+    assert_eq!(reveals, 2, "{:?}", result.diagnostics);
+}
+
+#[test]
 fn preserves_set_element_types_through_splats_in_flat_map() {
     let result = check_fixture("tests/fixtures/flat_map_splat_element_types.rb");
     assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
