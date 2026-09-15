@@ -585,6 +585,34 @@ fn transfer_receiver_call_with_substitution(
 
     if name == "new" {
         if let Some(instance) = Analyzer::class_object_instance_type(receiver) {
+            if matches!(&instance, Type::Named(owner, _) if name_matches(owner, "Set")) {
+                let source_element = arguments
+                    .argument_types
+                    .first()
+                    .map(|argument| analyzer.array_element_type(argument))
+                    .unwrap_or(Type::Any);
+                let element = input
+                    .block
+                    .as_ref()
+                    .and_then(|_| {
+                        analyzer
+                            .cfg_owned_block_return_type(
+                                input,
+                                std::slice::from_ref(&source_element),
+                                &Type::Anything,
+                                values,
+                                environment,
+                            )
+                            .map(|result| Analyzer::block_value_type(&result))
+                    })
+                    .unwrap_or(source_element);
+                return Ok(ReceiverTransfer {
+                    type_: Type::Named("Set".to_owned(), vec![element]),
+                    block_result: None,
+                    untyped_origin: UntypedOrigin::InferredMethod,
+                    missing_method: false,
+                });
+            }
             // `Class.new(Superclass) { ... }` creates a new class object whose
             // block executes with that class as `self`.  The generic
             // `Class#new` contract would otherwise construct `Class` itself

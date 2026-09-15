@@ -149,6 +149,14 @@ pub(super) fn transfer_builtin_call(
                 };
                 return Some((type_, None));
             }
+            if name_matches(class, "Set") && name == "new" {
+                let element = arguments
+                    .argument_types
+                    .first()
+                    .map(|argument| analyzer.array_element_type(argument))
+                    .unwrap_or(Type::Any);
+                return Some((Type::Named("Set".to_owned(), vec![element]), None));
+            }
         }
     }
 
