@@ -21,29 +21,65 @@ impl<'src> Analyzer<'src> {
         has_block: bool,
     ) -> Option<MethodSig> {
         let key = self.resolve_method_key(key)?;
-        if let Some(state) = self
+        if !self.config.infer_explicit_untyped {
+            if let Some(state) = self
+                .declarations
+                .methods
+                .get(&key)
+                .filter(|state| state.explicit)
+            {
+                let fallback = state.call_signature();
+                let overloads = if state.overloads.is_empty() {
+                    vec![fallback.clone()]
+                } else {
+                    state.overloads.clone()
+                };
+                if let Some(signature) =
+                    self.builtin_time_call_signature(&key, &overloads, arguments)
+                {
+                    return Some(signature);
+                }
+                if let Some(signature) =
+                    self.builtin_raise_call_signature(&key, &overloads, arguments)
+                {
+                    return Some(signature);
+                }
+                return Some(
+                    self.select_overload(&overloads, arguments, has_block)
+                        .unwrap_or(fallback),
+                );
+            }
+        }
+        // Keep overload selection active in explicit-untyped inference mode.
+        // Inference may refine a selected overload, but it must not replace a
+        // call-shape-dependent return (for example `Dir.glob` or `File.open`)
+        // with the merged signature for all overloads.
+        let selected_explicit_signature = self
             .declarations
             .methods
             .get(&key)
-            .filter(|state| state.explicit && !state.has_inferable_untyped())
-        {
-            let fallback = state.call_signature();
-            let overloads = if state.overloads.is_empty() {
-                vec![fallback.clone()]
-            } else {
-                state.overloads.clone()
-            };
-            if let Some(signature) = self.builtin_time_call_signature(&key, &overloads, arguments) {
-                return Some(signature);
-            }
-            if let Some(signature) = self.builtin_raise_call_signature(&key, &overloads, arguments)
+            .filter(|state| state.explicit)
+            .map(|state| {
+                let fallback = state.call_signature();
+                let overloads = if state.overloads.is_empty() {
+                    vec![fallback.clone()]
+                } else {
+                    state.overloads.clone()
+                };
+                self.builtin_time_call_signature(&key, &overloads, arguments)
+                    .or_else(|| self.builtin_raise_call_signature(&key, &overloads, arguments))
+                    .or_else(|| self.select_overload(&overloads, arguments, has_block))
+                    .unwrap_or(fallback)
+            });
+        if let Some(signature) = selected_explicit_signature.as_ref() {
+            if self
+                .declarations
+                .methods
+                .get(&key)
+                .is_some_and(|state| !state.has_inferable_untyped())
             {
-                return Some(signature);
+                return Some(signature.clone());
             }
-            return Some(
-                self.select_overload(&overloads, arguments, has_block)
-                    .unwrap_or(fallback),
-            );
         }
         let (signature, changed) = {
             let recursive_inferred = self
@@ -100,9 +136,19 @@ impl<'src> Analyzer<'src> {
             (state.call_signature(), changed)
         };
         if changed {
-            self.fixpoint.changed_methods.insert(key);
+            self.fixpoint.changed_methods.insert(key.clone());
         }
-        Some(signature)
+        if let Some(selected) = selected_explicit_signature {
+            Some(
+                self.declarations
+                    .methods
+                    .get(&key)
+                    .map(|state| state.refine_selected_signature(&selected))
+                    .unwrap_or(signature),
+            )
+        } else {
+            Some(signature)
+        }
     }
 
     fn builtin_time_call_signature(

@@ -10993,3 +10993,28 @@ fn optionally_infers_through_explicit_untyped_signatures() {
         .message
         .contains("Method `not_a_method` does not exist on `String`")));
 }
+
+#[test]
+fn preserves_overload_returns_when_inferring_explicit_untyped_slots() {
+    let path = Path::new("tests/fixtures/infer_explicit_untyped_overloads.rb");
+    let source = std::fs::read_to_string(path).expect("fixture exists");
+    let mut files =
+        load_workspace_paths(&builtin_rbi_paths().expect("builtins exist")).expect("builtins load");
+    files.push(WorkspaceFile::new(path, source));
+    let result = check_workspace(
+        &files,
+        CheckerConfig {
+            infer_explicit_untyped: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .diagnostic
+        .message
+        .contains("Revealed type: `T::Array[String]`")));
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .diagnostic
+        .message
+        .contains("Revealed type: `File`")));
+}

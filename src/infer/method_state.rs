@@ -453,6 +453,38 @@ impl MethodState {
         }
     }
 
+    /// Refine a call-shape-selected overload with concrete evidence learned
+    /// for explicit `T.untyped` slots. The selected overload remains
+    /// authoritative for overload-dependent returns; the merged method
+    /// summary is only allowed to replace gradual components.
+    pub(super) fn refine_selected_signature(&self, selected: &MethodSig) -> MethodSig {
+        let summary = self.call_signature();
+        let mut refined = selected.clone();
+        refined.params = selected
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, type_)| {
+                summary
+                    .params
+                    .get(index)
+                    .map_or_else(|| type_.clone(), |actual| type_.refine_any_with(actual))
+            })
+            .collect();
+        for (name, parameter) in &mut refined.keywords {
+            if let Some(actual) = summary.keywords.get(name).map(|parameter| &parameter.type_) {
+                parameter.type_ = parameter.type_.refine_any_with(actual);
+            }
+        }
+        if let (Some(selected_block), Some(summary_block)) =
+            (selected.block.as_ref(), summary.block.as_ref())
+        {
+            refined.block = Some(selected_block.refine_any_with(summary_block));
+        }
+        refined.return_type = selected.return_type.refine_any_with(&summary.return_type);
+        refined
+    }
+
     pub(super) fn observe_argument(&mut self, index: usize, actual: &Type) -> bool {
         if !self.can_infer_param(index) {
             return false;
