@@ -10314,14 +10314,26 @@ fn models_prism_parser_return_types() {
             .iter()
             .filter(|diagnostic| diagnostic.message.contains("Revealed type:"))
             .count(),
-        3,
+        7,
         "{:?}",
         result.diagnostics
     );
-    assert!(result
-        .diagnostics
-        .iter()
-        .all(|diagnostic| diagnostic.message.contains("Prism::ParseResult")));
+    for type_name in [
+        "Prism::ParseResult",
+        "RBS::Types::Bases::Base",
+        "RBS::MethodType",
+        "T::Array[RBS::AST::TypeParam]",
+        "[RBS::Buffer, T::Array[RBS::AST::Directives::Base], T::Array[RBS::AST::Declarations::Base]]",
+    ] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(type_name)),
+            "missing {type_name}: {:?}",
+            result.diagnostics
+        );
+    }
 }
 
 #[test]

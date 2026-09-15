@@ -133,6 +133,22 @@ pub(super) fn transfer_builtin_call(
             {
                 return Some((Type::named("Prism::ParseResult"), None));
             }
+            if name_matches(class, "RBS::Parser") {
+                let type_ = match name {
+                    "parse_type" => Type::named("RBS::Types::Bases::Base"),
+                    "parse_method_type" => Type::named("RBS::MethodType"),
+                    "parse_type_params" => {
+                        Type::Array(Box::new(Type::named("RBS::AST::TypeParam")))
+                    }
+                    "parse_signature" => Type::Tuple(vec![
+                        Type::named("RBS::Buffer"),
+                        Type::Array(Box::new(Type::named("RBS::AST::Directives::Base"))),
+                        Type::Array(Box::new(Type::named("RBS::AST::Declarations::Base"))),
+                    ]),
+                    _ => return None,
+                };
+                return Some((type_, None));
+            }
         }
     }
 
