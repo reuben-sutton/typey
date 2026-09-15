@@ -843,14 +843,23 @@ impl<'src> Analyzer<'src> {
         if !related {
             return None;
         }
-        let member = self
+        let (member, member_owner) = if let Some(member) = self
             .declarations
             .classes
             .get(&receiver_owner)
             .and_then(|receiver_info| receiver_info.type_members.get(member_name))
-            .or_else(|| info.type_members.get(member_name))?;
+        {
+            // A concrete class can fix a member inherited from a generic
+            // module, such as `PackageSet` fixing `Enumerable::Elem =
+            // Package`. Resolve that fixed type in the concrete receiver's
+            // lexical scope; resolving it in `Enumerable` leaves a short
+            // application name like `Package` unqualified.
+            (member, receiver_owner.as_str())
+        } else {
+            (info.type_members.get(member_name)?, declared_owner)
+        };
         if let Some(fixed) = &member.fixed {
-            return Some(self.resolve_type_names(fixed, Some(declared_owner)));
+            return Some(self.resolve_type_names(fixed, Some(member_owner)));
         }
         Some(arguments.get(member.index).cloned().unwrap_or(Type::Any))
     }

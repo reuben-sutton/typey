@@ -2733,6 +2733,23 @@ fn specializes_namespaced_generic_members_at_dispatch() {
 }
 
 #[test]
+fn resolves_fixed_enumerable_members_in_the_receiver_scope() {
+    let path = Path::new("tests/fixtures/namespaced_enumerable_fixed_member.rb");
+    let source = std::fs::read_to_string(path).expect("fixture exists");
+    let mut files =
+        load_workspace_paths(&builtin_rbi_paths().expect("builtins exist")).expect("builtins load");
+    files.push(WorkspaceFile::new(path, source));
+    let result = check_workspace(&files, CheckerConfig::default());
+    assert!(!result.has_errors(), "{:#?}", result.diagnostics);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .diagnostic
+            .message
+            .contains("Revealed type: `T::Hash[String, String]`")
+    }));
+}
+
+#[test]
 fn preserves_outer_generic_members_in_nested_constructors() {
     let result = check_fixture("tests/fixtures/nested_generic_constructor.rb");
     assert!(
