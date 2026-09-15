@@ -25,7 +25,7 @@ impl<'src> Analyzer<'src> {
             .declarations
             .methods
             .get(&key)
-            .filter(|state| state.explicit)
+            .filter(|state| state.explicit && !state.has_inferable_untyped())
         {
             let fallback = state.call_signature();
             let overloads = if state.overloads.is_empty() {

@@ -77,6 +77,10 @@ pub struct CheckerConfig {
     pub strictness: Strictness,
     /// Emit phase and progress information to stderr while checking.
     pub debug: bool,
+    /// Treat `T.untyped` in explicit source/RBI signatures as a provisional
+    /// slot that body and call-site inference may replace with a concrete
+    /// type. The default preserves Sorbet's explicit gradual boundary.
+    pub infer_explicit_untyped: bool,
 }
 
 impl Default for CheckerConfig {
@@ -84,6 +88,7 @@ impl Default for CheckerConfig {
         Self {
             strictness: Strictness::Ignore,
             debug: false,
+            infer_explicit_untyped: false,
         }
     }
 }

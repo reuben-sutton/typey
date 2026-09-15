@@ -6,6 +6,14 @@
 use super::*;
 
 impl<'src> Analyzer<'src> {
+    fn explicit_method_state(&self, signatures: &[MethodSig]) -> MethodState {
+        let mut state = MethodState::explicit_overloads(signatures);
+        if self.config.infer_explicit_untyped {
+            state.enable_explicit_untyped_inference();
+        }
+        state
+    }
+
     fn validate_rbs_parameter_kinds(
         &mut self,
         offset: usize,
@@ -170,8 +178,9 @@ impl<'src> Analyzer<'src> {
                 .iter()
                 .map(|signature| self.resolve_signature_names(signature, key.owner.as_deref()))
                 .collect::<Vec<_>>();
+            let new_state = self.explicit_method_state(&signatures);
             if let Some(state) = self.declarations.methods.get_mut(&key) {
-                *state = MethodState::explicit_overloads(&signatures);
+                *state = new_state;
             }
         }
 
@@ -305,9 +314,15 @@ impl<'src> Analyzer<'src> {
         }
         let source_annotated_keys = source_signatures.keys().cloned().collect::<BTreeSet<_>>();
         for (key, signatures) in source_signatures {
-            if let Some(state) = self.declarations.methods.get_mut(&key) {
-                if !state.explicit {
-                    *state = MethodState::explicit_overloads(&signatures);
+            let replace = self
+                .declarations
+                .methods
+                .get(&key)
+                .is_some_and(|state| !state.explicit);
+            if replace {
+                let new_state = self.explicit_method_state(&signatures);
+                if let Some(state) = self.declarations.methods.get_mut(&key) {
+                    *state = new_state;
                 }
             }
         }
@@ -320,9 +335,15 @@ impl<'src> Analyzer<'src> {
             if source_definition_keys.contains(&key) && !source_annotated_keys.contains(&key) {
                 continue;
             }
-            if let Some(state) = self.declarations.methods.get_mut(&key) {
-                if !state.explicit {
-                    *state = MethodState::explicit_overloads(&signatures);
+            let replace = self
+                .declarations
+                .methods
+                .get(&key)
+                .is_some_and(|state| !state.explicit);
+            if replace {
+                let new_state = self.explicit_method_state(&signatures);
+                if let Some(state) = self.declarations.methods.get_mut(&key) {
+                    *state = new_state;
                 }
             }
         }
@@ -330,9 +351,15 @@ impl<'src> Analyzer<'src> {
             if source_definition_keys.contains(&key) && !source_annotated_keys.contains(&key) {
                 continue;
             }
-            if let Some(state) = self.declarations.methods.get_mut(&key) {
-                if !state.explicit {
-                    *state = MethodState::explicit_overloads(&signatures);
+            let replace = self
+                .declarations
+                .methods
+                .get(&key)
+                .is_some_and(|state| !state.explicit);
+            if replace {
+                let new_state = self.explicit_method_state(&signatures);
+                if let Some(state) = self.declarations.methods.get_mut(&key) {
+                    *state = new_state;
                 }
             }
         }

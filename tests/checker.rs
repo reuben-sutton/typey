@@ -10951,3 +10951,45 @@ end
         inferred.is_send && inferred.start == send_start && inferred.end == send_start + 9
     }));
 }
+
+#[test]
+fn optionally_infers_through_explicit_untyped_signatures() {
+    let source =
+        std::fs::read_to_string("tests/fixtures/infer_explicit_untyped.rb").expect("fixture");
+    let baseline = check(&source, CheckerConfig::default());
+    assert!(
+        baseline
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `T.untyped`"))
+            .count()
+            >= 2
+    );
+    assert!(!baseline
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("not_a_method")));
+
+    let inferred = check(
+        &source,
+        CheckerConfig {
+            infer_explicit_untyped: true,
+            ..CheckerConfig::default()
+        },
+    );
+    assert!(
+        inferred
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("Revealed type: `Integer`"))
+            .count()
+            >= 2
+    );
+    assert!(inferred
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("Revealed type: `String`")));
+    assert!(inferred.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Method `not_a_method` does not exist on `String`")));
+}

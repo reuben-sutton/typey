@@ -441,6 +441,81 @@ impl Type {
         }
     }
 
+    /// Replace gradual `T.untyped` components with a concrete type of the
+    /// same structural shape. This is used only by opt-in inference modes;
+    /// ordinary joins must continue to preserve an explicit gradual boundary.
+    #[must_use]
+    pub fn refine_any_with(&self, actual: &Self) -> Self {
+        if actual.contains_any() {
+            return self.clone();
+        }
+        match (self, actual) {
+            (Self::Any, actual) => actual.clone(),
+            (Self::Named(name, expected), Self::Named(actual_name, actual_args))
+                if name == actual_name && expected.len() == actual_args.len() =>
+            {
+                Self::Named(
+                    name.clone(),
+                    expected
+                        .iter()
+                        .zip(actual_args)
+                        .map(|(expected, actual)| expected.refine_any_with(actual))
+                        .collect(),
+                )
+            }
+            (Self::Array(expected), Self::Array(actual)) => {
+                Self::Array(Box::new(expected.refine_any_with(actual)))
+            }
+            (Self::Hash(expected_key, expected_value), Self::Hash(actual_key, actual_value)) => {
+                Self::Hash(
+                    Box::new(expected_key.refine_any_with(actual_key)),
+                    Box::new(expected_value.refine_any_with(actual_value)),
+                )
+            }
+            (Self::Tuple(expected), Self::Tuple(actual)) if expected.len() == actual.len() => {
+                Self::Tuple(
+                    expected
+                        .iter()
+                        .zip(actual)
+                        .map(|(expected, actual)| expected.refine_any_with(actual))
+                        .collect(),
+                )
+            }
+            (
+                Self::Proc(expected_params, expected_result),
+                Self::Proc(actual_params, actual_result),
+            ) if expected_params.len() == actual_params.len() => Self::Proc(
+                expected_params
+                    .iter()
+                    .zip(actual_params)
+                    .map(|(expected, actual)| expected.refine_any_with(actual))
+                    .collect(),
+                Box::new(expected_result.refine_any_with(actual_result)),
+            ),
+            (
+                Self::BoundProc {
+                    receiver: expected_receiver,
+                    parameters: expected_params,
+                    result: expected_result,
+                },
+                Self::BoundProc {
+                    receiver: actual_receiver,
+                    parameters: actual_params,
+                    result: actual_result,
+                },
+            ) if expected_params.len() == actual_params.len() => Self::BoundProc {
+                receiver: Box::new(expected_receiver.refine_any_with(actual_receiver)),
+                parameters: expected_params
+                    .iter()
+                    .zip(actual_params)
+                    .map(|(expected, actual)| expected.refine_any_with(actual))
+                    .collect(),
+                result: Box::new(expected_result.refine_any_with(actual_result)),
+            },
+            _ => self.clone(),
+        }
+    }
+
     #[must_use]
     pub fn is_never(&self) -> bool {
         matches!(self, Self::Never)

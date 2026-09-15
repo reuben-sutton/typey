@@ -312,10 +312,26 @@ impl<'src> Analyzer<'src> {
         let pending_returns = std::mem::take(&mut self.fixpoint.pending_returns);
         for (key, (return_type, return_terminates)) in pending_returns {
             if let Some(state) = self.declarations.methods.get_mut(&key) {
-                if !state.explicit {
-                    let changed = state.return_type.as_ref() != Some(&return_type)
+                if state.can_infer_return() {
+                    let next = if !state.explicit {
+                        return_type.clone()
+                    } else {
+                        state.return_type.as_ref().map_or_else(
+                            || return_type.clone(),
+                            |current| {
+                                if return_type.contains_any() {
+                                    current.clone()
+                                } else if current.contains_any() {
+                                    current.refine_any_with(&return_type)
+                                } else {
+                                    current.join(&return_type)
+                                }
+                            },
+                        )
+                    };
+                    let changed = state.return_type.as_ref() != Some(&next)
                         || state.return_terminates != return_terminates;
-                    state.return_type = Some(return_type);
+                    state.return_type = Some(next);
                     state.return_terminates = return_terminates;
                     if changed {
                         self.fixpoint.changed_methods.insert(key);

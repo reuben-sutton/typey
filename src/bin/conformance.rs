@@ -7,12 +7,13 @@ use typey::CheckerConfig;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut root = None;
     let mut manifest = None;
+    let mut infer_explicit_untyped = false;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "usage: conformance [FIXTURE_DIR_OR_FILE]\n       conformance --manifest MANIFEST"
+                    "usage: conformance [OPTIONS] [FIXTURE_DIR_OR_FILE]\n       conformance --manifest MANIFEST\n\nOptions:\n        --infer-explicit-untyped  infer concrete types through explicit `untyped` signatures"
                 );
                 return Ok(());
             }
@@ -23,6 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let path = arguments.next().ok_or("--manifest requires a path")?;
                 manifest = Some(PathBuf::from(path));
             }
+            "--infer-explicit-untyped" => infer_explicit_untyped = true,
             _ if root.is_none() && manifest.is_none() => root = Some(PathBuf::from(argument)),
             _ => return Err(format!("unknown argument: {argument}").into()),
         }
@@ -47,7 +49,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut expected_errors = 0;
     let mut expected_notes = 0;
     for path in paths {
-        let report = check_fixture(&path, CheckerConfig::default())?;
+        let report = check_fixture(
+            &path,
+            CheckerConfig {
+                infer_explicit_untyped,
+                ..CheckerConfig::default()
+            },
+        )?;
         expected_errors += report
             .expected
             .iter()

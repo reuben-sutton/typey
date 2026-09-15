@@ -62,11 +62,18 @@ pub(super) struct MethodState {
     pub(super) visibility: Visibility,
     pub(super) explicit: bool,
     pub(super) overloads: Vec<MethodSig>,
+    /// Explicit signatures normally form an immutable gradual boundary. In
+    /// opt-in inference mode, these masks identify the `T.untyped` slots that
+    /// may be replaced by concrete body or call-site evidence.
+    pub(super) inferable_params: Vec<bool>,
+    pub(super) inferable_keywords: BTreeSet<String>,
+    pub(super) inferable_block: bool,
+    pub(super) inferable_return: bool,
 }
 
 impl MethodState {
     pub(super) fn observe_block_receiver_binding(&mut self, binding: BlockReceiverBinding) -> bool {
-        if self.explicit {
+        if self.explicit && !self.has_inferable_untyped() {
             return false;
         }
         let next = self
@@ -128,7 +135,78 @@ impl MethodState {
             visibility: Visibility::Public,
             explicit: true,
             overloads: signatures.to_vec(),
+            inferable_params: Vec::new(),
+            inferable_keywords: BTreeSet::new(),
+            inferable_block: false,
+            inferable_return: false,
         }
+    }
+
+    pub(super) fn enable_explicit_untyped_inference(&mut self) {
+        if !self.explicit {
+            return;
+        }
+        let signature = merge_method_signatures(&self.overloads);
+        self.inferable_params = signature.params.iter().map(Type::contains_any).collect();
+        self.inferable_keywords = signature
+            .keywords
+            .iter()
+            .filter_map(|(name, parameter)| parameter.type_.contains_any().then_some(name.clone()))
+            .collect();
+        self.inferable_block = signature.block.as_ref().is_some_and(Type::contains_any);
+        self.inferable_return = signature.return_type.contains_any();
+    }
+
+    pub(super) fn has_inferable_untyped(&self) -> bool {
+        self.inferable_params.iter().any(|inferable| *inferable)
+            || !self.inferable_keywords.is_empty()
+            || self.inferable_block
+            || self.inferable_return
+    }
+
+    pub(super) fn can_infer_param(&self, index: usize) -> bool {
+        !self.explicit || self.inferable_params.get(index).copied().unwrap_or(false)
+    }
+
+    pub(super) fn can_infer_keyword(&self, name: &str) -> bool {
+        !self.explicit || self.inferable_keywords.contains(name)
+    }
+
+    pub(super) fn can_infer_return(&self) -> bool {
+        !self.explicit || self.inferable_return
+    }
+
+    pub(super) fn can_infer_block(&self) -> bool {
+        !self.explicit || self.inferable_block
+    }
+
+    fn combine_observed_type(explicit: bool, current: &Type, actual: &Type) -> Type {
+        if explicit {
+            if actual.contains_any() {
+                return current.clone();
+            }
+            if current.contains_any() {
+                return current.refine_any_with(actual);
+            }
+        }
+        current.join(actual)
+    }
+
+    fn inferred_block_signature(&self) -> Option<Type> {
+        if !self.inferable_block {
+            return self.block.clone();
+        }
+        let parameters = self.block_parameters();
+        let result = self.block_result_type();
+        self.block.as_ref().map(|block| match block {
+            Type::Proc(_, _) => Type::Proc(parameters, Box::new(result)),
+            Type::BoundProc { receiver, .. } => Type::BoundProc {
+                receiver: receiver.clone(),
+                parameters,
+                result: Box::new(result),
+            },
+            _ => block.clone(),
+        })
     }
 
     pub(super) fn inferred<'node>(parameters: Option<ParametersNode<'node>>) -> Self {
@@ -194,6 +272,10 @@ impl MethodState {
                 visibility: Visibility::Public,
                 explicit: false,
                 overloads: Vec::new(),
+                inferable_params: Vec::new(),
+                inferable_keywords: BTreeSet::new(),
+                inferable_block: false,
+                inferable_return: false,
             };
         }
 
@@ -220,6 +302,10 @@ impl MethodState {
             visibility: Visibility::Public,
             explicit: false,
             overloads: Vec::new(),
+            inferable_params: Vec::new(),
+            inferable_keywords: BTreeSet::new(),
+            inferable_block: false,
+            inferable_return: false,
         }
     }
 
@@ -354,7 +440,7 @@ impl MethodState {
                 .collect(),
             accepts_keyword_rest: self.accepts_keyword_rest,
             type_parameters: Vec::new(),
-            block: self.block.clone().or_else(|| {
+            block: self.inferred_block_signature().or_else(|| {
                 (!self.yield_params.is_empty() || self.block_return_type.is_some()).then(|| {
                     Type::Proc(
                         self.block_parameters(),
@@ -368,15 +454,17 @@ impl MethodState {
     }
 
     pub(super) fn observe_argument(&mut self, index: usize, actual: &Type) -> bool {
-        if self.explicit {
+        if !self.can_infer_param(index) {
             return false;
         }
+        let explicit = self.explicit;
         let Some(slot) = self.params.get_mut(index) else {
             return false;
         };
-        let next = slot
-            .as_ref()
-            .map_or_else(|| actual.clone(), |current| current.join(actual));
+        let next = slot.as_ref().map_or_else(
+            || actual.clone(),
+            |current| Self::combine_observed_type(explicit, current, actual),
+        );
         if slot.as_ref() == Some(&next) {
             false
         } else {
@@ -386,9 +474,6 @@ impl MethodState {
     }
 
     pub(super) fn observe_arguments(&mut self, actuals: &[Type]) -> bool {
-        if self.explicit {
-            return false;
-        }
         let Some(rest_index) = self.rest_index else {
             return actuals
                 .iter()
@@ -420,9 +505,6 @@ impl MethodState {
     }
 
     pub(super) fn observe_parameter_aliases(&mut self, aliases: &[Option<PredicateAlias>]) -> bool {
-        if self.explicit {
-            return false;
-        }
         let mut changed = false;
         let Some(rest_index) = self.rest_index else {
             for (index, alias) in aliases.iter().enumerate() {
@@ -455,7 +537,7 @@ impl MethodState {
     }
 
     fn observe_parameter_alias(&mut self, index: usize, alias: Option<PredicateAlias>) -> bool {
-        if self.explicit {
+        if !self.can_infer_param(index) {
             return false;
         }
         let (Some(slot), Some(seen)) = (
@@ -484,15 +566,17 @@ impl MethodState {
     }
 
     pub(super) fn observe_keyword(&mut self, name: &str, actual: &Type) -> bool {
-        if self.explicit {
+        if !self.can_infer_keyword(name) {
             return false;
         }
+        let explicit = self.explicit;
         let Some(slot) = Arc::make_mut(&mut self.keywords).get_mut(name) else {
             return false;
         };
-        let next = slot
-            .as_ref()
-            .map_or_else(|| actual.clone(), |current| current.join(actual));
+        let next = slot.as_ref().map_or_else(
+            || actual.clone(),
+            |current| Self::combine_observed_type(explicit, current, actual),
+        );
         if slot.as_ref() == Some(&next) {
             false
         } else {
@@ -502,6 +586,13 @@ impl MethodState {
     }
 
     pub(super) fn block_parameters(&self) -> Vec<Type> {
+        if self.inferable_block && !self.yield_params.is_empty() {
+            return self
+                .yield_params
+                .iter()
+                .map(|type_| type_.clone().unwrap_or(Type::Any))
+                .collect();
+        }
         if let Some(block) = &self.block {
             if let Some((parameters, _)) = proc_parts(block) {
                 return parameters.to_vec();
@@ -514,6 +605,11 @@ impl MethodState {
     }
 
     pub(super) fn block_result_type(&self) -> Type {
+        if self.inferable_block {
+            if let Some(block_return_type) = &self.block_return_type {
+                return block_return_type.clone();
+            }
+        }
         self.block
             .as_ref()
             .and_then(|block| proc_parts(block).map(|(_, result)| result.clone()))
@@ -529,10 +625,18 @@ impl MethodState {
                 changed = true;
                 continue;
             }
+            let explicit = self.explicit;
             let slot = &mut self.yield_params[index];
-            let next = slot
-                .as_ref()
-                .map_or_else(|| actual.clone(), |current| current.join(actual));
+            let next = slot.as_ref().map_or_else(
+                || actual.clone(),
+                |current| {
+                    if self.inferable_block {
+                        Self::combine_observed_type(explicit, current, actual)
+                    } else {
+                        current.join(actual)
+                    }
+                },
+            );
             if slot.as_ref() != Some(&next) {
                 *slot = Some(next);
                 changed = true;
@@ -571,7 +675,11 @@ impl MethodState {
                 (actual.clone(), false)
             }
             Some(current) => (
-                current.join(actual),
+                if self.inferable_block {
+                    Self::combine_observed_type(self.explicit, current, actual)
+                } else {
+                    current.join(actual)
+                },
                 self.block_return_provisional && provisional,
             ),
         };

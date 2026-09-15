@@ -303,6 +303,7 @@ impl<'src> Analyzer<'src> {
         if state.explicit
             && !state.is_void
             && !state.is_abstract
+            && !state.can_infer_return()
             && !self.is_rbi_offset(span.start as usize)
         {
             let declared_signature = state.call_signature();
@@ -368,7 +369,7 @@ impl<'src> Analyzer<'src> {
         let Some(state) = self.declarations.methods.get_mut(key) else {
             return;
         };
-        if state.explicit {
+        if state.explicit && !state.has_inferable_untyped() {
             return;
         }
         let changed = match parameter.kind {
@@ -425,8 +426,10 @@ impl<'src> Analyzer<'src> {
                                 .cloned()
                                 .unwrap_or(Type::Any),
                         );
-                        if !state.explicit {
-                            if state.params.get(positional).is_some_and(Option::is_some) {
+                        if !state.explicit || state.can_infer_param(positional) {
+                            if state.params.get(positional).is_some_and(|type_| {
+                                type_.as_ref().is_some_and(|type_| !type_.contains_any())
+                            }) {
                                 environment.mark_inferred(name);
                             } else {
                                 environment.mark_provisional(name);
@@ -443,8 +446,10 @@ impl<'src> Analyzer<'src> {
                             .cloned()
                             .unwrap_or(Type::Any);
                         environment.bind(name.clone(), Type::Array(Box::new(element)));
-                        if !state.explicit {
-                            if state.params.get(positional).is_some_and(Option::is_some) {
+                        if !state.explicit || state.can_infer_param(positional) {
+                            if state.params.get(positional).is_some_and(|type_| {
+                                type_.as_ref().is_some_and(|type_| !type_.contains_any())
+                            }) {
                                 environment.mark_inferred(name);
                             } else {
                                 environment.mark_provisional(name);
@@ -461,8 +466,10 @@ impl<'src> Analyzer<'src> {
                             .map(|parameter| parameter.type_.clone())
                             .unwrap_or(Type::Any);
                         environment.bind(name.to_owned(), type_);
-                        if !state.explicit {
-                            if state.keywords.get(name).is_some_and(Option::is_some) {
+                        if !state.explicit || state.can_infer_keyword(name) {
+                            if state.keywords.get(name).is_some_and(|type_| {
+                                type_.as_ref().is_some_and(|type_| !type_.contains_any())
+                            }) {
                                 environment.mark_inferred(name.to_owned());
                             } else {
                                 environment.mark_provisional(name.to_owned());
@@ -476,8 +483,10 @@ impl<'src> Analyzer<'src> {
                             name.clone(),
                             Type::Hash(Box::new(Type::Symbol), Box::new(Type::Any)),
                         );
-                        if !state.explicit {
-                            if state.params.get(positional).is_some_and(Option::is_some) {
+                        if !state.explicit || state.can_infer_param(positional) {
+                            if state.params.get(positional).is_some_and(|type_| {
+                                type_.as_ref().is_some_and(|type_| !type_.contains_any())
+                            }) {
                                 environment.mark_inferred(name);
                             } else {
                                 environment.mark_provisional(name);
@@ -499,7 +508,7 @@ impl<'src> Analyzer<'src> {
                             Type::union([Type::Nil, block])
                         };
                         environment.bind_block_parameter(name.clone(), block);
-                        if !state.explicit {
+                        if !state.explicit || state.can_infer_block() {
                             if state
                                 .block_return_type
                                 .as_ref()
