@@ -389,6 +389,8 @@ fn transfer_receiver_call_with_substitution(
                 || name_matches(class, "Parser::Source::Map")
                 || name_matches(class, "Parser::Source::Range")
                 || name_matches(class, "Parser::AST::Node")
+                || name_matches(class, "REXML::Element")
+                || name_matches(class, "REXML::Document")
     ) || matches!(
         receiver,
         Type::Array(_) | Type::Tuple(_) | Type::Hash(_, _)

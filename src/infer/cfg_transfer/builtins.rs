@@ -445,6 +445,16 @@ pub(super) fn transfer_builtin_call(
             "location" | "loc" => Some(Type::named("Parser::Source::Map")),
             _ => None,
         },
+        Type::Named(class, _) if name_matches(class, "REXML::Element") => match name {
+            "add_attributes" | "add" => arguments.argument_types.first().cloned(),
+            "add_element" => Some(Type::named("REXML::Element")),
+            _ => None,
+        },
+        Type::Named(class, _) if name_matches(class, "REXML::Document") => match name {
+            "<<" => arguments.argument_types.first().cloned(),
+            "add_element" => Some(Type::named("REXML::Element")),
+            _ => None,
+        },
         Type::Named(class, _) if name_matches(class, "Regexp") => match name {
             "match" => Some(Type::union([Type::Nil, Type::named("MatchData")])),
             "match?" | "===" => Some(Type::bool()),

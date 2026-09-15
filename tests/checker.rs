@@ -10360,6 +10360,22 @@ fn models_ruby_argv_as_strings() {
 }
 
 #[test]
+fn models_rexml_mutator_return_types() {
+    let result = check_fixture("tests/fixtures/rexml_return_probe.rb");
+    assert!(!result.has_errors(), "{:?}", result.diagnostics);
+    for type_name in ["T::Hash[String, String]", "REXML::Element", "REXML::CData"] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(type_name)),
+            "missing {type_name}: {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn infers_empty_each_with_object_hash_accumulators() {
     let result = check(
         r#"
