@@ -4297,6 +4297,18 @@ fn preserves_concrete_accumulators_through_recursive_calls() {
 }
 
 #[test]
+fn preserves_concrete_array_elements_through_recursive_calls() {
+    let result = check_fixture("tests/fixtures/recursive_concrete_array.rb");
+    assert!(!result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error));
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("Revealed type: `T::Array[String]`")));
+}
+
+#[test]
 fn preserves_hash_shape_through_recursive_container_calls() {
     let result = check_fixture("tests/fixtures/recursive_hash_container.rb");
     assert!(result

@@ -117,7 +117,47 @@ impl<'src> Analyzer<'src> {
             // recursive `Hash#to_h` result must still support known hash
             // operations such as `merge`.
             match type_ {
-                Type::Array(_) => Type::Array(Box::new(Type::Object)),
+                Type::Array(element) => {
+                    // Keep concrete evidence from the non-recursive branch.
+                    // Recursive AST walkers commonly build an array from a
+                    // value returned at the current node and concatenate the
+                    // recursively visited children. Widening every recursive
+                    // edge to Array[Object] loses that evidence and makes the
+                    // caller reject the result even when every produced value
+                    // has a known element type. Object/Any/Never still use
+                    // the old finite fallback for genuinely unresolved
+                    // recursion.
+                    let element = match element.as_ref() {
+                        // An Any element is the provisional summary seeded
+                        // before the first body evaluation. Bottom lets a
+                        // concrete non-recursive branch establish the
+                        // element type before we need a finite fallback.
+                        Type::Any => Type::Never,
+                        Type::Never
+                        | Type::Object
+                        | Type::Array(_)
+                        | Type::Hash(..)
+                        | Type::Tuple(_)
+                        | Type::Proc(..)
+                        | Type::BoundProc { .. } => Type::Object,
+                        Type::Union(members)
+                            if members.iter().any(|member| {
+                                matches!(
+                                    member,
+                                    Type::Array(_)
+                                        | Type::Hash(..)
+                                        | Type::Tuple(_)
+                                        | Type::Proc(..)
+                                        | Type::BoundProc { .. }
+                                )
+                            }) =>
+                        {
+                            Type::Object
+                        }
+                        element => element.clone(),
+                    };
+                    Type::Array(Box::new(element))
+                }
                 Type::Hash(_, _) => Type::Hash(Box::new(Type::Any), Box::new(Type::Any)),
                 Type::Tuple(_) => Type::Object,
                 _ => unreachable!("recursive container was checked above"),
